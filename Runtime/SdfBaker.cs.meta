@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 1dcb2b8e16a9ab345a43e73528535b55
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - root: {instanceID: 0}
+  - sdfBakeCompute: {fileID: 7200000, guid: 7cf55d9d1c904c9b8b85a563fd9f1e81, type: 3}
+  - bakedSdf: {instanceID: 0}
+  - targetSdfVolume: {instanceID: 0}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

@@ -1,0 +1,67 @@
+using UnityEngine;
+
+namespace Lotec.Lighting {
+    [ExecuteAlways]
+    public class SdfShaderGlobals : MonoBehaviour {
+        static readonly int sSdfTex = Shader.PropertyToID("_SdfTex");
+        static readonly int sSdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
+        static readonly int sSdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
+        static readonly int sShadowMaxDistance = Shader.PropertyToID("_SdfShadowMaxDistance");
+        static readonly int sShadowMaxSteps = Shader.PropertyToID("_SdfShadowMaxSteps");
+        static readonly int sShadowEpsilon = Shader.PropertyToID("_SdfShadowEpsilon");
+        static readonly int sShadowMinStep = Shader.PropertyToID("_SdfShadowMinStep");
+        static readonly int sShadowStartOffset = Shader.PropertyToID("_SdfShadowStartOffset");
+
+        [Header("Source")]
+        public SdfVolume volume;
+
+        [Tooltip("If set, overrides volume.sdfTexture")]
+        public Texture3D overrideSdfTexture;
+
+        [Header("Shadow Raymarch")]
+        [Min(0f)] public float shadowMaxDistance = 10f;
+        [Min(1)] public int shadowMaxSteps = 64;
+        [Min(0.000001f)] public float shadowEpsilon = 0.02f;
+        [Min(0.000001f)] public float shadowMinStep = 0.01f;
+        [Min(0f)] public float shadowStartOffset = 0.02f;
+
+        [Header("Update")]
+        public bool autoUpdate = true;
+
+        void OnEnable() {
+            ApplyGlobals();
+        }
+
+        void OnDisable() {
+            // Intentionally do not clear globals; user may have multiple managers.
+        }
+
+        void OnValidate() {
+            if (autoUpdate)
+                ApplyGlobals();
+        }
+
+        void Update() {
+            if (autoUpdate)
+                ApplyGlobals();
+        }
+
+        public void ApplyGlobals() {
+            Texture3D sdfTex = overrideSdfTexture != null ? overrideSdfTexture : (volume != null ? volume.sdfTexture : null);
+            if (sdfTex != null)
+                Shader.SetGlobalTexture(sSdfTex, sdfTex);
+
+            if (volume != null) {
+                Bounds b = volume.bakedBounds;
+                Shader.SetGlobalVector(sSdfBoundsMin, b.min);
+                Shader.SetGlobalVector(sSdfBoundsSize, b.size);
+            }
+
+            Shader.SetGlobalFloat(sShadowMaxDistance, shadowMaxDistance);
+            Shader.SetGlobalInt(sShadowMaxSteps, shadowMaxSteps);
+            Shader.SetGlobalFloat(sShadowEpsilon, shadowEpsilon);
+            Shader.SetGlobalFloat(sShadowMinStep, shadowMinStep);
+            Shader.SetGlobalFloat(sShadowStartOffset, shadowStartOffset);
+        }
+    }
+}
