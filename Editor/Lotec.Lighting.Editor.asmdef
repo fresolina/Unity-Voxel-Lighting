@@ -1,0 +1,18 @@
+{
+    "name": "Lotec.Lighting.Editor",
+    "rootNamespace": "Lotec.Lighting.Editor",
+    "references": [
+        "GUID:02f7588eccf0cbd42a541611cab234de"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
