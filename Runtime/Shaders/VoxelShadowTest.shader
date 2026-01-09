@@ -64,7 +64,8 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
 
                 float ndotl = saturate(dot(N, L));
                 Light light = GetMainLight();
-                float shadow = GetShadow(light, IN.positionWS);
+                // float shadow = GetShadow(light, IN.positionWS);
+                float shadow = GetShadowFromBitmask(light, IN.positionWS);
                 if (shadow < 0.02) shadow = 0.02; // Ambient light
 
                 float3 lit = _BaseColor.rgb * light.color * ndotl * shadow;

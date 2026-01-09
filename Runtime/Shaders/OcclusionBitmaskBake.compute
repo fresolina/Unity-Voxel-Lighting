@@ -1,0 +1,75 @@
+#pragma kernel CSMain
+#pragma target 5.0
+
+#include "Includes/Math.hlsl"
+
+// Input: scene triangle list
+RWStructuredBuffer<float3> _TriVerts;
+uint _TriCount;
+
+// Bounds
+float3 _BoundsMin;
+float3 _BoundsSize;
+uint3 _Resolution;
+
+// Output: directional bitmask (uint2 = 64 bits per voxel, one per Fibonacci direction)
+RWStructuredBuffer<uint2> _OutBitmask;
+
+// Occlusion distance threshold (in world units)
+float _OcclusionDistance;
+
+[numthreads(8, 8, 8)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= _Resolution))
+        return;
+    
+    // Voxel world-space center
+    float3 voxelSize = _BoundsSize / float3(_Resolution);
+    float3 voxelCenter = _BoundsMin + (float3(id) + 0.5) * voxelSize;
+    
+    uint2 bitmask = uint2(0, 0);
+    
+    // Test each of 64 Fibonacci directions
+    for (uint dirIdx = 0; dirIdx < LOTECSOFTWARE_FIBONACCI_DIR_COUNT; dirIdx++)
+    {
+        float3 rayDir = FibonacciDirection64(dirIdx);
+        
+        // Cast ray from voxel center
+        bool occluded = false;
+        
+        // Test against all triangles
+        for (uint triIdx = 0; triIdx < _TriCount; triIdx += 3)
+        {
+            if (triIdx + 2 >= _TriCount) break;
+            
+            float3 v0 = _TriVerts[triIdx];
+            float3 v1 = _TriVerts[triIdx + 1];
+            float3 v2 = _TriVerts[triIdx + 2];
+            
+            float dist;
+            if (RayTriangleIntersect(voxelCenter, rayDir, v0, v1, v2, dist))
+            {
+                if (dist < _OcclusionDistance)
+                {
+                    occluded = true;
+                    break;
+                }
+            }
+        }
+        
+        // Set bit if direction is occluded
+        if (occluded)
+        {
+            if (dirIdx < 32) {
+                bitmask.x |= (1u << dirIdx);
+            } else {
+                bitmask.y |= (1u << (dirIdx - 32));
+            }
+        }
+    }
+    
+    // Flatten 3D index to 1D and store
+    uint flatIdx = id.x + (id.y * _Resolution.x) + (id.z * _Resolution.x * _Resolution.y);
+    _OutBitmask[flatIdx] = bitmask;
+}

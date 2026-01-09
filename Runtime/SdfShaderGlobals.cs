@@ -4,8 +4,10 @@ namespace Lotec.Lighting {
     [ExecuteAlways]
     public class SdfShaderGlobals : MonoBehaviour {
         static readonly int sSdfTex = Shader.PropertyToID("_SdfTex");
+        static readonly int sBitmaskTex = Shader.PropertyToID("_BitmaskTex");
         static readonly int sSdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
         static readonly int sSdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
+        static readonly int sVoxelResolution = Shader.PropertyToID("_VoxelResolution");
         static readonly int sShadowMaxDistance = Shader.PropertyToID("_SdfShadowMaxDistance");
         static readonly int sShadowMaxSteps = Shader.PropertyToID("_SdfShadowMaxSteps");
         static readonly int sShadowEpsilon = Shader.PropertyToID("_SdfShadowEpsilon");
@@ -47,6 +49,13 @@ namespace Lotec.Lighting {
             if (volume == null || volume.sdfTexture == null) return;
 
             Shader.SetGlobalTexture(sSdfTex, volume.sdfTexture);
+
+            if (volume.occlusionBitmaskTexture != null) {
+                Shader.SetGlobalTexture(sBitmaskTex, volume.occlusionBitmaskTexture);
+                Shader.SetGlobalVector(sVoxelResolution,
+                    new Vector3(volume.bakedResolution.x, volume.bakedResolution.y, volume.bakedResolution.z));
+            }
+
             Shader.SetGlobalVector(sSdfBoundsMin, volume.bakedBounds.min);
             Shader.SetGlobalVector(sSdfBoundsSize, volume.bakedBounds.size);
             Shader.SetGlobalFloat(sShadowMaxDistance, shadowMaxDistance);
