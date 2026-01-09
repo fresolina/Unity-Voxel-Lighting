@@ -1,12 +1,14 @@
 {
-    "name": "com.company.package-name",
+    "name": "com.lotecsoftware.voxel-lighting",
     "version": "0.1.0",
-    "displayName": "Template",
-    "description": "Empty template for copy-paste",
-    "unity": "2022.3",
+    "displayName": "Lotec Voxel Lighting",
+    "description": "Voxel lighting system for Unity",
+    "unity": "6000.3",
     "dependencies": {},
     "keywords": [
-        "Template"
+        "Voxel",
+        "Lighting",
+        "Unity"
     ],
     "samples": [
         {
@@ -16,8 +18,8 @@
         }
     ],
     "author": {
-        "name": "Your Name",
-        "email": "your-name@company.com",
-        "url": "https://company.com/unity/package-name"
+        "name": "Lotec Software",
+        "email": "contact@lotecsoftware.com",
+        "url": "https://lotecsoftware.com/unity/voxel-lighting"
     }
 }
