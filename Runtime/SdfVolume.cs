@@ -1,6 +1,7 @@
 using UnityEngine;
 
 namespace Lotec.Lighting {
+    // TODO: Rename to VoxelVolume
     public class SdfVolume : MonoBehaviour {
         [Header("Bake Input")]
         [SerializeField] Transform _bakeRoot;
@@ -20,13 +21,9 @@ namespace Lotec.Lighting {
         [Tooltip("Computed bounds used for baking.")]
         public Bounds bakedBounds = new Bounds(Vector3.zero, Vector3.one);
 
-        [Header("SDF")]
+        [Header("Output Textures")]
         public Texture3D sdfTexture;
-
-        public Vector3 boundsCenter = Vector3.zero;
-
-        [Min(0.0001f)]
-        public Vector3 boundsSize = new Vector3(10f, 10f, 10f);
+        public Texture3D occlusionBitmaskTexture;
 
         public Transform BakeRoot { get => _bakeRoot; set => _bakeRoot = value; }
 
@@ -90,10 +87,6 @@ namespace Lotec.Lighting {
         }
 
         private void OnValidate() {
-            boundsSize.x = Mathf.Max(0.0001f, boundsSize.x);
-            boundsSize.y = Mathf.Max(0.0001f, boundsSize.y);
-            boundsSize.z = Mathf.Max(0.0001f, boundsSize.z);
-
             maxResolution = Mathf.Max(4, maxResolution);
             _paddingWorld = Mathf.Max(0f, _paddingWorld);
 

@@ -43,6 +43,11 @@ namespace Lotec.Lighting.Editor {
                 string sdfPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.sdfTexture.name}.asset");
                 SaveAsset(baker.targetSdfVolume.sdfTexture, sdfPath, "SDF");
             }
+            // Save baked Bitmask asset
+            if (baker.targetSdfVolume.occlusionBitmaskTexture != null && !string.IsNullOrEmpty(basePath)) {
+                string bitmaskPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.occlusionBitmaskTexture.name}.asset");
+                SaveAsset(baker.targetSdfVolume.occlusionBitmaskTexture, bitmaskPath, "Occlusion Bitmask");
+            }
         }
 
         private void SaveAsset(Object asset, string path, string assetType) {

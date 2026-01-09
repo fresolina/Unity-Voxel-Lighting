@@ -1,20 +1,27 @@
 #ifndef LOTECSOFTWARE_VOXEL_SDF_SHADOWS_INCLUDED
 #define LOTECSOFTWARE_VOXEL_SDF_SHADOWS_INCLUDED
 
-// Super-simple SDF raymarch shadow test.
+// SDF raymarch shadow with 64-bit bitmask occlusion optimization.
 // Expects an SDF stored in a 3D texture in world units (signed distance).
+// Optionally uses a bitmask texture for more accurate geometry detection.
+
+#include "Math.hlsl"
 
 TEXTURE3D(_SdfTex);
 SAMPLER(sampler_SdfTex);
 
 float3 _SdfBoundsMin;
 float3 _SdfBoundsSize;
+float3 _VoxelResolution; // resolution of the bitmask voxel grid (set from C# as float vector)
 
 float _SdfShadowMaxDistance;
 float _SdfShadowEpsilon;
 float _SdfShadowMinStep;
 float _SdfShadowStartOffset;
 int _SdfShadowMaxSteps;
+
+// Directional occlusion bitmask helpers (depends on the globals above)
+#include "VoxelOcclusionDirection.hlsl"
 
 inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
 {
@@ -24,6 +31,7 @@ inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
 }
 
 // Returns 1 for lit, 0 for fully shadowed.
+// Uses occlusion bitmask for fast binary geometry detection, falls back to SDF raymarching.
 inline float GetShadow(Light light, float3 worldPos)
 {
     float3 dir = normalize(light.direction);
@@ -44,6 +52,11 @@ inline float GetShadow(Light light, float3 worldPos)
         if (!SdfWorldToUVW(p, uvw))
             return 1.0;
 
+        // Directional bitmask pass: check if this light direction is occluded (fast)
+        if (CheckBitmaskOcclusion(p, dir))
+            return 0.0;
+
+        // Fallback: SDF-based distance field (handles smooth blending)
         float d = SAMPLE_TEXTURE3D_LOD(_SdfTex, sampler_SdfTex, uvw, 0).r;
         if (d <= _SdfShadowEpsilon)
             return 0.0;

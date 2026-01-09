@@ -11,6 +11,7 @@ namespace Lotec.Lighting {
 
         [Header("Bakers")]
         [SerializeField] SdfBaker _sdfBaker = new SdfBaker();
+        [SerializeField] OcclusionBitmaskBaker _occlusionBitmaskBaker = new OcclusionBitmaskBaker();
 
         [Tooltip("Where to save the baked Texture3D asset(s) (must be under Assets/).")]
         public string assetPath = "Assets/VoxelLighting";
@@ -33,8 +34,13 @@ namespace Lotec.Lighting {
                 return false;
             }
 
+            if (!_occlusionBitmaskBaker.TryBake(volume, out Texture3D bakedBitmask, out error)) {
+                return false;
+            }
+
             // Apply results to volume
             volume.sdfTexture = bakedSdf;
+            volume.occlusionBitmaskTexture = bakedBitmask;
 
             return true;
         }
