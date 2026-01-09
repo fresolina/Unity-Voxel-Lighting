@@ -10,6 +10,7 @@ namespace Lotec.Lighting {
     /// </summary>
     [Serializable]
     public class SdfBaker {
+        [SerializeField] bool _bakeMipMaps = false;
         public ComputeShader sdfBakeCompute;
 
         // Variables the SDF compute shader needs.
@@ -110,7 +111,7 @@ namespace Lotec.Lighting {
                 for (int i = 0; i < expected; i++)
                     packed[i] = (ushort)(data[i] & 0xFFFFu);
 
-                bakedSdf = new Texture3D(volume.bakedResolution.x, volume.bakedResolution.y, volume.bakedResolution.z, TextureFormat.RHalf, true, true) {
+                bakedSdf = new Texture3D(volume.bakedResolution.x, volume.bakedResolution.y, volume.bakedResolution.z, TextureFormat.RHalf, mipChain: _bakeMipMaps, true) {
                     wrapMode = TextureWrapMode.Clamp,
                     filterMode = FilterMode.Trilinear,
                     name = $"{root.name}_SDF"
