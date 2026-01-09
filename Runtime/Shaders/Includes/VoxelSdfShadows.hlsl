@@ -23,15 +23,6 @@ inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
     return all(uvw >= 0.0) && all(uvw <= 1.0);
 }
 
-inline float SampleSdfWorldUnits(float3 worldPos)
-{
-    float3 uvw;
-    if (!SdfWorldToUVW(worldPos, uvw))
-        return 1e6;
-
-    return SAMPLE_TEXTURE3D_LOD(_SdfTex, sampler_SdfTex, uvw, 0).r;
-}
-
 // Returns 1 for lit, 0 for fully shadowed.
 inline float GetShadow(Light light, float3 worldPos)
 {
