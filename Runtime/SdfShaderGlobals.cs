@@ -15,9 +15,6 @@ namespace Lotec.Lighting {
         [Header("Source")]
         public SdfVolume volume;
 
-        [Tooltip("If set, overrides volume.sdfTexture")]
-        public Texture3D overrideSdfTexture;
-
         [Header("Shadow Raymarch")]
         [Min(0f)] public float shadowMaxDistance = 10f;
         [Min(1)] public int shadowMaxSteps = 64;
@@ -47,16 +44,11 @@ namespace Lotec.Lighting {
         }
 
         public void ApplyGlobals() {
-            Texture3D sdfTex = overrideSdfTexture != null ? overrideSdfTexture : (volume != null ? volume.sdfTexture : null);
-            if (sdfTex != null)
-                Shader.SetGlobalTexture(sSdfTex, sdfTex);
+            if (volume == null || volume.sdfTexture == null) return;
 
-            if (volume != null) {
-                Bounds b = volume.bakedBounds;
-                Shader.SetGlobalVector(sSdfBoundsMin, b.min);
-                Shader.SetGlobalVector(sSdfBoundsSize, b.size);
-            }
-
+            Shader.SetGlobalTexture(sSdfTex, volume.sdfTexture);
+            Shader.SetGlobalVector(sSdfBoundsMin, volume.bakedBounds.min);
+            Shader.SetGlobalVector(sSdfBoundsSize, volume.bakedBounds.size);
             Shader.SetGlobalFloat(sShadowMaxDistance, shadowMaxDistance);
             Shader.SetGlobalInt(sShadowMaxSteps, shadowMaxSteps);
             Shader.SetGlobalFloat(sShadowEpsilon, shadowEpsilon);
