@@ -30,9 +30,8 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionDirection.hlsl"
 
             // Choose shadow implementation at compile-time only.
-            // Keywords: SDF_ONLY, BITMASK_POINT (single bit), BITMASK_4TAP (spatial 4-tap), BITMASK_RAY3 (3-step traversal)
-            // BITMASK_FILTERED is kept as a legacy alias for BITMASK_4TAP.
-            #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_4TAP BITMASK_RAY3 BITMASK_FILTERED BITMASK_FILTERED_WORLD_SPACE
+            // Keywords: SDF_ONLY, BITMASK_POINT (single bit), BITMASK_4TAP (spatial 4-tap), BITMASK_RAY3 (3-step traversal), BITMASK_8TAP (trilinear 2x2x2)
+            #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_4TAP BITMASK_RAY3 BITMASK_8TAP
 
             // Optional debug visualization toggle: when set, the shader outputs debug colors
             // from the bitmask debug helper.
@@ -77,7 +76,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             {
                 #if defined(SDF_ONLY)
                     return GetShadowFromSdf(light, worldPos);
-                #elif defined(BITMASK_POINT) || defined(BITMASK_4TAP) || defined(BITMASK_RAY3) || defined(BITMASK_FILTERED)
+                #elif defined(BITMASK_POINT) || defined(BITMASK_4TAP) || defined(BITMASK_RAY3) || defined(BITMASK_8TAP)
                     // return GetShadowFromBitmaskFiltered(light, worldPos);
                     return GetFinalShadow2(worldPos, normalize(light.direction), normal);
                     // return GetFinalShadow(worldPos, normalize(light.direction));

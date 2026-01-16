@@ -38,7 +38,7 @@ namespace Lotec.Lighting {
         public bool debugColors = false;
         [Range(0, 5)] public int voxelDebugMode = 0;
 
-        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask4Tap = 2, BitmaskRay3 = 3 }
+        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask4Tap = 2, BitmaskRay3 = 3, Bitmask8Tap = 4 }
         [Header("Shadow Mode")]
         public ShadowMode shadowMode = ShadowMode.SDF;
 
@@ -103,29 +103,35 @@ namespace Lotec.Lighting {
                     Shader.DisableKeyword("BITMASK_POINT");
                     Shader.DisableKeyword("BITMASK_4TAP");
                     Shader.DisableKeyword("BITMASK_RAY3");
-                    Shader.DisableKeyword("BITMASK_FILTERED");
+                    Shader.DisableKeyword("BITMASK_8TAP");
                     break;
                 case ShadowMode.BitmaskPoint:
                     Shader.DisableKeyword("SDF_ONLY");
                     Shader.EnableKeyword("BITMASK_POINT");
                     Shader.DisableKeyword("BITMASK_4TAP");
                     Shader.DisableKeyword("BITMASK_RAY3");
-                    Shader.DisableKeyword("BITMASK_FILTERED");
+                    Shader.DisableKeyword("BITMASK_8TAP");
                     break;
                 case ShadowMode.Bitmask4Tap:
                     Shader.DisableKeyword("SDF_ONLY");
                     Shader.DisableKeyword("BITMASK_POINT");
                     Shader.EnableKeyword("BITMASK_4TAP");
                     Shader.DisableKeyword("BITMASK_RAY3");
-                    // Legacy alias (safe if some shaders still reference it)
-                    Shader.EnableKeyword("BITMASK_FILTERED");
+                    Shader.DisableKeyword("BITMASK_8TAP");
                     break;
                 case ShadowMode.BitmaskRay3:
                     Shader.DisableKeyword("SDF_ONLY");
                     Shader.DisableKeyword("BITMASK_POINT");
                     Shader.DisableKeyword("BITMASK_4TAP");
                     Shader.EnableKeyword("BITMASK_RAY3");
-                    Shader.DisableKeyword("BITMASK_FILTERED");
+                    Shader.DisableKeyword("BITMASK_8TAP");
+                    break;
+                case ShadowMode.Bitmask8Tap:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_4TAP");
+                    Shader.DisableKeyword("BITMASK_RAY3");
+                    Shader.EnableKeyword("BITMASK_8TAP");
                     break;
             }
 
