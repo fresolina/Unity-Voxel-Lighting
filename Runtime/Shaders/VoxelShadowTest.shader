@@ -55,7 +55,6 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 float4 positionHCS : SV_POSITION;
                 float3 positionWS  : TEXCOORD0;
                 float3 normalWS    : TEXCOORD1;
-                float3 lightDirWS  : TEXCOORD2;
             };
 
             Varyings vert(Attributes IN)
@@ -64,9 +63,6 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 OUT.positionWS = TransformObjectToWorld(IN.positionOS.xyz);
                 OUT.normalWS = TransformObjectToWorldNormal(IN.normalOS);
                 OUT.positionHCS = TransformWorldToHClip(OUT.positionWS);
-
-                // micro-optimization?: Compute main-light direction once in vertex shader
-                OUT.lightDirWS = normalize(GetMainLight().direction);
 
                 return OUT;
             }
@@ -90,7 +86,6 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 Light light = GetMainLight();
                 float3 N = normalize(IN.normalWS);
                 float3 L = normalize(light.direction);
-                // float3 L = IN.lightDirWS; // already normalized in vertex, is it worth it?
 
                 // Self shadowing factor
                 float ndotl = saturate(dot(N, L));
