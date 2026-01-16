@@ -12,12 +12,16 @@
 
 #include "Math.hlsl"
 
+// -----------------------------------------------------------------------------
+// DATA STRUCTURES
+// -----------------------------------------------------------------------------
+
 // 64-bit occlusion direction bitmask field, stored as RGBA16_UNorm:
 //   R,G = low/high 16 bits of uint bitmask.x
 //   B,A = low/high 16 bits of uint bitmask.y
 TEXTURE3D(_BitmaskTex);
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Precomputed global cheat-sheet texture
 // We pack: R,G,B,A = 0..63 indices
 TEXTURE2D(_FibIndexTexture);
@@ -27,9 +31,11 @@ SAMPLER(sampler_FibIndexTexture);
 int _VoxelDebugMode;
 // Inverse of voxel size in world units (set from C#)
 float3 _InverseVoxelSize;
+// Precomputed Fibonacci directions (set from C#)
+float4 _FibonacciDirections[64];
 
 // -----------------------------------------------------------------------------
-// 0. HELPERS
+// HELPERS
 // -----------------------------------------------------------------------------
 
 // Convert UNorm float (0..1) to uint16 (0..65535)
@@ -51,19 +57,8 @@ inline uint2 GetBitmaskAtVoxel(int3 voxelIdx) {
     return uint2(xLo | (xHi << 16), yLo | (yHi << 16));
 }
 
-// -----------------------------------------------------------------------------
-// 1. DATA STRUCTURES
-// -----------------------------------------------------------------------------
-
-// The "Dictionary": 64 Directions stored in fast Constant Memory.
-// C# is the source of truth; SdfShaderGlobals uploads `_FibonacciDirections` as a global Vector4 array.
-
-// -----------------------------------------------------------------------------
-// 2. HELPER: OCTAHEDRAL MAPPING
-// -----------------------------------------------------------------------------
 // Maps a 3D direction to the 2D texture UVs
 float2 PackOctahedral(float3 dir) {
-    dir = normalize(dir);
     dir /= (abs(dir.x) + abs(dir.y) + abs(dir.z) + 1e-8);
     float2 p = dir.xz;
     if (dir.y < 0.0) {
@@ -121,14 +116,23 @@ float4 GetOcclusionBit4(uint2 voxelMask, uint4 indices) {
     occlusion.w = (float)GetBit32(indices.w, word32w);
     return occlusion;
 }
+
+inline uint4 DecodeFibIndicesFromTexel(half4 raw)
+{
+    // Texture stores indices as UNorm8: index/255.
+    // Decode with rounding and clamp to [0,63].
+    return (uint4)clamp((int4)round(raw * 255.0), 0, 63);
+}
+
+// -----------------------------------------------------------------------------
+// ANGULAR LOOKUP HELPERS
+// -----------------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 // 4. CORE: WEIGHT CALCULATION
 // -----------------------------------------------------------------------------
 // Calculates how much influence each of the 4 neighbors has based on distance.
-float4 _FibonacciDirections[64];
 
 float4 CalculateWeights(float3 lightDir, uint4 indices) {
-    lightDir = normalize(lightDir);
     // 1. Reconstruct the exact 3D vectors for our 4 neighbors
     float3 d0 = _FibonacciDirections[indices.x].xyz;
     float3 d1 = _FibonacciDirections[indices.y].xyz;
@@ -154,54 +158,58 @@ float4 CalculateWeights(float3 lightDir, uint4 indices) {
     return weights + 1e-5;
 }
 
-/**
- * Calculates a spatially smoothed shadow value by sampling 4 neighboring voxels.
- * @param voxTex        The 3D Texture (uint2) containing the 64-bit occlusion masks.
- * @param localPos      The current pixel's position in Voxel Space (e.g., worldPos / voxelScale).
- * @param selectedIndex The single Fibonacci direction index (0-63) chosen for this pixel.
- * @return              A smooth float value: 0.0 (fully shadowed) to 1.0 (fully lit).
- */
-float GetSpatialOcclusion(float3 localPos, uint selectedIndex) {
-    // 1. Calculate Grid Coordinates
-    int3 baseIdx = int3(floor(localPos));
-    float3 f = frac(localPos);
+inline uint4 GetFibIndices(float3 lightDir)
+{
+    float2 uv = PackOctahedral(lightDir);
+    half4 raw = _FibIndexTexture.SampleLevel(sampler_FibIndexTexture, uv, 0);
+    return DecodeFibIndicesFromTexel(raw);
+}
 
-    // 2. Setup Bit-Selection Logic
-    // We do this once to avoid redundant math in the 4 taps
-    uint selectMask = selectedIndex >> 5; 
-    uint shiftAmount = selectedIndex & 31;
+inline float4 GetFibWeights(float3 lightDir, uint4 indices)
+{
+    // CalculateWeights adds a small epsilon to avoid div-by-zero.
+    return CalculateWeights(lightDir, indices);
+}
 
-    // 3. Helper to fetch and extract a single bit
-    // Returns 1.0 if occluded, 0.0 if clear
-    #define FETCH_BIT(offset) \
-        (float)((((selectMask == 1) ? GetBitmaskAtVoxel(baseIdx + offset).y : \
-                                      GetBitmaskAtVoxel(baseIdx + offset).x) >> shiftAmount) & 1)
+// -----------------------------------------------------------------------------
+// 4b. STOCHASTIC INDEX PICKING (from 4 nearest)
+// -----------------------------------------------------------------------------
+inline float3 GetVoxelSizeWorld()
+{
+    return 1.0 / max(_InverseVoxelSize, 1e-6);
+}
 
-    // 4. Identify the 3 most relevant neighbors
-    // If f.x > 0.5, we want the neighbor at +1, otherwise -1
-    int3 s = int3(sign(f - 0.5)); 
-    
-    // Fetch the 4 corners of the tetrahedron
-    float v000 = FETCH_BIT(int3(0, 0, 0)); // The base voxel
-    float v100 = FETCH_BIT(int3(s.x, 0, 0)); // Neighbor along X
-    float v010 = FETCH_BIT(int3(0, s.y, 0)); // Neighbor along Y
-    float v001 = FETCH_BIT(int3(0, 0, s.z)); // Neighbor along Z
+inline float ShadowStartBiasAlongDir(float3 dir)
+{
+    float3 voxelSize = GetVoxelSizeWorld();
+    // distance from center to voxel boundary along this direction (approx)
+    return dot(abs(dir), voxelSize) * 0.5;
+}
 
-    // 5. Calculate Interpolation Weights
-    // We measure how far we are from the center (0.5) of the base voxel
-    float3 weights = abs(f - 0.5);
+// Assumes normalized direction input
+inline uint NearestOcclusionDirectionIndex(float3 nDir)
+{
+    // Map light direction to octahedral UVs
+    float2 uv = PackOctahedral(nDir);
 
-    // 6. Perform the Blend
-    // We start with the base voxel value and lerp toward neighbors 
-    // based on how far we've crossed into their "territory"
-    float occ = v000;
-    occ = lerp(occ, v100, weights.x);
-    occ = lerp(occ, v010, weights.y); // Note: Simplified 3rd axis lerp
-    occ = lerp(occ, v001, weights.z);
+    // Get 4 closest Fibonacci direction indices to lightDir
+    half4 rawIndices = _FibIndexTexture.SampleLevel(sampler_FibIndexTexture, uv, 0);
+    uint4 indices = DecodeFibIndicesFromTexel(rawIndices);
 
-    // 7. Final Visibility Flip
-    // 0 = Full Shadow, 1 = Full Light
-    return saturate(1.0 - occ);
+    // 4 dot products: cheapest reliable way to pick the closest.
+    float d0 = dot(nDir, _FibonacciDirections[indices.x].xyz);
+    float d1 = dot(nDir, _FibonacciDirections[indices.y].xyz);
+    float d2 = dot(nDir, _FibonacciDirections[indices.z].xyz);
+    float d3 = dot(nDir, _FibonacciDirections[indices.w].xyz);
+
+    uint bestIndex = indices.x;
+    float bestDot = d0;
+
+    if (d1 > bestDot) { bestDot = d1; bestIndex = indices.y; }
+    if (d2 > bestDot) { bestDot = d2; bestIndex = indices.z; }
+    if (d3 > bestDot) { bestDot = d3; bestIndex = indices.w; }
+
+    return bestIndex;
 }
 
 // -----------------------------------------------------------------------------
@@ -213,40 +221,131 @@ float GetShadowFromSingleVoxel(uint2 mask, float3 lightDir, uint4 indices, float
     float weightedOcclusion = dot(occlusion, weights) / totalWeight;
     return saturate(1.0 - weightedOcclusion);
 }
+
+inline float GetShadowAngularAtVoxel(int3 voxelIdx, float3 lightDir, uint4 indices, float4 weights)
+{
+    uint2 mask = GetBitmaskAtVoxel(voxelIdx);
+    return GetShadowFromSingleVoxel(mask, lightDir, indices, weights);
+}
+
+// -----------------------------------------------------------------------------
+// 5d. 3-STEP RAY TRAVERSAL FILTER (along light direction)
+// -----------------------------------------------------------------------------
+
+inline float GetShadowRay3Traversal(float3 worldPos, float3 lightDir, uint chosenIndex)
+{
+    float3 dir = lightDir;
+
+    // Start bias to reduce self-occlusion.
+    float startBias = ShadowStartBiasAlongDir(dir);
+    float3 startPos = worldPos + dir * startBias;
+
+    // We want the 3 taps to actually span multiple voxels (otherwise Ray3 ~= Point).
+    // Approximate "voxel length" along this direction, then take ~0.75 of it per step.
+    float3 voxelSize = GetVoxelSizeWorld();
+    float voxelLenAlongDir = dot(abs(dir), voxelSize);
+
+    float baseStepDist = max(voxelLenAlongDir * 0.75, 1e-4);
+
+    // Only fade very near the horizon to avoid wide lateral smearing.
+    // (At ~0 deg, abs(dir.y)=0 -> Ray3 collapses to the first tap)
+    float stepScale = saturate(abs(dir.y) / 0.2);
+    float stepDist = max(baseStepDist * stepScale, 1e-5);
+
+    float occ = 0.0;
+    float wSum = 0.0;
+
+    [unroll]
+    for (int i = 0; i < 3; i++)
+    {
+        // Slightly front-load weights to reduce "over-darkening" from far taps.
+        float w = (i == 0) ? 0.5 : ((i == 1) ? 0.3 : 0.2);
+
+        float3 samplePos = startPos + dir * (stepDist * (float)i);
+        float3 localPos = (samplePos - _SdfBoundsMin) * _InverseVoxelSize;
+
+        // Use floor() (cell selection) rather than round() to avoid hopping into nearby solids.
+        int3 voxelIdx = int3(floor(localPos));
+
+        uint2 mask = GetBitmaskAtVoxel(voxelIdx);
+
+        occ += w * (float)GetBit64(mask, chosenIndex);
+        wSum += w;
+    }
+
+    occ = occ / max(wSum, 1e-6);
+    return saturate(1.0 - occ);
+}
+
+// -----------------------------------------------------------------------------
+// 5b. 4-TAP SPATIAL BLEND (tetra-like)
+// -----------------------------------------------------------------------------
+inline float GetShadowAngularSpatial4Tap(float3 localPos, float3 lightDir, uint4 indices, float4 weights)
+{
+    int3 baseIdx = int3(floor(localPos));
+    float3 f = frac(localPos);
+
+    // Choose the neighbor direction for each axis (either -1 or +1).
+    // sign(0) returns 0, which is fine (degenerate edge case).
+    int3 s = int3(sign(f - 0.5));
+
+    float sh000 = GetShadowAngularAtVoxel(baseIdx + int3(0, 0, 0), lightDir, indices, weights);
+    float sh100 = GetShadowAngularAtVoxel(baseIdx + int3(s.x, 0, 0), lightDir, indices, weights);
+    float sh010 = GetShadowAngularAtVoxel(baseIdx + int3(0, s.y, 0), lightDir, indices, weights);
+    float sh001 = GetShadowAngularAtVoxel(baseIdx + int3(0, 0, s.z), lightDir, indices, weights);
+
+    // How far we've crossed toward each chosen neighbor.
+    float3 w = saturate(abs(f - 0.5) * 2.0);
+
+    float sh = sh000;
+    sh = lerp(sh, sh100, w.x);
+    sh = lerp(sh, sh010, w.y);
+    sh = lerp(sh, sh001, w.z);
+    return saturate(sh);
+}
+
 // -----------------------------------------------------------------------------
 // MAIN: The 4-Tap Spatial + Angular Blend
+// worldPos: World position of pixel to shade
+// lightDir: Normalized light direction
 // Returns 0.0 (Shadow) to 1.0 (Lit)
 // -----------------------------------------------------------------------------
 float GetFinalShadow(float3 worldPos, float3 lightDir) {
-    // 1. Calculate Spatial Coordinates
-    // Add offset towards light
-    float3 offsetPos = worldPos + normalize(lightDir) * (_SdfBoundsSize.x / _VoxelResolution.x) * 0.5;
-    // float3 offsetPos = worldPos;
+    // 1) Convert to voxel space. Offset start slightly along the light direction to reduce self-occlusion.
+    float3 offsetPos = worldPos + lightDir * ShadowStartBiasAlongDir(lightDir);
     float3 localPos = (offsetPos - _SdfBoundsMin) * _InverseVoxelSize;
-    // float3 localPos = (worldPos - _SdfBoundsMin) * _InverseVoxelSize;
-    int3 baseIdx = int3(floor(localPos)); // Which voxel we're in (integer, xyz)
-    float3 f = frac(localPos); // Where in the voxel we are (0..1)
 
-    // 2. Map light direction to octahedral UVs
-    float2 uv = PackOctahedral(lightDir);
-    // Get 4 closest Fibonacci direction indices to lightDir
-    half4 rawIndices = _FibIndexTexture.SampleLevel(sampler_FibIndexTexture, uv, 0);
-    // Saved as 0-1 in texture, so map to 0-255
-    uint4 indices = (uint4)(rawIndices * 255.5);
+    // BITMASK_POINT: simplest possible shadow test (single voxel, single bit)
+    // 1 = lit, 0 = shadow.
+    #if defined(BITMASK_POINT)
+        int3 baseIdx = int3(floor(localPos));
+        uint chosenIndex = NearestOcclusionDirectionIndex(lightDir);
+        uint2 mask = GetBitmaskAtVoxel(baseIdx);
+        return saturate(1.0 - (float)GetBit64(mask, chosenIndex));
+    #endif
 
+    // BITMASK_RAY3: 3 taps along the light ray for a small penumbra
+    #if defined(BITMASK_RAY3)
+        uint chosenIndex = NearestOcclusionDirectionIndex(lightDir);
+        return GetShadowRay3Traversal(worldPos, lightDir, chosenIndex);
+    #endif
 
-    // TEST
-    float selectedIndex = indices.x; // Just use the first index for testing
-    uint2 voxelMask = GetBitmaskAtVoxel(baseIdx);
-    return 1 - GetBit64(voxelMask, selectedIndex);
-
-    
-    return GetSpatialOcclusion(localPos, selectedIndex);
+    // 3) 4-tap spatial filtering (previous BITMASK_POINT behavior)
+    // BITMASK_4TAP is the new name. BITMASK_FILTERED is treated as an alias.
+    #if defined(BITMASK_4TAP) || defined(BITMASK_FILTERED)
+        uint4 indices = GetFibIndices(lightDir);
+        float4 weights = GetFibWeights(lightDir, indices);
+        return GetShadowAngularSpatial4Tap(localPos, lightDir, indices, weights);
+    #else
+        // Default to 4-tap if no mode is selected.
+        uint4 indices = GetFibIndices(lightDir);
+        float4 weights = GetFibWeights(lightDir, indices);
+        return GetShadowAngularSpatial4Tap(localPos, lightDir, indices, weights);
+    #endif
 }
 float GetFinalShadow2(float3 worldPos, float3 lightDir, float3 normal) {
     // Add half a voxel offset along normal to reduce self-occlusion
-    float3 offsetPos = worldPos + normal * (1/_InverseVoxelSize) * 0.5f;
-    // float3 offsetPos = worldPos;
+    float3 offsetPos = worldPos + normalize(normal) * (GetVoxelSizeWorld() * 0.5);
     return GetFinalShadow(offsetPos, lightDir);
 }
 #endif

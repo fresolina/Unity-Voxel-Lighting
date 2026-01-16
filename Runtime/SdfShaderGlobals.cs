@@ -38,7 +38,7 @@ namespace Lotec.Lighting {
         public bool debugColors = false;
         [Range(0, 5)] public int voxelDebugMode = 0;
 
-        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, BitmaskFiltered = 2 }
+        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask4Tap = 2, BitmaskRay3 = 3 }
         [Header("Shadow Mode")]
         public ShadowMode shadowMode = ShadowMode.SDF;
 
@@ -101,17 +101,31 @@ namespace Lotec.Lighting {
                 case ShadowMode.SDF:
                     Shader.EnableKeyword("SDF_ONLY");
                     Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_4TAP");
+                    Shader.DisableKeyword("BITMASK_RAY3");
                     Shader.DisableKeyword("BITMASK_FILTERED");
                     break;
                 case ShadowMode.BitmaskPoint:
                     Shader.DisableKeyword("SDF_ONLY");
                     Shader.EnableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_4TAP");
+                    Shader.DisableKeyword("BITMASK_RAY3");
                     Shader.DisableKeyword("BITMASK_FILTERED");
                     break;
-                case ShadowMode.BitmaskFiltered:
+                case ShadowMode.Bitmask4Tap:
                     Shader.DisableKeyword("SDF_ONLY");
                     Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.EnableKeyword("BITMASK_4TAP");
+                    Shader.DisableKeyword("BITMASK_RAY3");
+                    // Legacy alias (safe if some shaders still reference it)
                     Shader.EnableKeyword("BITMASK_FILTERED");
+                    break;
+                case ShadowMode.BitmaskRay3:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_4TAP");
+                    Shader.EnableKeyword("BITMASK_RAY3");
+                    Shader.DisableKeyword("BITMASK_FILTERED");
                     break;
             }
 
