@@ -3,7 +3,6 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
     Properties
     {
         _BaseColor ("Base Color", Color) = (1,1,1,1)
-        _ShadowMode ("Shadow Mode (0=SDF,1=PointBitmask,2=FilteredBitmask)", Range(0,2)) = 0
     }
 
     SubShader
