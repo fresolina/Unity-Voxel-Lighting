@@ -3,6 +3,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
     Properties
     {
         _BaseColor ("Base Color", Color) = (1,1,1,1)
+        _ShadowMode ("Shadow Mode (0=SDF,1=PointBitmask,2=FilteredBitmask)", Range(0,2)) = 0
     }
 
     SubShader
@@ -25,6 +26,19 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
 
             // Lotec Voxel Lighting SDF ray marching shadows
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelSdfShadows.hlsl"
+            // Lotec Voxel Lighting occlusion direction bitmask shadows
+            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionDirection.hlsl"
+
+            // Choose shadow implementation at compile-time only.
+            // Keywords: SDF_ONLY, BITMASK_POINT, BITMASK_FILTERED, BITMASK_FILTERED_WORLD_SPACE
+            #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_FILTERED BITMASK_FILTERED_WORLD_SPACE
+
+            // Optional debug visualization toggle: when set, the shader outputs debug colors
+            // from the bitmask debug helper.
+            // Keyword: VOXEL_OCCLUSION_DEBUG_COLORS
+            #pragma multi_compile __ VOXEL_OCCLUSION_DEBUG_COLORS
+
+            // Compile-time selection only: keywords control the shadow path
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _BaseColor;
@@ -57,19 +71,43 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 return OUT;
             }
 
+            // Default to SDF if no keyword is set
+            inline half GetShadow(Light light, float3 worldPos, float3 normal)
+            {
+                #if defined(SDF_ONLY)
+                    return GetShadowFromSdf(light, worldPos);
+                #elif defined(BITMASK_POINT)
+                    return GetShadowFromBitmaskPoint(light, worldPos);
+                #elif defined(BITMASK_FILTERED)
+                    // return GetShadowFromBitmaskFiltered(light, worldPos);
+                    return GetFinalShadow2(worldPos, normalize(light.direction), normal);
+                    // return GetFinalShadow(worldPos, normalize(light.direction));
+                #else
+                    return GetShadowFromSdf(light, worldPos);
+                #endif
+            }
+
             half4 frag(Varyings IN) : SV_Target
             {
-                float3 N = normalize(IN.normalWS);
-                float3 L = IN.lightDirWS; // already normalized in vertex, is it worth it?
-
-                float ndotl = saturate(dot(N, L));
                 Light light = GetMainLight();
-                // float shadow = GetShadow(light, IN.positionWS);
-                float shadow = GetShadowFromBitmask(light, IN.positionWS);
-                if (shadow < 0.02) shadow = 0.02; // Ambient light
+                float3 N = normalize(IN.normalWS);
+                float3 L = normalize(light.direction);
+                // float3 L = IN.lightDirWS; // already normalized in vertex, is it worth it?
 
-                float3 lit = _BaseColor.rgb * light.color * ndotl * shadow;
-                return half4(lit, _BaseColor.a);
+                // Self shadowing factor
+                float ndotl = saturate(dot(N, L));
+                // Direct light shadowing
+                float shadow = GetShadow(light, IN.positionWS, N);
+
+                // Ambient light
+                if (shadow < 0.02) shadow = 0.02;
+
+                #if defined(VOXEL_OCCLUSION_DEBUG_COLORS)
+                    return GetShadowDebugColorFromBitmaskFiltered(light, IN.positionWS);
+                #else
+                    float3 lit = _BaseColor.rgb * light.color * ndotl * shadow;
+                    return half4(lit, _BaseColor.a);
+                #endif
             }
             ENDHLSL
         }

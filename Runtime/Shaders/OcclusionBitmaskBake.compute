@@ -3,9 +3,11 @@
 
 #include "Includes/Math.hlsl"
 
-// Input: scene triangle list
-RWStructuredBuffer<float3> _TriVerts;
-uint _TriCount;
+// Compute path: declare the SDF texture and sampler so the include can use them.
+Texture3D<float> _SdfTex;
+SamplerState sampler_SdfTex;
+
+#include "Includes/VoxelSdfShadows.hlsl"
 
 // Bounds
 float3 _BoundsMin;
@@ -13,10 +15,26 @@ float3 _BoundsSize;
 uint3 _Resolution;
 
 // Output: directional bitmask (uint2 = 64 bits per voxel, one per Fibonacci direction)
+// TODO: We can probably write directly to RWTexture3D
 RWStructuredBuffer<uint2> _OutBitmask;
+// Optional debug output: store popcount (0..64) per voxel for quick validation
+RWStructuredBuffer<uint> _OutBitmaskPopcount;
+// Optional debug outputs to help diagnose spatial variation
+RWStructuredBuffer<uint> _OutBitmaskFirstHit; // dirIdx of first accepted hit (0xFFFFFFFFu if none)
+RWStructuredBuffer<uint> _OutBitmaskSig;      // compact signature (low 8 bits) of final bitmask
+
+// Fibonacci directions uploaded from C# (float3 per direction)
+StructuredBuffer<float3> _FibonacciDirs;
+int _FibonacciDirCount;
 
 // Occlusion distance threshold (in world units)
 float _OcclusionDistance;
+
+// Input: Voxel volume SDF
+// SDF volume to use for sphere-trace based occlusion
+int _SdfMaxSteps;
+float _SdfMinStep;
+float _SdfThicknessTol;
 
 [numthreads(8, 8, 8)]
 void CSMain(uint3 id : SV_DispatchThreadID)
@@ -29,42 +47,122 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float3 voxelCenter = _BoundsMin + (float3(id) + 0.5) * voxelSize;
     
     uint2 bitmask = uint2(0, 0);
+    uint firstHit = 0xFFFFFFFFu;
+    uint cornerMask = 0u;
+    float minTraveled = 1e18;
     
-    // Test each of 64 Fibonacci directions
-    for (uint dirIdx = 0; dirIdx < LOTECSOFTWARE_FIBONACCI_DIR_COUNT; dirIdx++)
+    // corners mask: bit per corner if corner SDF < 0
+    for (int ci = 0; ci < 8; ++ci)
     {
-        float3 rayDir = FibonacciDirection64(dirIdx);
-        
-        // Cast ray from voxel center
-        bool occluded = false;
-        
-        // Test against all triangles
-        for (uint triIdx = 0; triIdx < _TriCount; triIdx += 3)
+        int sx = ci & 1;
+        int sy = (ci >> 1) & 1;
+        int sz = (ci >> 2) & 1;
+        float3 cornerPos = voxelCenter + (float3(sx,sy,sz) - 0.5) * voxelSize;
+        float3 cornerU = (cornerPos - _BoundsMin) / _BoundsSize;
+        if (any(cornerU < 0.0) || any(cornerU > 1.0)) continue;
+        float cd = _SdfTex.SampleLevel(sampler_SdfTex, cornerU, 0).r;
+        if (cd < 0.0) cornerMask |= (1u << ci);
+    }
+
+    float voxelDiag = length(voxelSize);
+    // Test each Fibonacci direction using sphere-trace on the SDF
+    // Clamp direction count to valid range [1,64] to avoid OOB accesses
+    int dirCount = max(1, min(_FibonacciDirCount, 64));
+    for (uint dirIdx = 0; dirIdx < (uint)dirCount; dirIdx++)
+    {
+        float3 rayDir = _FibonacciDirs[dirIdx];
+
+        // use a safer bias proportional to configured min step and voxel size
+        float originBias = max(_SdfMinStep * 0.5f, voxelDiag * 0.01f);
+
+        // Use shared raymarch function so baker and runtime behave identically.
+        // Sample SDF at the immediate origin bias position for debug
+        float3 originProbePos = voxelCenter + rayDir * originBias;
+        float3 originProbeUvw = (originProbePos - _BoundsMin) / _BoundsSize;
+
+        float traveledOut = 0.0f;
+        // require the ray to travel a non-trivial distance before accepting the hit
+        // This filters spurious detections when the origin is very close to a surface
+        float minTraveledToAccept = max(originBias, max(voxelDiag * 0.05f, _SdfMinStep));
+
+        bool acceptHit = false;
+        // If the voxel is partially occupied by the surface (some corners inside, some outside),
+        // perform a small majority vote across multiple origins to avoid single-origin speckles.
+        bool isPartialVoxel = (cornerMask != 0u) && (cornerMask != 0xFFu);
+        isPartialVoxel = isPartialVoxel && false; // DEBUG
+        if (isPartialVoxel)
         {
-            if (triIdx + 2 >= _TriCount) break;
-            
-            float3 v0 = _TriVerts[triIdx];
-            float3 v1 = _TriVerts[triIdx + 1];
-            float3 v2 = _TriVerts[triIdx + 2];
-            
-            float dist;
-            if (RayTriangleIntersect(voxelCenter, rayDir, v0, v1, v2, dist))
+            // Select up to 3 corner origins whose corner vector points most toward the ray direction.
+            // We will vote among the center origin and these up-to-3 corners (nOrigins = 1..4).
+            uint cornerOrder0 = 0u, cornerOrder1 = 0u, cornerOrder2 = 0u;
+            float d0 = -1e9, d1 = -1e9, d2 = -1e9;
+
+            [unroll]
+            for (int ci = 0; ci < 8; ++ci)
             {
-                if (dist < _OcclusionDistance)
-                {
-                    occluded = true;
-                    break;
+                // skip corners outside the volume
+                int sx = ci & 1;
+                int sy = (ci >> 1) & 1;
+                int sz = (ci >> 2) & 1;
+                float3 cornerPos = voxelCenter + (float3(sx,sy,sz) - 0.5) * voxelSize;
+                float3 dirToCorner = cornerPos - voxelCenter;
+                float dotv = dot(normalize(dirToCorner), rayDir);
+                // only consider corners that face roughly the ray direction (dot > -0.5) to prefer front-facing
+                // but still allow negatives so we can pick corners if needed
+                if (dotv > d0) { d2 = d1; cornerOrder2 = cornerOrder1; d1 = d0; cornerOrder1 = cornerOrder0; d0 = dotv; cornerOrder0 = (uint)ci; }
+                else if (dotv > d1) { d2 = d1; cornerOrder2 = cornerOrder1; d1 = dotv; cornerOrder1 = (uint)ci; }
+                else if (dotv > d2) { d2 = dotv; cornerOrder2 = (uint)ci; }
+            }
+
+            // Build origins list: center + up to 3 corners (if valid)
+            float3 originPositions[4];
+            int originCount = 0;
+            originPositions[originCount++] = voxelCenter;
+
+            // helper to push corner if inside volume
+            [unroll]
+            for (int k = 0; k < 3; ++k)
+            {
+                uint ci = (k == 0) ? cornerOrder0 : (k == 1) ? cornerOrder1 : cornerOrder2;
+                int sx = (int)(ci & 1);
+                int sy = (int)((ci >> 1) & 1);
+                int sz = (int)((ci >> 2) & 1);
+                float3 cornerPos = voxelCenter + (float3(sx,sy,sz) - 0.5) * voxelSize;
+                float3 uvw = (cornerPos - _BoundsMin) / _BoundsSize;
+                if (!any(uvw < 0.0) && !any(uvw > 1.0)) {
+                    originPositions[originCount++] = cornerPos;
                 }
             }
+
+            int hits = 0;
+            for (int oi = 0; oi < originCount; ++oi)
+            {
+                float tOut = 0.0f;
+                bool h = RayMarchOccluded(originPositions[oi], rayDir, _BoundsMin, _BoundsSize, originBias, _OcclusionDistance, _SdfThicknessTol, _SdfMinStep, _SdfMaxSteps, tOut);
+                bool accept = h && (tOut >= minTraveledToAccept);
+                if (accept) { hits++; minTraveled = min(minTraveled, tOut); }
+            }
+
+            // majority vote
+            int required = (originCount / 2) + 1;
+            acceptHit = (hits >= required);
         }
-        
-        // Set bit if direction is occluded
-        if (occluded)
+        else
         {
-            if (dirIdx < 32) {
-                bitmask.x |= (1u << dirIdx);
+            bool hit = RayMarchOccluded(voxelCenter, rayDir, _BoundsMin, _BoundsSize, originBias, _OcclusionDistance, _SdfThicknessTol, _SdfMinStep, _SdfMaxSteps, traveledOut);
+            acceptHit = hit && (traveledOut >= minTraveledToAccept);
+            if (acceptHit) minTraveled = min(minTraveled, traveledOut);
+        }
+
+        // Set bit if direction is occluded (only if accepted)
+        if (acceptHit)
+        {
+            if (firstHit == 0xFFFFFFFFu) firstHit = dirIdx;
+            uint bit = 1u << (dirIdx & 31u); // defensive mask for shift
+            if (dirIdx < 32u) {
+                bitmask.x |= bit;
             } else {
-                bitmask.y |= (1u << (dirIdx - 32));
+                bitmask.y |= bit;
             }
         }
     }
@@ -72,4 +170,18 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     // Flatten 3D index to 1D and store
     uint flatIdx = id.x + (id.y * _Resolution.x) + (id.z * _Resolution.x * _Resolution.y);
     _OutBitmask[flatIdx] = bitmask;
+    // Optionally write a popcount for quick debugging (if bound)
+    if (_OutBitmaskPopcount.Length > 0) {
+        uint pc = countbits(bitmask.x) + countbits(bitmask.y);
+        _OutBitmaskPopcount[flatIdx] = pc;
+    }
+    // Optional: write first-hit dir index
+    if (_OutBitmaskFirstHit.Length > 0) {
+        _OutBitmaskFirstHit[flatIdx] = firstHit;
+    }
+    // Optional: write a compact signature (byte) of the bitmask for pattern inspection
+    if (_OutBitmaskSig.Length > 0) {
+        uint sig = ((bitmask.x * 2654435761u) ^ bitmask.y) & 0xFFu;
+        _OutBitmaskSig[flatIdx] = sig;
+    }
 }
