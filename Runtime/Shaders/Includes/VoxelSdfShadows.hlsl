@@ -72,7 +72,7 @@ inline bool RayMarchOccluded(
     }
 
     traveled = t;
-    return false;
+    return true;
 }
 
 inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
