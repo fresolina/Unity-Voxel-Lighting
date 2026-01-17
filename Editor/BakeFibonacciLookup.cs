@@ -3,6 +3,7 @@ using UnityEditor;
 using UnityEngine;
 
 namespace Lotec.VoxelLighting.Editor {
+    /// <summary>
     /// Editor baker: creates a 2D octahedral lookup texture where each texel stores
     /// the 4 nearest Fibonacci direction indices (0..63) in R,G,B,A channels.
     /// Saved as an 32-bit PNG and imported with point filtering, clamp, no sRGB.

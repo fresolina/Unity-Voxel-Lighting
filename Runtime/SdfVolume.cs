@@ -98,16 +98,6 @@ namespace Lotec.Lighting {
         private void OnValidate() {
             maxResolution = Mathf.Max(4, maxResolution);
             _paddingWorld = Mathf.Max(0f, _paddingWorld);
-
-            bakedResolution.x = Mathf.Max(4, bakedResolution.x);
-            bakedResolution.y = Mathf.Max(4, bakedResolution.y);
-            bakedResolution.z = Mathf.Max(4, bakedResolution.z);
-            // Keep bakedVoxelSize in sync when user edits values in-editor
-            bakedVoxelSize = new Vector3(
-                bakedBounds.size.x / Mathf.Max(1, bakedResolution.x),
-                bakedBounds.size.y / Mathf.Max(1, bakedResolution.y),
-                bakedBounds.size.z / Mathf.Max(1, bakedResolution.z)
-            );
         }
 
     }

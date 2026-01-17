@@ -196,7 +196,6 @@ namespace Lotec.Lighting {
                 wrapMode = TextureWrapMode.Clamp,
                 name = $"{sourceVolume.BakeRoot.name}_OcclusionBitmask"
             };
-            result.filterMode = FilterMode.Point; // No interpolation for bitmask
             result.SetPixelData(packed, 0);
             result.Apply(false);
 

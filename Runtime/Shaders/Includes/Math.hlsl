@@ -92,4 +92,3 @@ inline bool RayTriangleIntersect_NoCull(float3 rayOrigin, float3 rayDir, float3 
 }
 
 #endif
-
