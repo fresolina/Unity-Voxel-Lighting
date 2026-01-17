@@ -89,7 +89,6 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         // If the voxel is partially occupied by the surface (some corners inside, some outside),
         // perform a small majority vote across multiple origins to avoid single-origin speckles.
         bool isPartialVoxel = (cornerMask != 0u) && (cornerMask != 0xFFu);
-        isPartialVoxel = isPartialVoxel && false; // DEBUG
         if (isPartialVoxel)
         {
             // Select up to 3 corner origins whose corner vector points most toward the ray direction.
@@ -144,7 +143,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
             }
 
             // majority vote
-            int required = (originCount / 2) + 1;
+            int required = (originCount * 0.5) + 1;
             acceptHit = (hits >= required);
         }
         else

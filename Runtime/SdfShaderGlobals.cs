@@ -15,7 +15,6 @@ namespace Lotec.Lighting {
         static readonly int sShadowEpsilon = Shader.PropertyToID("_SdfShadowEpsilon");
         static readonly int sShadowMinStep = Shader.PropertyToID("_SdfShadowMinStep");
         static readonly int sShadowStartOffset = Shader.PropertyToID("_SdfShadowStartOffset");
-        static readonly int sVoxelDebugMode = Shader.PropertyToID("_VoxelDebugMode");
         static readonly int sFibonacciDirections = Shader.PropertyToID("_FibonacciDirections");
 
         [Header("Source")]
@@ -35,7 +34,6 @@ namespace Lotec.Lighting {
         public Texture2D fibonacciCheatIndices;
 
         [Header("Debug")]
-        public bool debugColors = false;
         [Range(0, 5)] public int voxelDebugMode = 0;
 
         public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask4Tap = 2, BitmaskRay3 = 3, Bitmask8Tap = 4 }
@@ -134,15 +132,6 @@ namespace Lotec.Lighting {
                     Shader.EnableKeyword("BITMASK_8TAP");
                     break;
             }
-
-            // Debug colors toggle
-            if (debugColors)
-                Shader.EnableKeyword("VOXEL_OCCLUSION_DEBUG_COLORS");
-            else
-                Shader.DisableKeyword("VOXEL_OCCLUSION_DEBUG_COLORS");
-
-            // Voxel debug visualization mode (0 = off)
-            Shader.SetGlobalInt(sVoxelDebugMode, voxelDebugMode);
         }
     }
 }

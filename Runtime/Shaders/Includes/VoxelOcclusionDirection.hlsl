@@ -20,18 +20,17 @@
 //   R,G = low/high 16 bits of uint bitmask.x
 //   B,A = low/high 16 bits of uint bitmask.y
 TEXTURE3D(_BitmaskTex);
-
-// -----------------------------------------------------------------------------
-// Precomputed global cheat-sheet texture
+// Precomputed 64 directions evenly distributed on a sphere with Fibonacci.
+// Mapped onto 2D texture using octahedral mapping.
 // We pack: R,G,B,A = 0..63 indices
+// Usage: Map a direction to octahedral UVs, sample this texture to get the 4 nearest direction indices.
 TEXTURE2D(_FibIndexTexture);
 SAMPLER(sampler_FibIndexTexture);
 
-// Debug mode global (0 = off)
-int _VoxelDebugMode;
 // Inverse of voxel size in world units (set from C#)
 float3 _InverseVoxelSize;
 // Precomputed Fibonacci directions (set from C#)
+// Usage: Map an index 0..63 to a direction vector.
 float4 _FibonacciDirections[64];
 
 // -----------------------------------------------------------------------------
@@ -39,10 +38,10 @@ float4 _FibonacciDirections[64];
 // -----------------------------------------------------------------------------
 
 // Convert UNorm float (0..1) to uint16 (0..65535)
+// Assumes input is already clamped to [0,1]
 inline uint U16FromUNorm(float v)
 {
-    // saturate optional if you guarantee the texture is UNorm and no filtering/mips are used
-    return (uint)floor(saturate(v) * 65535.0 + 0.5);
+    return (uint)floor(v * 65535.0 + 0.5);
 }
 // Fetch the 64bit bitmask value for a given voxel index
 inline uint2 GetBitmaskAtVoxel(int3 voxelIdx) {
@@ -353,9 +352,8 @@ inline float GetShadowBitTrilinear8Tap(float3 localPos, uint chosenIndex)
 // Returns 0.0 (Shadow) to 1.0 (Lit)
 // -----------------------------------------------------------------------------
 float GetFinalShadow(float3 worldPos, float3 lightDir) {
-    // 1) Convert to voxel space. Offset start slightly along the light direction to reduce self-occlusion.
-    float3 offsetPos = worldPos + lightDir * ShadowStartBiasAlongDir(lightDir);
-    float3 localPos = (offsetPos - _SdfBoundsMin) * _InverseVoxelSize;
+    // 1) Convert to voxel space.
+    float3 localPos = (worldPos - _SdfBoundsMin) * _InverseVoxelSize;
 
     // BITMASK_POINT: simplest possible shadow test (single voxel, single bit)
     // 1 = lit, 0 = shadow.
@@ -390,9 +388,12 @@ float GetFinalShadow(float3 worldPos, float3 lightDir) {
         return GetShadowAngularSpatial4Tap(localPos, lightDir, indices, weights);
     #endif
 }
+
+// Assumes normal is normalized
 float GetFinalShadow2(float3 worldPos, float3 lightDir, float3 normal) {
     // Add half a voxel offset along normal to reduce self-occlusion
-    float3 offsetPos = worldPos + normalize(normal) * (GetVoxelSizeWorld() * 0.5);
+    float3 offsetPos = worldPos + normal * GetVoxelSizeWorld() * 0.8;
+    // float3 offsetPos = worldPos;
     return GetFinalShadow(offsetPos, lightDir);
 }
 #endif
