@@ -37,8 +37,6 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             // Keyword: VOXEL_OCCLUSION_DEBUG_COLORS
             #pragma multi_compile __ VOXEL_OCCLUSION_DEBUG_COLORS
 
-            // Compile-time selection only: keywords control the shadow path
-
             CBUFFER_START(UnityPerMaterial)
                 float4 _BaseColor;
             CBUFFER_END
@@ -72,7 +70,6 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 #if defined(SDF_ONLY)
                     return GetShadowFromSdf(light, worldPos);
                 #elif defined(BITMASK_POINT) || defined(BITMASK_4TAP) || defined(BITMASK_RAY3) || defined(BITMASK_8TAP)
-                    // return GetShadowFromBitmaskFiltered(light, worldPos);
                     return GetFinalShadow2(worldPos, normalize(light.direction), normal);
                     // return GetFinalShadow(worldPos, normalize(light.direction));
                 #else
