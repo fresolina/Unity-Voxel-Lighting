@@ -32,11 +32,6 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             // Keywords: SDF_ONLY, BITMASK_POINT (single bit), BITMASK_4TAP (spatial 4-tap), BITMASK_RAY3 (3-step traversal), BITMASK_8TAP (trilinear 2x2x2)
             #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_4TAP BITMASK_RAY3 BITMASK_8TAP
 
-            // Optional debug visualization toggle: when set, the shader outputs debug colors
-            // from the bitmask debug helper.
-            // Keyword: VOXEL_OCCLUSION_DEBUG_COLORS
-            #pragma multi_compile __ VOXEL_OCCLUSION_DEBUG_COLORS
-
             CBUFFER_START(UnityPerMaterial)
                 float4 _BaseColor;
             CBUFFER_END
@@ -85,18 +80,16 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
 
                 // Self shadowing factor
                 float ndotl = saturate(dot(N, L));
-                // Direct light shadowing
-                float shadow = GetShadow(light, IN.positionWS, N);
+                // Direct light shadowing, only if facing the light
+                float shadow = 1.0; // No shadow.
+                if (ndotl > 0)
+                    shadow = GetShadow(light, IN.positionWS, N);
 
                 // Ambient light
                 if (shadow < 0.02) shadow = 0.02;
 
-                #if defined(VOXEL_OCCLUSION_DEBUG_COLORS)
-                    return GetShadowDebugColorFromBitmaskFiltered(light, IN.positionWS);
-                #else
-                    float3 lit = _BaseColor.rgb * light.color * ndotl * shadow;
-                    return half4(lit, _BaseColor.a);
-                #endif
+                float3 lit = _BaseColor.rgb * light.color * ndotl * shadow;
+                return half4(lit, _BaseColor.a);
             }
             ENDHLSL
         }
