@@ -7,8 +7,18 @@
 
 #include "Math.hlsl"
 
-TEXTURE3D(_SdfTex);
-SAMPLER(sampler_SdfTex);
+// Support being included from both .shader (where TEXTURE3D/SAMPLER macros exist)
+// and .compute (where the macros are not defined). When TEXTURE3D is not defined
+// assume the including file declares the Texture3D and SamplerState itself.
+#ifndef TEXTURE3D
+    // compute shader path: ensure a sample macro exists
+    #ifndef SAMPLE_TEXTURE3D_LOD
+        #define SAMPLE_TEXTURE3D_LOD(tex, samp, uvw, lod) (tex.SampleLevel(samp, uvw, lod))
+    #endif
+#else
+    TEXTURE3D(_SdfTex);
+    SAMPLER(sampler_SdfTex);
+#endif
 
 float3 _SdfBoundsMin;
 float3 _SdfBoundsSize;
@@ -20,8 +30,50 @@ float _SdfShadowMinStep;
 float _SdfShadowStartOffset;
 int _SdfShadowMaxSteps;
 
-// Directional occlusion bitmask helpers (depends on the globals above)
-#include "VoxelOcclusionDirection.hlsl"
+// General-purpose SDF raymarch used by both runtime and baker.
+// Returns true if an occluder (surface within 'epsilon') was found within maxDistance.
+inline bool RayMarchOccluded(
+    float3 worldPos,
+    float3 dir,
+    float3 boundsMin,
+    float3 boundsSize,
+    float startOffset,
+    float maxDistance,
+    float epsilon,
+    float minStep,
+    int maxSteps,
+    out float traveled
+) {
+    float3 size = max(boundsSize, 1e-6);
+    float t = max(startOffset, 0.0);
+    traveled = 0.0;
+
+    [loop]
+    for (int stepIndex = 0; stepIndex < maxSteps; stepIndex++) {
+        if (t > maxDistance) {
+            traveled = t;
+            return false;
+        }
+
+        float3 p = worldPos + dir * t;
+        float3 uvw = (p - boundsMin) / size;
+        if (!all(uvw >= 0.0) || !all(uvw <= 1.0)) {
+            traveled = t;
+            return false;
+        }
+
+        float d = SAMPLE_TEXTURE3D_LOD(_SdfTex, sampler_SdfTex, uvw, 0).r;
+        if (d <= epsilon) {
+            traveled = t;
+            return true;
+        }
+
+        t += max(d, minStep);
+    }
+
+    traveled = t;
+    return true;
+}
 
 inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
 {
@@ -31,41 +83,24 @@ inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
 }
 
 // Returns 1 for lit, 0 for fully shadowed.
-// Uses occlusion bitmask for fast binary geometry detection, falls back to SDF raymarching.
-inline float GetShadow(Light light, float3 worldPos)
+#ifdef TEXTURE3D
+inline float GetShadowFromSdf(Light light, float3 worldPos)
 {
     float3 dir = normalize(light.direction);
 
-    // Start slightly along the ray to avoid immediate self-hit.
-    float t = max(_SdfShadowStartOffset, 0.0);
-
-    [loop]
-    for (int stepIndex = 0; stepIndex < _SdfShadowMaxSteps; stepIndex++)
-    {
-        if (t > _SdfShadowMaxDistance)
-            return 1.0;
-
-        float3 p = worldPos + dir * t;
-
-        // Leaving the SDF volume => no occluder within the field.
-        float3 uvw;
-        if (!SdfWorldToUVW(p, uvw))
-            return 1.0;
-
-        // Directional bitmask pass: check if this light direction is occluded (fast)
-        if (CheckBitmaskOcclusion(p, dir))
-            return 0.0;
-
-        // Fallback: SDF-based distance field (handles smooth blending)
-        float d = SAMPLE_TEXTURE3D_LOD(_SdfTex, sampler_SdfTex, uvw, 0).r;
-        if (d <= _SdfShadowEpsilon)
-            return 0.0;
-
-        t += max(d, _SdfShadowMinStep);
-    }
-
-    // Max steps hit; treat as lit to avoid overly dark artifacts.
-    return 1.0;
+    float traveled = 0.0;
+    bool occluded = RayMarchOccluded(worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, _SdfShadowStartOffset, _SdfShadowMaxDistance, _SdfShadowEpsilon, _SdfShadowMinStep, _SdfShadowMaxSteps, traveled);
+    return occluded ? 0.0 : 1.0;
 }
+#else
+// Compute path: provide a function that accepts a direction vector instead of Unity's Light type.
+inline float GetShadowFromSdfDir(float3 dir, float3 worldPos)
+{
+    dir = normalize(dir);
+    float traveled = 0.0;
+    bool occluded = RayMarchOccluded(worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, _SdfShadowStartOffset, _SdfShadowMaxDistance, _SdfShadowEpsilon, _SdfShadowMinStep, _SdfShadowMaxSteps, traveled);
+    return occluded ? 0.0 : 1.0;
+}
+#endif
 
 #endif

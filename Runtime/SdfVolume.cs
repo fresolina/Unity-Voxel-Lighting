@@ -21,6 +21,9 @@ namespace Lotec.Lighting {
         [Tooltip("Computed bounds used for baking.")]
         public Bounds bakedBounds = new Bounds(Vector3.zero, Vector3.one);
 
+        [Tooltip("World-space size of a single voxel (x,y,z) computed from bakedBounds / bakedResolution.")]
+        public Vector3 bakedVoxelSize = Vector3.one;
+
         [Header("Output Textures")]
         public Texture3D sdfTexture;
         public Texture3D occlusionBitmaskTexture;
@@ -67,6 +70,12 @@ namespace Lotec.Lighting {
 
             bakedBounds = b;
             bakedResolution = ComputeResolutionForBounds(bakedBounds, maxResolution);
+            // Update per-voxel world size
+            bakedVoxelSize = new Vector3(
+                bakedBounds.size.x / Mathf.Max(1, bakedResolution.x),
+                bakedBounds.size.y / Mathf.Max(1, bakedResolution.y),
+                bakedBounds.size.z / Mathf.Max(1, bakedResolution.z)
+            );
         }
 
         public static Vector3Int ComputeResolutionForBounds(Bounds bounds, int maxRes) {
@@ -89,10 +98,6 @@ namespace Lotec.Lighting {
         private void OnValidate() {
             maxResolution = Mathf.Max(4, maxResolution);
             _paddingWorld = Mathf.Max(0f, _paddingWorld);
-
-            bakedResolution.x = Mathf.Max(4, bakedResolution.x);
-            bakedResolution.y = Mathf.Max(4, bakedResolution.y);
-            bakedResolution.z = Mathf.Max(4, bakedResolution.z);
         }
 
     }

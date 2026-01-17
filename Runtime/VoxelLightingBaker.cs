@@ -33,13 +33,11 @@ namespace Lotec.Lighting {
             if (!_sdfBaker.TryBake(volume, out Texture3D bakedSdf, out error)) {
                 return false;
             }
+            volume.sdfTexture = bakedSdf;
 
             if (!_occlusionBitmaskBaker.TryBake(volume, out Texture3D bakedBitmask, out error)) {
                 return false;
             }
-
-            // Apply results to volume
-            volume.sdfTexture = bakedSdf;
             volume.occlusionBitmaskTexture = bakedBitmask;
 
             return true;

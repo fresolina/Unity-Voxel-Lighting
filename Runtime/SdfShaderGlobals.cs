@@ -5,14 +5,17 @@ namespace Lotec.Lighting {
     public class SdfShaderGlobals : MonoBehaviour {
         static readonly int sSdfTex = Shader.PropertyToID("_SdfTex");
         static readonly int sBitmaskTex = Shader.PropertyToID("_BitmaskTex");
+        static readonly int sFibIndexTexture = Shader.PropertyToID("_FibIndexTexture");
         static readonly int sSdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
         static readonly int sSdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
+        static readonly int sInverseVoxelSize = Shader.PropertyToID("_InverseVoxelSize");
         static readonly int sVoxelResolution = Shader.PropertyToID("_VoxelResolution");
         static readonly int sShadowMaxDistance = Shader.PropertyToID("_SdfShadowMaxDistance");
         static readonly int sShadowMaxSteps = Shader.PropertyToID("_SdfShadowMaxSteps");
         static readonly int sShadowEpsilon = Shader.PropertyToID("_SdfShadowEpsilon");
         static readonly int sShadowMinStep = Shader.PropertyToID("_SdfShadowMinStep");
         static readonly int sShadowStartOffset = Shader.PropertyToID("_SdfShadowStartOffset");
+        static readonly int sFibonacciDirections = Shader.PropertyToID("_FibonacciDirections");
 
         [Header("Source")]
         public SdfVolume volume;
@@ -26,6 +29,14 @@ namespace Lotec.Lighting {
 
         [Header("Update")]
         public bool autoUpdate = true;
+
+        [Header("Lookup Textures")]
+        public Texture2D fibonacciCheatIndices;
+
+
+        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask4Tap = 2, BitmaskRay3 = 3, Bitmask8Tap = 4 }
+        [Header("Shadow Mode")]
+        public ShadowMode shadowMode = ShadowMode.SDF;
 
         void OnEnable() {
             ApplyGlobals();
@@ -46,6 +57,9 @@ namespace Lotec.Lighting {
         }
 
         public void ApplyGlobals() {
+            // Always upload the Fibonacci direction list.
+            Shader.SetGlobalVectorArray(sFibonacciDirections, OcclusionBitmaskBaker.GetOrCreateFibonacciDirectionsV4());
+
             if (volume == null || volume.sdfTexture == null) return;
 
             Shader.SetGlobalTexture(sSdfTex, volume.sdfTexture);
@@ -58,11 +72,64 @@ namespace Lotec.Lighting {
 
             Shader.SetGlobalVector(sSdfBoundsMin, volume.bakedBounds.min);
             Shader.SetGlobalVector(sSdfBoundsSize, volume.bakedBounds.size);
+            // Compute and set inverse voxel size (world units per voxel -> 1/voxelSize)
+            Vector3 voxelSize = new Vector3(
+                volume.bakedBounds.size.x / Mathf.Max(1, volume.bakedResolution.x),
+                volume.bakedBounds.size.y / Mathf.Max(1, volume.bakedResolution.y),
+                volume.bakedBounds.size.z / Mathf.Max(1, volume.bakedResolution.z));
+            Vector3 invVoxelSize = new Vector3(
+                1.0f / Mathf.Max(1e-9f, voxelSize.x),
+                1.0f / Mathf.Max(1e-9f, voxelSize.y),
+                1.0f / Mathf.Max(1e-9f, voxelSize.z));
+            Shader.SetGlobalVector(sInverseVoxelSize, invVoxelSize);
             Shader.SetGlobalFloat(sShadowMaxDistance, shadowMaxDistance);
             Shader.SetGlobalInt(sShadowMaxSteps, shadowMaxSteps);
             Shader.SetGlobalFloat(sShadowEpsilon, shadowEpsilon);
             Shader.SetGlobalFloat(sShadowMinStep, shadowMinStep);
             Shader.SetGlobalFloat(sShadowStartOffset, shadowStartOffset);
+
+            // Set cheat-sheet lookup textures if provided
+            if (fibonacciCheatIndices != null)
+                Shader.SetGlobalTexture(sFibIndexTexture, fibonacciCheatIndices);
+
+            // Set shadow mode keyword
+            switch (shadowMode) {
+                case ShadowMode.SDF:
+                    Shader.EnableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_4TAP");
+                    Shader.DisableKeyword("BITMASK_RAY3");
+                    Shader.DisableKeyword("BITMASK_8TAP");
+                    break;
+                case ShadowMode.BitmaskPoint:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.EnableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_4TAP");
+                    Shader.DisableKeyword("BITMASK_RAY3");
+                    Shader.DisableKeyword("BITMASK_8TAP");
+                    break;
+                case ShadowMode.Bitmask4Tap:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.EnableKeyword("BITMASK_4TAP");
+                    Shader.DisableKeyword("BITMASK_RAY3");
+                    Shader.DisableKeyword("BITMASK_8TAP");
+                    break;
+                case ShadowMode.BitmaskRay3:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_4TAP");
+                    Shader.EnableKeyword("BITMASK_RAY3");
+                    Shader.DisableKeyword("BITMASK_8TAP");
+                    break;
+                case ShadowMode.Bitmask8Tap:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_4TAP");
+                    Shader.DisableKeyword("BITMASK_RAY3");
+                    Shader.EnableKeyword("BITMASK_8TAP");
+                    break;
+            }
         }
     }
 }
