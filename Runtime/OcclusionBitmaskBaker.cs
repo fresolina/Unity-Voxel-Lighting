@@ -64,49 +64,12 @@ namespace Lotec.Lighting {
         [Min(0.1f)] public float occlusionDistance = 5.0f;
         [Tooltip("Number of Fibonacci directions to bake (supported: 64).")]
         public int fibonacciDirectionCount = FibonacciDirectionCount;
-        [Tooltip("When enabled, the compute shader writes a popcount per voxel to a debug buffer which is read back for validation.")]
-        public bool debugWritePopcount = false;
-        [Tooltip("When enabled, the compute shader writes first-hit direction indices to a debug buffer which is read back for validation.")]
-        public bool debugWriteFirstHit = false;
-        [Tooltip("When enabled, the compute shader writes a compact byte signature per voxel for quick pattern inspection.")]
-        public bool debugWriteSignature = false;
 
         static readonly int sBoundsMin = Shader.PropertyToID("_BoundsMin");
         static readonly int sBoundsSize = Shader.PropertyToID("_BoundsSize");
         static readonly int sResolution = Shader.PropertyToID("_Resolution");
         static readonly int sOutBitmask = Shader.PropertyToID("_OutBitmask");
         static readonly int sOcclusionDistance = Shader.PropertyToID("_OcclusionDistance");
-
-        // public Texture3D BakeVoxelGrid(uint2[,,] bakedMasks, int width, int height, int depth) {
-        //     // Use R16G16B16A16_SFloat to ensure the GPU texture units are happy
-        //     Texture3D tex = new Texture3D(width, height, depth, GraphicsFormat.R16G16B16A16_SFloat, TextureCreationFlags.None);
-        //     tex.filterMode = FilterMode.Point;
-
-        //     // Create a raw ushort array. 
-        //     // 4 ushorts per voxel (R, G, B, A)
-        //     int totalVoxels = width * height * depth;
-        //     ushort[] rawData = new ushort[totalVoxels * 4];
-
-        //     for (int z = 0; z < depth; z++) {
-        //         for (int y = 0; y < height; y++) {
-        //             for (int x = 0; x < width; x++) {
-        //                 uint2 mask = bakedMasks[x, y, z];
-        //                 int baseIdx = (x + (y * width) + (z * width * height)) * 4;
-
-        //                 // Raw bit-stuffing: No math, just data
-        //                 rawData[baseIdx + 0] = (ushort)(mask.x & 0xFFFF);        // Lower 16 of x
-        //                 rawData[baseIdx + 1] = (ushort)((mask.x >> 16) & 0xFFFF); // Upper 16 of x
-        //                 rawData[baseIdx + 2] = (ushort)(mask.y & 0xFFFF);        // Lower 16 of y
-        //                 rawData[baseIdx + 3] = (ushort)((mask.y >> 16) & 0xFFFF); // Upper 16 of y
-        //             }
-        //         }
-        //     }
-
-        //     tex.SetPixelData(rawData, 0, 0);
-        //     tex.Apply(false); // No mips needed for bitmasks
-
-        //     return tex;
-        // }
 
         public bool TryBake(
             SdfVolume sourceVolume,
@@ -159,13 +122,6 @@ namespace Lotec.Lighting {
             var fibonacciBuffer = new ComputeBuffer(fibonacciDirectionCount, sizeof(float) * 3);
             fibonacciBuffer.SetData(fibDirs);
 
-            // NOTE: The compute shader declares these debug buffers unconditionally.
-            // Unity will throw "Property (...) is not set" unless we bind them before Dispatch.
-            // We always bind them, and only read them back/log them when debug toggles are enabled.
-            ComputeBuffer popcountBuffer = null;
-            ComputeBuffer firstHitBuffer = null;
-            ComputeBuffer sigBuffer = null;
-
             // Dispatch compute shader
             int kernelIdx = bitmaskBakeCompute.FindKernel("CSMain");
 
@@ -193,13 +149,6 @@ namespace Lotec.Lighting {
             bitmaskBakeCompute.SetBuffer(kernelIdx, Shader.PropertyToID("_FibonacciDirs"), fibonacciBuffer);
             bitmaskBakeCompute.SetInt(Shader.PropertyToID("_FibonacciDirCount"), fibonacciDirectionCount);
             bitmaskBakeCompute.SetBuffer(kernelIdx, sOutBitmask, bitmaskBuffer);
-
-            popcountBuffer = new ComputeBuffer(bitmaskSize, sizeof(uint));
-            firstHitBuffer = new ComputeBuffer(bitmaskSize, sizeof(uint));
-            sigBuffer = new ComputeBuffer(bitmaskSize, sizeof(uint));
-            bitmaskBakeCompute.SetBuffer(kernelIdx, Shader.PropertyToID("_OutBitmaskPopcount"), popcountBuffer);
-            bitmaskBakeCompute.SetBuffer(kernelIdx, Shader.PropertyToID("_OutBitmaskFirstHit"), firstHitBuffer);
-            bitmaskBakeCompute.SetBuffer(kernelIdx, Shader.PropertyToID("_OutBitmaskSig"), sigBuffer);
 
             uint groupX = (uint)Mathf.CeilToInt(resolution.x / 8f);
             uint groupY = (uint)Mathf.CeilToInt(resolution.y / 8f);
@@ -250,67 +199,6 @@ namespace Lotec.Lighting {
             result.filterMode = FilterMode.Point; // No interpolation for bitmask
             result.SetPixelData(packed, 0);
             result.Apply(false);
-            // Optionally read back popcount debug buffer and log a few stats
-            if (debugWritePopcount && popcountBuffer != null) {
-                var popReq = AsyncGPUReadback.Request(popcountBuffer);
-                popReq.WaitForCompletion();
-                if (!popReq.hasError) {
-                    var popData = popReq.GetData<uint>();
-                    // compute some simple stats
-                    long sum = 0;
-                    int nonzero = 0;
-                    int samplesToLog = Math.Min(8, bitmaskSize);
-                    for (int i = 0; i < popData.Length; i++) {
-                        uint v = popData[i];
-                        sum += v;
-                        if (v != 0) nonzero++;
-                    }
-                    float avg = popData.Length > 0 ? (float)sum / popData.Length : 0f;
-                    Debug.Log($"OcclusionBitmaskBaker: popcount avg={avg:F2}, nonzero voxels={nonzero}/{popData.Length}");
-                    // log first few sample values
-                    string samples = "";
-                    for (int i = 0; i < samplesToLog; ++i) samples += popData[i] + (i + 1 < samplesToLog ? ", " : "");
-                    Debug.Log($"OcclusionBitmaskBaker: popcount samples: {samples}");
-                } else {
-                    Debug.LogWarning("OcclusionBitmaskBaker: popcount readback had error");
-                }
-            }
-            if (debugWriteFirstHit && firstHitBuffer != null) {
-                var popReq = AsyncGPUReadback.Request(firstHitBuffer);
-                popReq.WaitForCompletion();
-                if (!popReq.hasError) {
-                    var data = popReq.GetData<uint>();
-                    int nonzero = 0;
-                    for (int i = 0; i < data.Length; ++i) if (data[i] != 0xFFFFFFFFu) nonzero++;
-                    Debug.Log($"OcclusionBitmaskBaker: firstHit non-empty voxels={nonzero}/{data.Length}");
-                    // log a few samples
-                    int samplesToLog = Math.Min(8, data.Length);
-                    string samples = "";
-                    for (int i = 0; i < samplesToLog; ++i) samples += data[i] + (i + 1 < samplesToLog ? ", " : "");
-                    Debug.Log($"OcclusionBitmaskBaker: firstHit samples: {samples}");
-                } else Debug.LogWarning("OcclusionBitmaskBaker: firstHit readback had error");
-            }
-            if (debugWriteSignature && sigBuffer != null) {
-                var popReq = AsyncGPUReadback.Request(sigBuffer);
-                popReq.WaitForCompletion();
-                if (!popReq.hasError) {
-                    var data = popReq.GetData<uint>();
-                    // compute histogram of signatures for coarse inspection
-                    var hist = new int[256];
-                    for (int i = 0; i < data.Length; ++i) hist[data[i] & 0xFF]++;
-                    int nonzero = 0; for (int i = 0; i < 256; ++i) if (hist[i] != 0) nonzero++;
-                    Debug.Log($"OcclusionBitmaskBaker: signature distinctBytes={nonzero}");
-                    // log first few signature samples
-                    int samplesToLog = Math.Min(8, data.Length);
-                    string samples = "";
-                    for (int i = 0; i < samplesToLog; ++i) samples += (data[i] & 0xFF) + (i + 1 < samplesToLog ? ", " : "");
-                    Debug.Log($"OcclusionBitmaskBaker: signature samples: {samples}");
-                } else Debug.LogWarning("OcclusionBitmaskBaker: signature readback had error");
-            }
-
-            popcountBuffer?.Dispose();
-            firstHitBuffer?.Dispose();
-            sigBuffer?.Dispose();
 
             bitmaskBuffer.Dispose();
             Debug.Log($"OcclusionBitmaskBaker: baked successfully ({resolution.x}x{resolution.y}x{resolution.z} = {bitmaskSize} voxels)");

@@ -33,8 +33,6 @@ namespace Lotec.Lighting {
         [Header("Lookup Textures")]
         public Texture2D fibonacciCheatIndices;
 
-        [Header("Debug")]
-        [Range(0, 5)] public int voxelDebugMode = 0;
 
         public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask4Tap = 2, BitmaskRay3 = 3, Bitmask8Tap = 4 }
         [Header("Shadow Mode")]
