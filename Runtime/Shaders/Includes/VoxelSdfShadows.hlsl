@@ -30,49 +30,100 @@ float _SdfShadowMinStep;
 float _SdfShadowStartOffset;
 int _SdfShadowMaxSteps;
 
+// Intersect ray (ro + rd * t) with unit AABB [0,1]^3.
+// ro/rd are in UVW space; t is still in world-distance units (because rd already includes invSize).
+inline bool RayIntersectUnitAabb(float3 ro, float3 rd, out float tEnter, out float tExit)
+{
+    const float kHuge = 1e20;
+    bool3 parallel = abs(rd) < 1e-8;
+
+    // If we're parallel to a slab and outside it, no hit.
+    if (parallel.x && (ro.x < 0.0 || ro.x > 1.0)) { tEnter = 0.0; tExit = 0.0; return false; }
+    if (parallel.y && (ro.y < 0.0 || ro.y > 1.0)) { tEnter = 0.0; tExit = 0.0; return false; }
+    if (parallel.z && (ro.z < 0.0 || ro.z > 1.0)) { tEnter = 0.0; tExit = 0.0; return false; }
+
+    float3 invRd = rcp(rd);
+    float3 t0 = (0.0 - ro) * invRd;
+    float3 t1 = (1.0 - ro) * invRd;
+
+    // Ignore parallel axes by making their interval unbounded.
+    t0 = float3(parallel.x ? -kHuge : t0.x, parallel.y ? -kHuge : t0.y, parallel.z ? -kHuge : t0.z);
+    t1 = float3(parallel.x ?  kHuge : t1.x, parallel.y ?  kHuge : t1.y, parallel.z ?  kHuge : t1.z);
+
+    float3 tMin3 = min(t0, t1);
+    float3 tMax3 = max(t0, t1);
+
+    tEnter = max(max(tMin3.x, tMin3.y), tMin3.z);
+    tExit  = min(min(tMax3.x, tMax3.y), tMax3.z);
+
+    return tExit >= tEnter;
+}
+
 // General-purpose SDF raymarch used by both runtime and baker.
-// Returns true if an occluder (surface within 'epsilon') was found within maxDistance.
-inline bool RayMarchOccluded(
+// Returns 0..1: total occlusion hit to no occlusion.
+float RayMarch(
     float3 worldPos,
     float3 dir,
     float3 boundsMin,
     float3 boundsSize,
     float startOffset,
-    float maxDistance,
+    float maxDistance, // Use to not travel past the flashlight
     float epsilon,
     float minStep,
     int maxSteps,
     out float traveled
 ) {
     float3 size = max(boundsSize, 1e-6);
-    float t = max(startOffset, 0.0);
+    float3 invSize = rcp(size);
+    // Transform ray into SDF UVW space once.
+    float3 rayOrigin = (worldPos - boundsMin) * invSize;
+    float3 dirUvw = dir * invSize;
+
+    // Ensure we are inside the SDF bounds
+    float tAabbEnter, tAabbExit;
+    if (!RayIntersectUnitAabb(rayOrigin, dirUvw, tAabbEnter, tAabbExit)) {
+        traveled = max(startOffset, 0.0);
+        return 1.0;
+    }
+    maxDistance = min(maxDistance, tAabbExit);
+    float t = max(startOffset, tAabbEnter);
     traveled = 0.0;
+    float lit = 1.0;
+    float softness = 16; // TODO: expose as parameter?
 
     [loop]
     for (int stepIndex = 0; stepIndex < maxSteps; stepIndex++) {
+        // Traveled max distance
         if (t > maxDistance) {
             traveled = t;
-            return false;
+            return lit;
         }
 
-        float3 p = worldPos + dir * t;
-        float3 uvw = (p - boundsMin) / size;
-        if (!all(uvw >= 0.0) || !all(uvw <= 1.0)) {
-            traveled = t;
-            return false;
-        }
+        float3 uvw = rayOrigin + dirUvw * t;
 
         float d = SAMPLE_TEXTURE3D_LOD(_SdfTex, sampler_SdfTex, uvw, 0).r;
+
+        // Inside surface -> full shadow
         if (d <= epsilon) {
             traveled = t;
-            return true;
+            return 0.0;
         }
 
+        // Rays that did not hit, gets partial shadow, based on how close they got to a surface.
+        // Use reciprocal instead of division (cheaper on many GPUs)
+        lit = min(lit, softness * d * rcp(max(t, 1e-6)));
+        // Early exit if we are effectively in total darkness
+        if (lit < 0.01) {
+            traveled = t;
+            return 0.0;
+        }
+        
         t += max(d, minStep);
     }
 
     traveled = t;
-    return true;
+    // return 0.0;
+    return saturate(lit);
 }
 
 inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
@@ -82,25 +133,12 @@ inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
     return all(uvw >= 0.0) && all(uvw <= 1.0);
 }
 
-// Returns 1 for lit, 0 for fully shadowed.
-#ifdef TEXTURE3D
-inline float GetShadowFromSdf(Light light, float3 worldPos)
+// Returns 0..1: fully shadowed to fully lit..
+inline float GetShadowFromSdf(float3 dir, float3 worldPos)
 {
-    float3 dir = normalize(light.direction);
-
     float traveled = 0.0;
-    bool occluded = RayMarchOccluded(worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, _SdfShadowStartOffset, _SdfShadowMaxDistance, _SdfShadowEpsilon, _SdfShadowMinStep, _SdfShadowMaxSteps, traveled);
-    return occluded ? 0.0 : 1.0;
+    half lit = RayMarch(worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, _SdfShadowStartOffset, _SdfShadowMaxDistance, _SdfShadowEpsilon, _SdfShadowMinStep, _SdfShadowMaxSteps, traveled);
+    return lit;
 }
-#else
-// Compute path: provide a function that accepts a direction vector instead of Unity's Light type.
-inline float GetShadowFromSdfDir(float3 dir, float3 worldPos)
-{
-    dir = normalize(dir);
-    float traveled = 0.0;
-    bool occluded = RayMarchOccluded(worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, _SdfShadowStartOffset, _SdfShadowMaxDistance, _SdfShadowEpsilon, _SdfShadowMinStep, _SdfShadowMaxSteps, traveled);
-    return occluded ? 0.0 : 1.0;
-}
-#endif
 
 #endif
