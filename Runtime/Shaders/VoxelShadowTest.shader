@@ -62,13 +62,11 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             // Default to SDF if no keyword is set
             inline half GetShadow(Light light, float3 worldPos, float3 normal)
             {
-                #if defined(SDF_ONLY)
-                    return GetShadowFromSdf(light, worldPos);
-                #elif defined(BITMASK_POINT) || defined(BITMASK_4TAP) || defined(BITMASK_RAY3) || defined(BITMASK_8TAP)
+                #if defined(BITMASK_POINT) || defined(BITMASK_4TAP) || defined(BITMASK_RAY3) || defined(BITMASK_8TAP)
                     return GetFinalShadow2(worldPos, normalize(light.direction), normal);
                     // return GetFinalShadow(worldPos, normalize(light.direction));
                 #else
-                    return GetShadowFromSdf(light, worldPos);
+                    return GetShadowFromSdf(normalize(light.direction), worldPos);
                 #endif
             }
 
@@ -86,7 +84,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                     shadow = GetShadow(light, IN.positionWS, N);
 
                 // Ambient light
-                if (shadow < 0.02) shadow = 0.02;
+                if (shadow < 0.1) shadow = 0.1;
 
                 float3 lit = _BaseColor.rgb * light.color * ndotl * shadow;
                 return half4(lit, _BaseColor.a);
