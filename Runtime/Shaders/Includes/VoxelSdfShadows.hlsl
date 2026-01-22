@@ -29,6 +29,7 @@ float _SdfShadowEpsilon;
 float _SdfShadowMinStep;
 float _SdfShadowStartOffset;
 int _SdfShadowMaxSteps;
+half _SdfShadowSoftness;
 
 // Intersect ray (ro + rd * t) with unit AABB [0,1]^3.
 // ro/rd are in UVW space; t is still in world-distance units (because rd already includes invSize).
@@ -71,7 +72,7 @@ float RayMarch(
     float epsilon,
     float minStep,
     int maxSteps,
-    out float traveled
+    half softness // Lower = softer shadows
 ) {
     float3 size = max(boundsSize, 1e-6);
     float3 invSize = rcp(size);
@@ -82,20 +83,16 @@ float RayMarch(
     // Ensure we are inside the SDF bounds
     float tAabbEnter, tAabbExit;
     if (!RayIntersectUnitAabb(rayOrigin, dirUvw, tAabbEnter, tAabbExit)) {
-        traveled = max(startOffset, 0.0);
         return 1.0;
     }
     maxDistance = min(maxDistance, tAabbExit);
     float t = max(startOffset, tAabbEnter);
-    traveled = 0.0;
     float lit = 1.0;
-    float softness = 16; // TODO: expose as parameter?
 
     [loop]
     for (int stepIndex = 0; stepIndex < maxSteps; stepIndex++) {
         // Traveled max distance
         if (t > maxDistance) {
-            traveled = t;
             return lit;
         }
 
@@ -105,7 +102,6 @@ float RayMarch(
 
         // Inside surface -> full shadow
         if (d <= epsilon) {
-            traveled = t;
             return 0.0;
         }
 
@@ -114,14 +110,12 @@ float RayMarch(
         lit = min(lit, softness * d * rcp(max(t, 1e-6)));
         // Early exit if we are effectively in total darkness
         if (lit < 0.01) {
-            traveled = t;
             return 0.0;
         }
         
         t += max(d, minStep);
     }
 
-    traveled = t;
     // return 0.0;
     return saturate(lit);
 }
@@ -136,8 +130,7 @@ inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
 // Returns 0..1: fully shadowed to fully lit..
 inline float GetShadowFromSdf(float3 dir, float3 worldPos)
 {
-    float traveled = 0.0;
-    half lit = RayMarch(worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, _SdfShadowStartOffset, _SdfShadowMaxDistance, _SdfShadowEpsilon, _SdfShadowMinStep, _SdfShadowMaxSteps, traveled);
+    half lit = RayMarch(worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, _SdfShadowStartOffset, _SdfShadowMaxDistance, _SdfShadowEpsilon, _SdfShadowMinStep, _SdfShadowMaxSteps, _SdfShadowSoftness);
     return lit;
 }
 

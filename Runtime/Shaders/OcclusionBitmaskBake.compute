@@ -58,8 +58,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         float3 originProbeUvw = (originProbePos - _BoundsMin) / _BoundsSize;
 
         // Set bit if direction is occluded
-        float traveledOut = 0.0f;
-        float free = RayMarch(voxelCenter, rayDir, _BoundsMin, _BoundsSize, originBias, _OcclusionDistance, _SdfThicknessTol, _SdfMinStep, _SdfMaxSteps, traveledOut);
+        float free = RayMarch(voxelCenter, rayDir, _BoundsMin, _BoundsSize, originBias, _OcclusionDistance, _SdfThicknessTol, _SdfMinStep, _SdfMaxSteps, 64);
         if (free < 0.5)
         {
             uint bit = 1u << (dirIdx & 31u); // defensive mask for shift
