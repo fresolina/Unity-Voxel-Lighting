@@ -1,54 +1,75 @@
 
-#ifndef LOTECSOFTWARE_MATH_INCLUDED
-#define LOTECSOFTWARE_MATH_INCLUDED
+#ifndef LOTEC_MATH_INCLUDED
+#define LOTEC_MATH_INCLUDED
 
-static const float LOTECSOFTWARE_PI = 3.14159265f;
-static const float LOTECSOFTWARE_GOLDEN_RATIO_CONJUGATE = 0.618033988f;
-static const uint LOTECSOFTWARE_FIBONACCI_DIR_COUNT = 64u;
+static const float LOTEC_MATH_PI = 3.14159265f;
 
-// Precomputed 64-direction Fibonacci sphere set.
-// Matches:
-//   phi = acos(1 - 2*i/N)
-//   theta = 2*pi*(i*0.618033988)
-//   dir = (sin(phi)*cos(theta), sin(phi)*sin(theta), cos(phi))
-// Generate Fibonacci sphere direction for given index and count.
-// Uses centered sampling (i + 0.5) consistent with the baker.
-inline float3 FibonacciDirection(uint index, uint N)
-{
-    float i = (float)index;
-    float invPhi = LOTECSOFTWARE_GOLDEN_RATIO_CONJUGATE;
-    float z = 1.0 - 2.0 * (i + 0.5) / (float)N;
-    float r = sqrt(max(0.0, 1.0 - z * z));
-    float theta = 2.0 * LOTECSOFTWARE_PI * frac(i * invPhi);
-    float x = cos(theta) * r;
-    float y = sin(theta) * r;
-    return float3(x, y, z);
+/**
+ * Extracts a single bit from the 64-bit mask (uint2).
+ * Since bitmask is not one 64bit integer, we have to create a 2x32 bit shift helper.
+ * float value = (float)((bitmask >> bit) & 1);
+ * HIGH-PERFORMANCE VERSION (Use inside loops)
+ * Expects the 32-bit bucket to be pre-selected.
+ * @param bit    The original 0-63 bit (we only use the lower 5 bits here).
+ * @param word32 Either bitmask.x or bitmask.y.
+ */
+inline uint GetBit32(uint bit, uint word32) {
+    // Standard bitwise ops are the safest and most portable.
+    // The compiler optimizes this to a single 'BFE' instruction automatically.
+    return (word32 >> (bit & 31u)) & 1u;
+}
+/**
+ * Extracts a single bit from the 64-bit value (uint2).
+ * Since bitmask is not one 64bit integer, we have to create a 2x32 bit shift helper.
+ * float bit = (float)((bitmask >> bit) & 1);
+ * CONVENIENCE VERSION (Use for single lookups)
+ * Handles bucket selection automatically.
+ * @param bitmask  The full uint2 (64-bit) mask.
+ * @param bit    The 0-63 bit to extract.
+ */
+inline uint GetBit64(uint2 bitmask, uint bit) {
+    // bit >> 5 results in 0 for (0-31) and 1 for (32-63)
+    uint word32 = bitmask[bit >> 5];
+    return GetBit32(bit, word32);
 }
 
-// Convenience for legacy 64-count name
-inline float3 FibonacciDirection64(uint index)
-{
-    return FibonacciDirection(index, LOTECSOFTWARE_FIBONACCI_DIR_COUNT);
+// Maps a 3D direction to the 2D texture UVs
+float2 PackOctahedral(float3 dir) {
+    dir /= (abs(dir.x) + abs(dir.y) + abs(dir.z) + 1e-8);
+    float2 p = dir.xz;
+    if (dir.y < 0.0) {
+        p = (1.0 - abs(p.yx)) * (p >= 0.0 ? 1.0 : -1.0);
+    }
+    return p * 0.5 + 0.5;
 }
 
-inline uint NearestFibonacciDirectionIndex64(float3 dir)
+// Intersect ray (ro + rd * t) with unit AABB [0,1]^3.
+// ro/rd are in UVW space; t is still in world-distance units (because rd already includes invSize).
+inline bool RayIntersectUnitAabb(float3 ro, float3 rd, out float tEnter, out float tExit)
 {
-	float bestDot = -2.0;
-	uint bestIndex = 0u;
+    const float kHuge = 1e20;
+    bool3 parallel = abs(rd) < 1e-8;
 
-	[unroll]
-	for (uint i = 0u; i < LOTECSOFTWARE_FIBONACCI_DIR_COUNT; i++)
-	{
-		float3 d = FibonacciDirection(i, LOTECSOFTWARE_FIBONACCI_DIR_COUNT);
-		float dd = dot(dir, d);
-		if (dd > bestDot)
-		{
-			bestDot = dd;
-			bestIndex = i;
-		}
-	}
+    // If we're parallel to a slab and outside it, no hit.
+    if (parallel.x && (ro.x < 0.0 || ro.x > 1.0)) { tEnter = 0.0; tExit = 0.0; return false; }
+    if (parallel.y && (ro.y < 0.0 || ro.y > 1.0)) { tEnter = 0.0; tExit = 0.0; return false; }
+    if (parallel.z && (ro.z < 0.0 || ro.z > 1.0)) { tEnter = 0.0; tExit = 0.0; return false; }
 
-	return bestIndex;
+    float3 invRd = rcp(rd);
+    float3 t0 = (0.0 - ro) * invRd;
+    float3 t1 = (1.0 - ro) * invRd;
+
+    // Ignore parallel axes by making their interval unbounded.
+    t0 = float3(parallel.x ? -kHuge : t0.x, parallel.y ? -kHuge : t0.y, parallel.z ? -kHuge : t0.z);
+    t1 = float3(parallel.x ?  kHuge : t1.x, parallel.y ?  kHuge : t1.y, parallel.z ?  kHuge : t1.z);
+
+    float3 tMin3 = min(t0, t1);
+    float3 tMax3 = max(t0, t1);
+
+    tEnter = max(max(tMin3.x, tMin3.y), tMin3.z);
+    tExit  = min(min(tMax3.x, tMax3.y), tMax3.z);
+
+    return tExit >= tEnter;
 }
 
 // Ray-Triangle intersection (Möller-Trumbore)
