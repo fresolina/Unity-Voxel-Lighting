@@ -1,16 +1,15 @@
-#ifndef LOTECSOFTWARE_VOXEL_OCCLUSION_DIRECTION_INCLUDED
-#define LOTECSOFTWARE_VOXEL_OCCLUSION_DIRECTION_INCLUDED
+#ifndef LOTEC_VOXEL_OCCLUSION_DIRECTION_INCLUDED
+#define LOTEC_VOXEL_OCCLUSION_DIRECTION_INCLUDED
 
 // Directional occlusion bitmask helpers.
 //
-// Expects the including file to provide:
+// Expects the includer to provide:
 //   float3 _SdfBoundsMin;
 //   float3 _SdfBoundsSize;
 //   float3 _VoxelResolution;
 //
-// And Math.hlsl (for NearestFibonacciDirectionIndex64), which we include here.
 
-#include "Math.hlsl"
+#include "Fibonacci.hlsl"
 
 // -----------------------------------------------------------------------------
 // DATA STRUCTURES
@@ -29,9 +28,6 @@ SAMPLER(sampler_FibIndexTexture);
 
 // Inverse of voxel size in world units (set from C#)
 float3 _InverseVoxelSize;
-// Precomputed Fibonacci directions (set from C#)
-// Usage: Map an index 0..63 to a direction vector.
-float4 _FibonacciDirections[64];
 
 // -----------------------------------------------------------------------------
 // HELPERS
@@ -62,44 +58,6 @@ inline uint2 GetBitmaskAtVoxel(int3 voxelIdx) {
     return uint2(xLo | (xHi << 16), yLo | (yHi << 16));
 }
 
-// Maps a 3D direction to the 2D texture UVs
-float2 PackOctahedral(float3 dir) {
-    dir /= (abs(dir.x) + abs(dir.y) + abs(dir.z) + 1e-8);
-    float2 p = dir.xz;
-    if (dir.y < 0.0) {
-        p = (1.0 - abs(p.yx)) * (p >= 0.0 ? 1.0 : -1.0);
-    }
-    return p * 0.5 + 0.5;
-}
-
-/**
- * Extracts a single bit from the 64-bit mask (uint2).
- * Since bitmask is not one 64bit integer, we have to create a 2x32 bit shift helper.
- * float value = (float)((bitmask >> bit) & 1);
- * HIGH-PERFORMANCE VERSION (Use inside loops)
- * Expects the 32-bit bucket to be pre-selected.
- * @param bit    The original 0-63 bit (we only use the lower 5 bits here).
- * @param word32 Either bitmask.x or bitmask.y.
- */
-inline uint GetBit32(uint bit, uint word32) {
-    // Standard bitwise ops are the safest and most portable.
-    // The compiler optimizes this to a single 'BFE' instruction automatically.
-    return (word32 >> (bit & 31u)) & 1u;
-}
-/**
- * Extracts a single bit from the 64-bit value (uint2).
- * Since bitmask is not one 64bit integer, we have to create a 2x32 bit shift helper.
- * float bit = (float)((bitmask >> bit) & 1);
- * CONVENIENCE VERSION (Use for single lookups)
- * Handles bucket selection automatically.
- * @param bitmask  The full uint2 (64-bit) mask.
- * @param bit    The 0-63 bit to extract.
- */
-inline uint GetBit64(uint2 bitmask, uint bit) {
-    // bit >> 5 results in 0 for (0-31) and 1 for (32-63)
-    uint word32 = bitmask[bit >> 5];
-    return GetBit32(bit, word32);
-}
 /**
  * Extracts 4 occlusion bits from the 64-bit value (uint2).
  * NOTE: This texture stores *occlusion* bits (1 = occluded, 0 = unoccluded).
@@ -120,16 +78,6 @@ float4 GetOcclusionBit4(uint2 bitmask, uint4 indices) {
     occlusion.z = (float)GetBit32(indices.z, word32z);
     occlusion.w = (float)GetBit32(indices.w, word32w);
     return occlusion;
-}
-/**
-* Decodes 4 Fibonacci direction indices from a texel.
-* Each channel is stored as UNorm8 (0..255) representing index/255.
-*/
-inline uint4 DecodeFibIndicesFromTexel(half4 raw)
-{
-    // Texture stores indices as UNorm8: index/255.
-    // Decode with rounding and clamp to [0,63].
-    return (uint4)clamp((int4)round(raw * 255.0), 0, 63);
 }
 
 // -----------------------------------------------------------------------------
@@ -166,46 +114,6 @@ float4 CalculateWeights(float3 lightDir, uint4 indices) {
 
     // 4. Tiny epsilon to prevent divide-by-zero if all weights are 0 (rare)
     return weights + 1e-5;
-}
-
-/*
-* Fetches the 4 nearest Fibonacci direction indices for a given light direction.
-* @param lightDir Normalized light direction
-*/
-inline uint4 GetFibIndices(float3 lightDir)
-{
-    float2 uv = PackOctahedral(lightDir);
-    half4 raw = _FibIndexTexture.SampleLevel(sampler_FibIndexTexture, uv, 0);
-    return DecodeFibIndicesFromTexel(raw);
-}
-
-/*
-* Finds the index of the nearest Fibonacci direction to the given direction.
-* @param nDir Normalized direction
-*/
-inline uint NearestOcclusionDirectionIndex(float3 nDir)
-{
-    // Map light direction to octahedral UVs
-    float2 uv = PackOctahedral(nDir);
-
-    // Get 4 closest Fibonacci direction indices to lightDir
-    half4 rawIndices = _FibIndexTexture.SampleLevel(sampler_FibIndexTexture, uv, 0);
-    uint4 indices = DecodeFibIndicesFromTexel(rawIndices);
-
-    // 4 dot products: cheapest reliable way to pick the closest.
-    float d0 = dot(nDir, _FibonacciDirections[indices.x].xyz);
-    float d1 = dot(nDir, _FibonacciDirections[indices.y].xyz);
-    float d2 = dot(nDir, _FibonacciDirections[indices.z].xyz);
-    float d3 = dot(nDir, _FibonacciDirections[indices.w].xyz);
-
-    uint bestIndex = indices.x;
-    float bestDot = d0;
-
-    if (d1 > bestDot) { bestDot = d1; bestIndex = indices.y; }
-    if (d2 > bestDot) { bestDot = d2; bestIndex = indices.z; }
-    if (d3 > bestDot) { bestDot = d3; bestIndex = indices.w; }
-
-    return bestIndex;
 }
 
 // -----------------------------------------------------------------------------
@@ -391,31 +299,31 @@ float GetFinalShadow(float3 worldPos, float3 lightDir) {
     // 1 = lit, 0 = shadow.
     #if defined(BITMASK_POINT)
         int3 baseIdx = int3(floor(localPos));
-        uint chosenIndex = NearestOcclusionDirectionIndex(lightDir);
+        uint chosenIndex = FibonacciIndexTex(_FibIndexTexture, sampler_FibIndexTexture, lightDir);
         uint2 mask = GetBitmaskAtVoxel(baseIdx);
         return saturate(1.0 - (float)GetBit64(mask, chosenIndex));
     #endif
 
     // BITMASK_RAY3: 3 taps along the light ray for a small penumbra
     #if defined(BITMASK_RAY3)
-        uint chosenIndex = NearestOcclusionDirectionIndex(lightDir);
+        uint chosenIndex = FibonacciIndexTex(_FibIndexTexture, sampler_FibIndexTexture, lightDir);
         return GetShadowRay3Traversal(worldPos, lightDir, chosenIndex);
     #endif
 
     // BITMASK_8TAP: 2x2x2 trilinear blend of the selected-direction occlusion bit.
     #if defined(BITMASK_8TAP)
-        uint chosenIndex = NearestOcclusionDirectionIndex(lightDir);
+        uint chosenIndex = FibonacciIndexTex(_FibIndexTexture, sampler_FibIndexTexture, lightDir);
         return GetShadowBitTrilinear8Tap(localPos, chosenIndex);
     #endif
 
     // 3) 4-tap spatial filtering
     #if defined(BITMASK_4TAP)
-        uint4 indices = GetFibIndices(lightDir);
+        uint4 indices = FibonacciIndicesTex(_FibIndexTexture, sampler_FibIndexTexture, lightDir);
         float4 weights = CalculateWeights(lightDir, indices);
         return GetShadowAngularSpatial4Tap(localPos, lightDir, indices, weights);
     #else
         // Default to 4-tap if no mode is selected.
-        uint4 indices = GetFibIndices(lightDir);
+        uint4 indices = FibonacciIndicesTex(_FibIndexTexture, sampler_FibIndexTexture, lightDir);
         float4 weights = CalculateWeights(lightDir, indices);
         return GetShadowAngularSpatial4Tap(localPos, lightDir, indices, weights);
     #endif

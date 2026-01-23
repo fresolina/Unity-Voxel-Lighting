@@ -1,13 +1,12 @@
 #pragma kernel CSMain
 #pragma target 5.0
 
-#include "Includes/Math.hlsl"
+#include "../Includes/Math.hlsl"
+#include "../Includes/Raymarch.hlsl"
 
 // Compute path: declare the SDF texture and sampler so the include can use them.
 Texture3D<float> _SdfTex;
 SamplerState sampler_SdfTex;
-
-#include "Includes/VoxelSdfShadows.hlsl"
 
 // Bounds
 float3 _BoundsMin;
@@ -58,7 +57,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         float3 originProbeUvw = (originProbePos - _BoundsMin) / _BoundsSize;
 
         // Set bit if direction is occluded
-        float free = RayMarch(voxelCenter, rayDir, _BoundsMin, _BoundsSize, originBias, _OcclusionDistance, _SdfThicknessTol, _SdfMinStep, _SdfMaxSteps, 64);
+        float free = RayMarchTex3D(_SdfTex, sampler_SdfTex, voxelCenter, rayDir, _BoundsMin, _BoundsSize, originBias, _OcclusionDistance, _SdfThicknessTol, _SdfMinStep, _SdfMaxSteps, 64);
         if (free < 0.5)
         {
             uint bit = 1u << (dirIdx & 31u); // defensive mask for shift
