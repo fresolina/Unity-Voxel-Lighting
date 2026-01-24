@@ -3,9 +3,6 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
 
 namespace Lotec.Lighting {
     [Serializable]
@@ -99,10 +96,6 @@ namespace Lotec.Lighting {
                 return false;
             }
 
-            // DEBUG
-            Debug.Log($"MaterialBaker: triCount={triCount}, triVerts={triVerts.Length}, triUVs={triUVs.Length}, albedoTextures: count={albedoTextures?.Length ?? 0}, emissionTextures: count={emissionTextures?.Length ?? 0}");
-            if (triMatA.Length > 0) Debug.Log($"triMatA[0]={triMatA[0]}");
-
             // Create buffers/textures
             var triVertsBuffer = new ComputeBuffer(triVerts.Length, sizeof(float) * 3, ComputeBufferType.Structured);
             var triMatABuffer = new ComputeBuffer(triCount, sizeof(float) * 4, ComputeBufferType.Structured);
@@ -113,7 +106,7 @@ namespace Lotec.Lighting {
 
             // Create 3D RenderTextures for GPU output (RGBA float)
             RenderTexture rtA = new RenderTexture(lowRes.x, lowRes.y, 0, RenderTextureFormat.ARGBFloat) {
-                dimension = UnityEngine.Rendering.TextureDimension.Tex3D,
+                dimension = TextureDimension.Tex3D,
                 volumeDepth = lowRes.z,
                 enableRandomWrite = true,
                 wrapMode = TextureWrapMode.Clamp,
@@ -121,7 +114,7 @@ namespace Lotec.Lighting {
                 name = $"{root.name}_Material_AlbedoRoughness"
             };
             RenderTexture rtB = new RenderTexture(lowRes.x, lowRes.y, 0, RenderTextureFormat.ARGBFloat) {
-                dimension = UnityEngine.Rendering.TextureDimension.Tex3D,
+                dimension = TextureDimension.Tex3D,
                 volumeDepth = lowRes.z,
                 enableRandomWrite = true,
                 wrapMode = TextureWrapMode.Clamp,
