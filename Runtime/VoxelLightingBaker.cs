@@ -12,6 +12,7 @@ namespace Lotec.Lighting {
         [Header("Bakers")]
         [SerializeField] SdfBaker _sdfBaker = new SdfBaker();
         [SerializeField] OcclusionBitmaskBaker _occlusionBitmaskBaker = new OcclusionBitmaskBaker();
+        [SerializeField] MaterialBaker _materialBaker = new MaterialBaker();
 
         [Tooltip("Where to save the baked Texture3D asset(s) (must be under Assets/).")]
         public string assetPath = "Assets/VoxelLighting";
@@ -39,6 +40,18 @@ namespace Lotec.Lighting {
                 return false;
             }
             volume.occlusionBitmaskTexture = bakedBitmask;
+
+            // Material baker produces two lower-res material textures (albedo+roughness, emission+metallic)
+            if (_materialBaker.materialBakeCompute == null) {
+                error = "Material Bake Compute is not assigned to MaterialBaker.";
+                return false;
+            }
+            if (!_materialBaker.TryBake(volume, out Texture3D bakedAlbedoRoughness, out Texture3D bakedEmissionMetallic, out error)) {
+                error = "MaterialBaker failed: " + error;
+                return false;
+            }
+            volume.materialAlbedoRoughnessTexture = bakedAlbedoRoughness;
+            volume.materialEmissionMetallicTexture = bakedEmissionMetallic;
 
             return true;
         }

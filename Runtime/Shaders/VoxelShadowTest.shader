@@ -3,6 +3,8 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
     Properties
     {
         _BaseColor ("Base Color", Color) = (1,1,1,1)
+        _BaseMap ("Base Map", 2D) = "white" {}
+        _Roughness ("Roughness", Range(0,1)) = 1.0
     }
 
     SubShader
@@ -34,19 +36,24 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _BaseColor;
+                TEXTURE2D(_BaseMap);
+                SAMPLER(sampler_BaseMap);
+                float _Roughness;
             CBUFFER_END
 
             struct Attributes
             {
                 float4 positionOS : POSITION;
                 float3 normalOS   : NORMAL;
+                float2 uv         : TEXCOORD0;
             };
 
             struct Varyings
             {
                 float4 positionHCS : SV_POSITION;
-                float3 positionWS  : TEXCOORD0;
-                float3 normalWS    : TEXCOORD1;
+                float3 positionWS  : TEXCOORD1;
+                float3 normalWS    : TEXCOORD2;
+                float2 uv          : TEXCOORD3;
             };
 
             Varyings vert(Attributes IN)
@@ -54,6 +61,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 Varyings OUT;
                 OUT.positionWS = TransformObjectToWorld(IN.positionOS.xyz);
                 OUT.normalWS = TransformObjectToWorldNormal(IN.normalOS);
+                OUT.uv = IN.uv;
                 OUT.positionHCS = TransformWorldToHClip(OUT.positionWS);
 
                 return OUT;
@@ -86,7 +94,17 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 // Ambient light
                 if (shadow < 0.1) shadow = 0.1;
 
-                float3 lit = _BaseColor.rgb * light.color * ndotl * shadow;
+                // Albedo: texture modulated by base color
+                float3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
+                float3 albedo = _BaseColor.rgb * texAlbedo;
+
+                // Simple Blinn-Phong specular modulated by roughness (1 = very rough -> no specular)
+                float3 V = normalize(_WorldSpaceCameraPos - IN.positionWS);
+                float3 H = normalize(L + V);
+                float specPower = 16.0;
+                float spec = pow(saturate(dot(N, H)), specPower) * (1.0 - saturate(_Roughness));
+
+                float3 lit = albedo * light.color * ndotl * shadow + light.color * spec * shadow;
                 return half4(lit, _BaseColor.a);
             }
             ENDHLSL

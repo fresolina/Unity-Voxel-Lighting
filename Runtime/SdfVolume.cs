@@ -27,6 +27,10 @@ namespace Lotec.Lighting {
         [Header("Output Textures")]
         public Texture3D sdfTexture;
         public Texture3D occlusionBitmaskTexture;
+        [Tooltip("Lower-resolution material property: albedo.rgb + roughness (a)")]
+        public Texture3D materialAlbedoRoughnessTexture;
+        [Tooltip("Lower-resolution material property: emission.rgb + metallic (a)")]
+        public Texture3D materialEmissionMetallicTexture;
 
         public Transform BakeRoot { get => _bakeRoot; set => _bakeRoot = value; }
 

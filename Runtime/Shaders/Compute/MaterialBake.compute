@@ -1,0 +1,179 @@
+// MaterialBake.compute
+// Compute shader that produces a low-resolution 3D material field from scene geometry.
+//
+// High-level description:
+// - For each voxel in a target low-resolution 3D grid, compute the world-space
+//   center position and find the nearest triangle from a CPU-provided triangle list.
+// - For the nearest triangle, write two material vectors into two 3D RW textures:
+//     _OutAlbedo:   (albedo.r, albedo.g, albedo.b, roughness)
+//     _OutEmission:  (emission.r, emission.g, emission.b, metallic)
+//
+// Intended usage:
+// - A CPU baker uploads flattened triangle vertex positions into `_TriVerts` (3 float3 per triangle)
+//   and per-triangle material vectors into `_TriMatA` / `_TriMatB` (indexed per triangle).
+// - The shader is dispatched with `_Resolution` set to the desired low-res volume (x,y,z)
+//   and `_BoundsMin`/`_BoundsSize` describing the world-space AABB that the volume covers.
+// - The shader writes directly into two 3D RWTexture<float4> targets so the CPU can read them back.
+//
+// Notes and tradeoffs:
+// - This shader uses a brute-force nearest-triangle search (O(triCount) per voxel).
+//   It's simple and robust for editor-time baking but can be slow for very large meshes.
+// - The closest-point calculation is implemented in `Includes/Math.hlsl` (ClosestPointOnTriangle).
+// - No raycasts or scene queries are used; all geometry data is supplied by the CPU.
+// - Outputs use float32 channels (ARGBFloat) to simplify AsyncGPUReadback semantics.
+
+#pragma kernel CSMain
+
+#include "../Includes/Math.hlsl"
+
+// Input triangle buffers (3 float3 per triangle in _TriVerts)
+StructuredBuffer<float3> _TriVerts;
+// Per-triangle material vectors packed into float4s
+StructuredBuffer<float4> _TriMatA; // albedo.rgb, roughness
+StructuredBuffer<float4> _TriMatB; // emission.rgb, metallic
+uint _TriCount;
+// Per-triangle UVs (3 entries per triangle)
+StructuredBuffer<float2> _TriUVs;
+// Per-triangle texture indices (index into texture arrays), -1 = none
+StructuredBuffer<int> _TriAlbedoTex;
+StructuredBuffer<int> _TriEmissionTex;
+
+// Volume bounds and resolution (world-space AABB + integer voxel dims)
+float3 _BoundsMin;
+float3 _BoundsSize;
+uint3 _Resolution;
+
+// RWTexture3D outputs: each voxel stores a float4 material vector
+RWTexture3D<float4> _OutAlbedo;
+RWTexture3D<float4> _OutEmission;
+
+// Optional Texture2DArray inputs (albedo/emission). If bound, shader will sample these.
+Texture2DArray _AlbedoArray;
+Texture2DArray _EmissionArray;
+uint2 _AlbedoSize;
+uint2 _EmissionSize;
+
+[numthreads(8,8,8)]
+void CSMain(uint3 id : SV_DispatchThreadID) {
+    // Bounds check: threads outside the requested resolution do nothing
+    if (id.x >= _Resolution.x || id.y >= _Resolution.y || id.z >= _Resolution.z) return;
+
+    // Compute normalized voxel coordinate in [0,1] and then world position at voxel center
+    float3 uvw = (float3(id.x + 0.5, id.y + 0.5, id.z + 0.5)) / (float3)_Resolution;
+    float3 worldPos = _BoundsMin + uvw * _BoundsSize;
+
+    // Find the nearest triangle by comparing squared distances to triangle closest points
+    float bestDistSq = 1e30;
+    int bestIdx = 0;
+
+    // Each triangle occupies 3 consecutive float3 entries in _TriVerts
+    for (uint tri = 0; tri < _TriCount; ++tri) {
+        uint baseIdx = tri * 3;
+        float3 v0 = _TriVerts[baseIdx + 0];
+        float3 v1 = _TriVerts[baseIdx + 1];
+        float3 v2 = _TriVerts[baseIdx + 2];
+
+        // Compute the closest point on the triangle to the voxel center (from Math.hlsl)
+        float3 cp = ClosestPointOnTriangle(worldPos, v0, v1, v2);
+        float d2 = dot(cp - worldPos, cp - worldPos);
+        if (d2 < bestDistSq) {
+            bestDistSq = d2;
+            bestIdx = tri;
+        }
+    }
+
+    // Pull material vectors for the nearest triangle and write to the output volume
+    float4 matA = _TriMatA[bestIdx];
+    float4 matB = _TriMatB[bestIdx];
+
+    // Recompute closest point on the chosen triangle for barycentric interpolation
+    int bestBase = bestIdx * 3;
+    float3 bestV0 = _TriVerts[bestBase + 0];
+    float3 bestV1 = _TriVerts[bestBase + 1];
+    float3 bestV2 = _TriVerts[bestBase + 2];
+    float3 cp = ClosestPointOnTriangle(worldPos, bestV0, bestV1, bestV2);
+
+    // Default outputs (flat material values)
+    float4 outA = matA;
+    float4 outB = matB;
+
+    // If we have texture arrays and valid indices, compute barycentric UV and sample
+    int aTexIdx = _TriAlbedoTex[bestIdx];
+    if (aTexIdx >= 0) {
+        // read per-triangle UVs (3 entries)
+        int baseUV = bestIdx * 3;
+        float2 uv0 = _TriUVs[baseUV + 0];
+        float2 uv1 = _TriUVs[baseUV + 1];
+        float2 uv2 = _TriUVs[baseUV + 2];
+
+        // triangle verts (use precomputed bestV*)
+        float3 v0 = bestV0;
+        float3 v1 = bestV1;
+        float3 v2 = bestV2;
+
+        // compute barycentric coordinates of closest point
+        float3 v0v1 = v1 - v0;
+        float3 v0v2 = v2 - v0;
+        float3 vp = cp - v0;
+        float d00 = dot(v0v1, v0v1);
+        float d01 = dot(v0v1, v0v2);
+        float d11 = dot(v0v2, v0v2);
+        float d20 = dot(vp, v0v1);
+        float d21 = dot(vp, v0v2);
+        float denom = d00 * d11 - d01 * d01;
+        float v = 0.0;
+        float w = 0.0;
+        if (abs(denom) > 1e-8) {
+            v = (d11 * d20 - d01 * d21) / denom;
+            w = (d00 * d21 - d01 * d20) / denom;
+        }
+        float u = 1.0 - v - w;
+
+        float2 uv = uv0 * u + uv1 * v + uv2 * w;
+        // sample albedo array via texel Load (avoids separate sampler issues)
+        int tx = (int)clamp(uv.x * (_AlbedoSize.x - 1), 0.0, (float)(_AlbedoSize.x - 1));
+        int ty = (int)clamp(uv.y * (_AlbedoSize.y - 1), 0.0, (float)(_AlbedoSize.y - 1));
+        int4 coord4 = int4(tx, ty, aTexIdx, 0);
+        float4 sampled = _AlbedoArray.Load(coord4);
+        outA = float4(sampled.rgb, matA.a); // preserve roughness in alpha
+    }
+
+    int eTexIdx = _TriEmissionTex[bestIdx];
+    if (eTexIdx >= 0) {
+        int baseUV = bestIdx * 3;
+        float2 uv0 = _TriUVs[baseUV + 0];
+        float2 uv1 = _TriUVs[baseUV + 1];
+        float2 uv2 = _TriUVs[baseUV + 2];
+
+        float3 v0 = bestV0;
+        float3 v1 = bestV1;
+        float3 v2 = bestV2;
+
+        float3 v0v1 = v1 - v0;
+        float3 v0v2 = v2 - v0;
+        float3 vp = cp - v0;
+        float d00 = dot(v0v1, v0v1);
+        float d01 = dot(v0v1, v0v2);
+        float d11 = dot(v0v2, v0v2);
+        float d20 = dot(vp, v0v1);
+        float d21 = dot(vp, v0v2);
+        float denom = d00 * d11 - d01 * d01;
+        float v = 0.0;
+        float w = 0.0;
+        if (abs(denom) > 1e-8) {
+            v = (d11 * d20 - d01 * d21) / denom;
+            w = (d00 * d21 - d01 * d20) / denom;
+        }
+        float u = 1.0 - v - w;
+
+        float2 uv = uv0 * u + uv1 * v + uv2 * w;
+        int tx = (int)clamp(uv.x * (_EmissionSize.x - 1), 0.0, (float)(_EmissionSize.x - 1));
+        int ty = (int)clamp(uv.y * (_EmissionSize.y - 1), 0.0, (float)(_EmissionSize.y - 1));
+        int4 coord4 = int4(tx, ty, eTexIdx, 0);
+        float4 sampled = _EmissionArray.Load(coord4);
+        outB = float4(sampled.rgb, matB.a); // preserve metallic in alpha
+    }
+
+    _OutAlbedo[id.xyz] = outA;
+    _OutEmission[id.xyz] = outB;
+}
