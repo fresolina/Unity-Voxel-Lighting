@@ -41,6 +41,13 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 float _Roughness;
             CBUFFER_END
 
+            // GI field bindings (set from GIRuntime or global shader properties)
+            // These are not exposed in the Properties block; set via Material/Shader.SetGlobalTexture
+            TEXTURE3D(_GIRadiance);
+            SAMPLER(sampler_GIRadiance);
+            float3 _GIBoundsMin;
+            float3 _GIBoundsSize;
+
             struct Attributes
             {
                 float4 positionOS : POSITION;
@@ -92,7 +99,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                     shadow = GetShadow(light, IN.positionWS, N);
 
                 // Ambient light
-                if (shadow < 0.1) shadow = 0.1;
+                // if (shadow < 0.01) shadow = 0.01;
 
                 // Albedo: texture modulated by base color
                 float3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
@@ -105,6 +112,19 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 float spec = pow(saturate(dot(N, H)), specPower) * (1.0 - saturate(_Roughness));
 
                 float3 lit = albedo * light.color * ndotl * shadow + light.color * spec * shadow;
+
+                // Sample GI radiance field if bounds indicate it's available
+                float3 gi = float3(0,0,0);
+                if (_GIBoundsSize.x > 0.0) {
+                    float3 uvw = (_GIBoundsSize.x > 0) ? (IN.positionWS - _GIBoundsMin) / _GIBoundsSize : float3(0,0,0);
+                    // Only sample inside bounds
+                    if (uvw.x >= 0 && uvw.x <= 1 && uvw.y >= 0 && uvw.y <= 1 && uvw.z >= 0 && uvw.z <= 1) {
+                        float4 gcol = _GIRadiance.SampleLevel(sampler_GIRadiance, uvw, 0);
+                        gi = gcol.rgb;
+                    }
+                }
+
+                lit += gi;
                 return half4(lit, _BaseColor.a);
             }
             ENDHLSL
