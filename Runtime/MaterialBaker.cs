@@ -412,7 +412,6 @@ namespace Lotec.Lighting {
                 }
             }
 
-            Debug.Log($"MaterialBaker: Building CPU {name} Texture3D from {sliceCount} slices ({res.x}x{res.y}x{res.z}).");
             var cpu = new Texture3D(res.x, res.y, res.z, TextureFormat.RGBA32, mipChain: false) {
                 wrapMode = TextureWrapMode.Clamp,
                 filterMode = FilterMode.Trilinear,
