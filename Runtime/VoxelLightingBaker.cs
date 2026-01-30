@@ -5,10 +5,6 @@ namespace Lotec.Lighting {
     /// MonoBehaviour for coordinating baking.
     /// </summary>
     public class VoxelLightingBaker : MonoBehaviour {
-        [Header("Target Volume")]
-        [Tooltip("SdfVolume that provides bake settings (root, resolution, bounds) and receives baked textures.")]
-        public SdfVolume targetSdfVolume;
-
         [Header("Bakers")]
         [SerializeField] SdfBaker _sdfBaker = new SdfBaker();
         [SerializeField] OcclusionBitmaskBaker _occlusionBitmaskBaker = new OcclusionBitmaskBaker();
@@ -17,8 +13,17 @@ namespace Lotec.Lighting {
         [Tooltip("Where to save the baked Texture3D asset(s) (must be under Assets/).")]
         public string assetPath = "Assets/VoxelLighting";
 
+        SdfShaderGlobals _sdfShaderGlobals;
+
+        public SdfVolume targetSdfVolume => _sdfShaderGlobals.volume;
+
+        void OnValidate() {
+            if (_sdfShaderGlobals == null)
+                _sdfShaderGlobals = FindAnyObjectByType<SdfShaderGlobals>();
+        }
+
         public bool TryBake(out string error) {
-            SdfVolume volume = targetSdfVolume;
+            SdfVolume volume = _sdfShaderGlobals.volume;
             if (volume == null) {
                 error = "Target SdfVolume is not assigned.";
                 return false;

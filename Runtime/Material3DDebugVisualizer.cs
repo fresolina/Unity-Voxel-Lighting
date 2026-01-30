@@ -1,5 +1,4 @@
 using UnityEngine;
-using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
     [AddComponentMenu("Lotec/Material 3D Debug Visualizer")]
@@ -13,10 +12,12 @@ namespace Lotec.Lighting {
         [Min(1)] public int skip = 1;
         [Min(0f)] public float sphereRadius = 0.02f;
 
-        [SerializeField] SdfVolume _volume;
         Texture3D _currentTex;
         Color[] _cachedPixels;
         int _rx, _ry, _rz;
+
+        public SdfVolume Volume => _sdfShaderGlobalas.volume;
+        SdfShaderGlobals _sdfShaderGlobalas;
 
         void OnEnable() {
             CacheIfNeeded();
@@ -31,12 +32,10 @@ namespace Lotec.Lighting {
         }
 
         void CacheIfNeeded() {
-            if (_volume == null) {
-                _volume = GetComponent<SdfVolume>();
-                if (_volume == null) return;
-            }
+            if (_sdfShaderGlobalas == null)
+                _sdfShaderGlobalas = FindAnyObjectByType<SdfShaderGlobals>();
 
-            Texture3D tex = (field == FieldType.EmissionMetallic) ? _volume.materialEmissionMetallicTexture : _volume.materialAlbedoRoughnessTexture;
+            Texture3D tex = (field == FieldType.EmissionMetallic) ? Volume.materialEmissionMetallicTexture : Volume.materialAlbedoRoughnessTexture;
             if (tex == _currentTex && _cachedPixels != null)
                 return;
 
@@ -58,11 +57,11 @@ namespace Lotec.Lighting {
         }
 
         void OnDrawGizmos() {
-            if (!visualize || _cachedPixels == null || _volume == null) return;
+            if (!visualize || _cachedPixels == null || Volume == null) return;
             if (_rx <= 0 || _ry <= 0 || _rz <= 0) return;
 
             // Iterate voxels with a skip to reduce draw count
-            Bounds bounds = _volume.bakedBounds;
+            Bounds bounds = Volume.bakedBounds;
             for (int z = 0; z < _rz; z += skip) {
                 for (int y = 0; y < _ry; y += skip) {
                     for (int x = 0; x < _rx; x += skip) {
