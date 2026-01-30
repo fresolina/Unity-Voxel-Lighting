@@ -73,16 +73,15 @@ namespace Lotec.Lighting.Editor {
             Object existing = AssetDatabase.LoadAssetAtPath<Object>(path);
             if (existing != null) {
                 AssetDatabase.DeleteAsset(path);
-                AssetDatabase.Refresh();
-                AssetDatabase.CreateAsset(asset, path);
-                Debug.Log($"{assetType} asset replaced: {path}", asset);
-            } else {
-                AssetDatabase.CreateAsset(asset, path);
-                Debug.Log($"{assetType} asset created: {path}", asset);
             }
 
+            AssetDatabase.CreateAsset(asset, path);
+            Debug.Log($"{assetType} asset written: {path}", asset);
+
+            // Ensure the new asset is marked dirty and reimported so Unity reloads the latest data
+            EditorUtility.SetDirty(asset);
             AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
         }
     }
 }

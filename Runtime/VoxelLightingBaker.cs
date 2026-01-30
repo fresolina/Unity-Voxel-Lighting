@@ -42,12 +42,13 @@ namespace Lotec.Lighting {
             volume.occlusionBitmaskTexture = bakedBitmask;
 
             // Material baker produces two lower-res material textures (albedo+roughness, emission+metallic)
-            if (_materialBaker.materialBakeCompute == null) {
+            if (_materialBaker.MaterialBakeCompute == null) {
                 error = "Material Bake Compute is not assigned to MaterialBaker.";
                 return false;
             }
-            if (!_materialBaker.TryBake(volume, out Texture3D bakedAlbedoRoughness, out Texture3D bakedEmissionMetallic, out error)) {
-                error = "MaterialBaker failed: " + error;
+            string matErr = _materialBaker.Bake(volume, out Texture3D bakedAlbedoRoughness, out Texture3D bakedEmissionMetallic);
+            if (!string.IsNullOrEmpty(matErr)) {
+                error = "MaterialBaker failed: " + matErr;
                 return false;
             }
             volume.materialAlbedoRoughnessTexture = bakedAlbedoRoughness;
