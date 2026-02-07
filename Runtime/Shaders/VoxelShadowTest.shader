@@ -99,25 +99,23 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 if (ndotl > 0)
                     shadow = GetShadow(light, IN.positionWS, N);
 
-                // Ambient light (static)
-                // if (shadow < 0.01) shadow = 0.01;
-
                 // Albedo: texture modulated by base color
                 float3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
                 float3 albedo = _BaseColor.rgb * texAlbedo;
 
                 // Simple Blinn-Phong specular modulated by roughness (1 = very rough -> no specular)
-                float3 V = normalize(_WorldSpaceCameraPos - IN.positionWS);
-                float3 H = normalize(L + V);
-                float specPower = 16.0;
-                float spec = pow(saturate(dot(N, H)), specPower) * (1.0 - saturate(_Roughness));
-
+                // float3 V = normalize(_WorldSpaceCameraPos - IN.positionWS);
+                // float3 H = normalize(L + V);
+                // float specPower = 16.0;
+                // float spec = pow(saturate(dot(N, H)), specPower) * (1.0 - saturate(_Roughness));
+                
                 // Global Illumination from Voxel GI field
                 float3 gi = SampleVoxelGI(IN.positionWS, N);
 
-                float3 lit = albedo * light.color * ndotl * shadow + // Direct lit
-                    albedo * gi + // Indirect lit
-                    light.color * spec * shadow; // Specular lit
+                float3 lit = albedo * gi; // DEBUG: Indirect lit only for testing
+                // float3 lit = albedo * light.color * ndotl * shadow + // Direct lit
+                //     albedo * gi + // Indirect lit
+                //     light.color * spec * shadow; // Specular lit
 
                 return half4(lit, _BaseColor.a);
             }

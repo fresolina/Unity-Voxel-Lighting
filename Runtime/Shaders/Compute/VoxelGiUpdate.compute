@@ -209,4 +209,5 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     float stability = 0;
     // TODO: Add surface normal? Maybe more performant to calculate it.
     _ControlWrite[id] = float4(packedDir, stability, voxelLit);
+    // _GiFieldWrite[id] = float4(10,10,10,10);// DEBUG: test field
 }

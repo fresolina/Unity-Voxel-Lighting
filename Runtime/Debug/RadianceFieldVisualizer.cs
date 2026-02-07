@@ -43,17 +43,25 @@ namespace Lotec.Lighting {
 
         protected override Color ProcessColor(Color c) {
             c.a = 1f;
-            if (toneMap) c = ApplyToneMap(c, exposure);
 
-            float lum = 0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b;
-            if (lum <= 0.0f && showZeroAsGray) {
+            // Assume c is linear HDR. Evaluate luminance in linear space first.
+            float lumLinear = 0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b;
+
+            if (lumLinear <= 0.0f && showZeroAsGray) {
                 c = new Color(minVisibleLuminance, minVisibleLuminance, minVisibleLuminance, 1.0f);
-            } else if (lum > 0.0f && lum < minVisibleLuminance) {
-                float scale = minVisibleLuminance / lum;
-                c = new Color(c.r * scale, c.g * scale, c.b * scale, 1.0f);
+            } else if (lumLinear > 0.0f && lumLinear < minVisibleLuminance) {
+                float scale = minVisibleLuminance / lumLinear;
+                c = new Color(
+                    Mathf.Min(c.r * scale, 1f),
+                    Mathf.Min(c.g * scale, 1f),
+                    Mathf.Min(c.b * scale, 1f),
+                    1f
+                );
             }
 
-            return c.linear;
+            if (toneMap) c = ApplyToneMap(c, exposure);
+
+            return c; // do not call .linear here unless input is sRGB
         }
 
         static Color ApplyToneMap(Color c, float exposure) {
@@ -75,6 +83,18 @@ namespace Lotec.Lighting {
             if (Time.frameCount - _lastStatusFrame < 30) return;
             _lastStatusFrame = Time.frameCount;
             Debug.Log($"RadianceFieldVisualizer: {msg}", this);
+        }
+
+        // DEBUG: Utility to log center pixel of radiance field for testing readback and visualization.
+        [ContextMenu("Log RadianceRead Center Pixel")]
+        void LogRadianceCenter() {
+            var tex = source.GiUpdater.RadianceRead as Texture;
+            Texture3DReadback.ReadbackRGBAAsync(tex, "Hidden/Unpack3D", (ok, pixels, w, h, d) => {
+                if (!ok) { Debug.Log("readback failed"); return; }
+                int cx = w / 2, cy = h / 2, cz = d / 2;
+                Color c = pixels[cx + cy * w + cz * w * h];
+                Debug.Log($"Radiance center = {c}");
+            });
         }
     }
 }

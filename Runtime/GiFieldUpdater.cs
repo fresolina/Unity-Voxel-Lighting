@@ -183,6 +183,7 @@ namespace Lotec.Lighting {
                 Vector3 dir = -sun.transform.forward; // light direction towards the scene
                 _giComputeShader.SetVector(s_directLightDir, dir);
                 _giComputeShader.SetVector(s_directLightColor, (Vector4)sun.color * sun.intensity); // TODO: Maybe put intensity in alpha channel.
+                // DelayedLogger.Log($"GI Updater: Using sun light '{sun.name}' with color {sun.color} and intensity {sun.intensity}.");
             } else {
                 _giComputeShader.SetVector(s_directLightDir, Vector3.down);
                 _giComputeShader.SetVector(s_directLightColor, Vector4.zero);
@@ -199,6 +200,17 @@ namespace Lotec.Lighting {
             Vector3 resolution = MaterialFieldAlbedoRoughness.GetResolution();
             float voxelSize = MaterialFieldAlbedoRoughness.width / resolution.x;
             Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector4.one);
+        }
+    }
+
+    internal class DelayedLogger {
+        static float _lastLogTime = 0f;
+        static float _logDelay = 0.5f; // seconds
+        public static void Log(string message) {
+            if (Time.realtimeSinceStartup - _lastLogTime < _logDelay)
+                return;
+            _lastLogTime = Time.realtimeSinceStartup;
+            Debug.Log(message);
         }
     }
 }
