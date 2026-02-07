@@ -59,7 +59,11 @@ namespace Lotec.Lighting {
                 if (mf == null || mf.sharedMesh == null)
                     continue;
 
-                Bounds.Encapsulate(mr.bounds);
+                if (Bounds.size == Vector3.zero) {
+                    Bounds = mr.bounds;
+                } else {
+                    Bounds.Encapsulate(mr.bounds);
+                }
             }
 
             if (_paddingWorld > 0f) {
