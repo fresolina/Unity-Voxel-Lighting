@@ -1,4 +1,4 @@
-Shader "Hidden/Unpack3DRadiance"
+Shader "Hidden/Unpack3D"
 {
     Properties {
         _VolumeTex("VolumeTex", 3D) = "white" {}

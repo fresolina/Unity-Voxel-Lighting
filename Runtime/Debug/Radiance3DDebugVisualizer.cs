@@ -69,7 +69,7 @@ namespace Lotec.Lighting {
                 }
 
                 var rtLocal = _currentRt;
-                Texture3DReadback.ReadbackRGBAAsync(rtLocal, "Hidden/Unpack3DRadiance", (success, pixels, w, h, d) => {
+                Texture3DReadback.ReadbackRGBAAsync(rtLocal, "Hidden/Unpack3D", (success, pixels, w, h, d) => {
                     _readbackInProgress = false;
                     if (!success) {
                         Debug.LogWarning($"Radiance3DDebugVisualizer: async readback failed for RT '{rtLocal?.name}'");

@@ -7,10 +7,24 @@ namespace Lotec.Lighting {
     public static class Texture3DReadback {
         static readonly Dictionary<string, Material> s_materialCache = new Dictionary<string, Material>();
 
+        /// <summary>
+        /// Read back RGBA data from a 3D texture (Texture3D or RenderTexture) asynchronously.
+        /// Uses the default path with no conversion shader.
+        /// </summary>
+        /// <param name="tex">Source texture (Texture3D or RenderTexture).</param>
+        /// <param name="onComplete">Callback with success flag, pixel array, width, height, depth.</param>
         public static void ReadbackRGBAAsync(Texture tex, Action<bool, Color[], int, int, int> onComplete) {
             ReadbackRGBAAsync(tex, null, onComplete);
         }
 
+        /// <summary>
+        /// Read back RGBA data from a 3D texture (Texture3D or RenderTexture) asynchronously.
+        /// If a conversion shader name is provided, each slice is rendered through that shader
+        /// (e.g., for HDR packed formats like R11G11B10) and then read back as RGBAFloat.
+        /// </summary>
+        /// <param name="tex">Source texture (Texture3D or RenderTexture).</param>
+        /// <param name="conversionShaderName">Optional shader name (e.g., "Hidden/Unpack3D").</param>
+        /// <param name="onComplete">Callback with success flag, pixel array, width, height, depth.</param>
         public static void ReadbackRGBAAsync(Texture tex, string conversionShaderName, Action<bool, Color[], int, int, int> onComplete) {
             if (tex == null) {
                 onComplete(false, null, 0, 0, 0);
@@ -39,6 +53,12 @@ namespace Lotec.Lighting {
             onComplete(false, null, 0, 0, 0);
         }
 
+        /// <summary>
+        /// Read back RGBA data from a RenderTexture (3D) using optional conversion shader.
+        /// </summary>
+        /// <param name="rt">Source RenderTexture (3D).</param>
+        /// <param name="conversionShaderName">Optional conversion shader name.</param>
+        /// <param name="onComplete">Callback with success flag, pixel array, width, height, depth.</param>
         static void ReadbackRenderTexture(RenderTexture rt, string conversionShaderName, Action<bool, Color[], int, int, int> onComplete) {
             if (rt == null) { onComplete(false, null, 0, 0, 0); return; }
             if (!rt.IsCreated()) rt.Create();
@@ -93,6 +113,15 @@ namespace Lotec.Lighting {
             }
         }
 
+        /// <summary>
+        /// Synchronous per-slice readback for RenderTexture (3D) into an existing pixel array.
+        /// Used as a fallback when no conversion shader is provided.
+        /// </summary>
+        /// <param name="rt">Source RenderTexture (3D).</param>
+        /// <param name="pixels">Destination pixel array (w*h*d).</param>
+        /// <param name="w">Width.</param>
+        /// <param name="h">Height.</param>
+        /// <param name="d">Depth (slices).</param>
         static void ReadbackRenderTextureSync(RenderTexture rt, Color[] pixels, int w, int h, int d) {
             RenderTexture prev = RenderTexture.active;
             Texture2D slice = new Texture2D(w, h, TextureFormat.RGBAFloat, false, true);
@@ -110,6 +139,11 @@ namespace Lotec.Lighting {
             UnityEngine.Object.DestroyImmediate(slice);
         }
 
+        /// <summary>
+        /// Find or create a cached material for the given shader name.
+        /// </summary>
+        /// <param name="shaderName">Shader name used for conversion.</param>
+        /// <returns>A cached Material instance, or null if shader not found.</returns>
         static Material GetOrCreateMaterial(string shaderName) {
             if (s_materialCache.TryGetValue(shaderName, out var mat) && mat != null) return mat;
             Shader s = Shader.Find(shaderName);
