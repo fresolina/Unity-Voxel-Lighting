@@ -165,7 +165,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
                 incomingLight += _SkyColor;
             }
             // Air updates slow to filter out noise
-            blendSpeed = 0.5f;
+            blendSpeed = 0.1f;
 
             // Track Dominant Light
             float brightness = Luminance(incomingLight);

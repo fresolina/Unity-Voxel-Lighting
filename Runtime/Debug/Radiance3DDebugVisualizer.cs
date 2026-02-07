@@ -6,7 +6,7 @@ namespace Lotec.Lighting {
     [ExecuteAlways]
     public class Radiance3DDebugVisualizer : MonoBehaviour {
         public bool visualize = true;
-        public VoxelGIUpdate source;
+        public LightingManager source;
 
         [Min(1)] public int skip = 4;
         [Min(0f)] public float sphereRadius = 0.02f;
@@ -19,8 +19,6 @@ namespace Lotec.Lighting {
         Color[] _cachedPixels;
         int _rx, _ry, _rz;
         bool _readbackInProgress = false;
-        Material _unpackMaterial;
-        bool _pendingReadbackRequested = false;
 
         SdfShaderGlobals _sdfShaderGlobals;
         int _lastStatusFrame;
@@ -32,11 +30,6 @@ namespace Lotec.Lighting {
         void OnDisable() {
             _cachedPixels = null;
             _readbackInProgress = false;
-            _pendingReadbackRequested = false;
-            if (_unpackMaterial != null) {
-                DestroyImmediate(_unpackMaterial);
-                _unpackMaterial = null;
-            }
         }
 
         void OnValidate() {
@@ -49,11 +42,11 @@ namespace Lotec.Lighting {
 
         void CacheIfNeeded() {
             if (source == null) {
-                source = FindAnyObjectByType<VoxelGIUpdate>();
-                if (source == null) { LogStatus("CacheIfNeeded: no VoxelGIUpdate found"); return; }
+                source = FindAnyObjectByType<LightingManager>();
+                if (source == null) { LogStatus("CacheIfNeeded: no LightingManager found"); return; }
             }
 
-            RenderTexture rt = source.GetCurrentRadianceTexture();
+            RenderTexture rt = source.GiUpdater.RadianceRead;
             if (rt == null) { LogStatus("CacheIfNeeded: current radiance RT is null"); return; }
             if (!rt.IsCreated()) rt.Create();
             if (rt.width == 0 || rt.height == 0 || rt.volumeDepth == 0) { LogStatus($"CacheIfNeeded: RT has invalid dims {rt.width}x{rt.height}x{rt.volumeDepth}"); return; }
@@ -72,14 +65,11 @@ namespace Lotec.Lighting {
 
                 if (_readbackInProgress) {
                     Debug.Log("Radiance3DDebugVisualizer: readback already in progress, queuing pending request");
-                    _pendingReadbackRequested = true;
                     return;
                 }
 
-                EnsureUnpackMaterial();
                 var rtLocal = _currentRt;
-                _pendingReadbackRequested = false;
-                StartAsyncReadback(rtLocal, (success, pixels, w, h, d) => {
+                Texture3DReadback.ReadbackRGBAAsync(rtLocal, "Hidden/Unpack3DRadiance", (success, pixels, w, h, d) => {
                     _readbackInProgress = false;
                     if (!success) {
                         Debug.LogWarning($"Radiance3DDebugVisualizer: async readback failed for RT '{rtLocal?.name}'");
@@ -102,57 +92,6 @@ namespace Lotec.Lighting {
             } catch (System.Exception e) {
                 Debug.LogWarning($"Radiance3DDebugVisualizer: cannot start async readback for RT '{_currentRt.name}': {e.Message}");
                 _cachedPixels = null;
-            }
-        }
-
-        void EnsureUnpackMaterial() {
-            if (_unpackMaterial != null) return;
-            Shader s = Shader.Find("Hidden/Unpack3DRadiance");
-            if (s == null) {
-                Debug.LogError("Radiance3DDebugVisualizer: shader Hidden/Unpack3DRadiance not found. Make sure Runtime/Shaders/Unpack3DRadiance.shader exists.");
-                return;
-            }
-            _unpackMaterial = new Material(s);
-        }
-
-        void StartAsyncReadback(RenderTexture rt, System.Action<bool, Color[], int, int, int> onComplete) {
-            if (rt == null) { onComplete(false, null, 0, 0, 0); return; }
-            int w = rt.width, h = rt.height, d = rt.volumeDepth;
-            Color[] pixels = new Color[w * h * d];
-            int remaining = d;
-            _readbackInProgress = true;
-
-            for (int zi = 0; zi < d; ++zi) {
-                int z = zi; // capture
-                RenderTexture tmp = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
-                tmp.wrapMode = TextureWrapMode.Clamp;
-                tmp.filterMode = FilterMode.Bilinear;
-
-                _unpackMaterial.SetTexture("_VolumeTex", rt);
-                _unpackMaterial.SetFloat("_SliceZ", (z + 0.5f) / (float)d);
-                Graphics.Blit((Texture)null, tmp, _unpackMaterial);
-
-                AsyncGPUReadback.Request(tmp, 0, TextureFormat.RGBAFloat, req => {
-                    if (req.hasError) {
-                        Debug.LogWarning($"Radiance3DDebugVisualizer: Async readback error on slice {z}");
-                    } else {
-                        try {
-                            var arr = req.GetData<Color>();
-                            int baseIdx = z * w * h;
-                            for (int i = 0; i < arr.Length && (baseIdx + i) < pixels.Length; ++i) {
-                                pixels[baseIdx + i] = arr[i];
-                            }
-                        } catch (System.Exception e) {
-                            Debug.LogWarning($"Radiance3DDebugVisualizer: exception reading slice {z}: {e.Message}");
-                        }
-                    }
-
-                    RenderTexture.ReleaseTemporary(tmp);
-                    remaining--;
-                    if (remaining == 0) {
-                        onComplete(true, pixels, w, h, d);
-                    }
-                });
             }
         }
 

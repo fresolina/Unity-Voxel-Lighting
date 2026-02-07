@@ -10,6 +10,7 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
 
 ## Refactoring TODOs
 
+* Använd Texture3DReadback.cs där det behövs.
 * BakeFibonacciLookup.cs:UnpackOctahedral() ta bort och ersätt med Math.hsls. Även Fibonacci. Pack/UnpackOctahedral -> Pack/UnpackDirection
 * RadianceField -> IrradianceField. (Light hitting the voxel, not leaving the voxel)
 * Shadervars: _VolumeSize, VolumePosition ska vara world units._VoxelSize måste prefixas med vilket fält det hör till, eller om det räcker med lowres/hires.

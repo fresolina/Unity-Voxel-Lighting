@@ -19,6 +19,7 @@ namespace Lotec.Lighting {
         SdfShaderGlobals _sdfShaderGlobals; // TODO: Merge SdfShaderGlobals into this class.
 
         public LightingVolume Volume => _sdfShaderGlobals.volume;
+        public GiFieldUpdater GiUpdater => _giUpdater;
 
         void Awake() {
             _sdfShaderGlobals = GetComponent<SdfShaderGlobals>();

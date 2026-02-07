@@ -39,7 +39,7 @@ namespace Lotec.Lighting {
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
         #endregion
 
-        RenderTexture RadianceRead => _isEvenFrame ? _radianceFieldA : _radianceFieldB;
+        public RenderTexture RadianceRead => _isEvenFrame ? _radianceFieldA : _radianceFieldB;
         RenderTexture RadianceWrite => _isEvenFrame ? _radianceFieldB : _radianceFieldA;
         RenderTexture ControlRead => _isEvenFrame ? _controlFieldA : _controlFieldB;
         RenderTexture ControlWrite => _isEvenFrame ? _controlFieldB : _controlFieldA;
