@@ -1,0 +1,212 @@
+#pragma kernel CSMain
+#pragma kernel CSClearVolume
+
+// --- CONSTANTS ---
+#define GI_RAYS_PER_FRAME 1
+#define MAX_SDF_DIST 20.0
+#define PI 3.14159265359
+#define EPSILON 0.001
+
+#include "../Includes/Volume.hlsl"
+#include "../Includes/VoxelSdfShadows.hlsl"
+#include "../Includes/Raymarch.hlsl"
+
+// --- RESOURCES ---
+
+// Inputs (Read Only)
+Texture3D<float4> _MaterialAlbedoRoughness; // RGB = Albedo, A = Roughness
+Texture3D<float4> _MaterialEmissionMetallic; // RGB = Emission, A = Metallic
+Texture3D<float> _DistanceField; // Low-res
+
+// Ping-Pong Buffers
+Texture3D<float4> _GiFieldRead;     // Previous Frame Light
+RWTexture3D<float4> _GiFieldWrite;  // Current Frame Light
+
+Texture3D<float4> _ControlRead;      // Previous Frame Control
+RWTexture3D<float4> _ControlWrite;   // Current Frame Control
+
+// Samplers
+SamplerState linearClampSampler;
+SamplerState pointClampSampler;  // For precise SDF reads
+
+// --- UNIFORMS ---
+#define TEMPORAL_BLEND 0.9f
+float3 _RadianceTextureSize;
+float3 _VoxelSize;
+uint _FrameCount;
+float3 _DirectLightDir;
+float4 _DirectLightColor;
+float3 _SkyColor;
+
+// --- HELPERS ---
+
+float SampleSDF(float3 pos) {
+    float3 uvw = WorldToVoxelUV(pos);
+    return _DistanceField.SampleLevel(linearClampSampler, uvw, 0).r;
+}
+// Calculate normal from SDF gradient
+float3 GetNormalFromSDF(float3 pos) {
+    float2 k = float2(1, -1);
+    float3 h = _VoxelSize * 0.1; // Sampling step size
+    
+    // Tetrahedron technique (efficient gradient calculation)
+    // You need to call your SDF sampling function here. 
+    // Assuming SampleSDF(pos) returns distance.
+    return normalize(
+        k.xyy * SampleSDF(pos + k.xyy * h) + 
+        k.yyx * SampleSDF(pos + k.yyx * h) + 
+        k.yxy * SampleSDF(pos + k.yxy * h) + 
+        k.xxx * SampleSDF(pos + k.xxx * h)
+    );
+}
+
+float Raymarch(float3 voxelCenter, float3 rayDir, out float3 hitPos) {
+    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, 0, MAX_SDF_DIST, EPSILON, 0.01, 64, 0.5, hitPos);
+}
+
+float3 GetRandomDirection(float3 seedPos) {
+    float r1 = Random(seedPos, _FrameCount);
+    float r2 = Random(seedPos, _FrameCount + 1.34);
+    float r3 = Random(seedPos, _FrameCount + 2.51);
+    return normalize(float3(r1 - 0.5, r2 - 0.5, r3 - 0.5));
+}
+// Map 1D noise to Sphere Direction
+// (Golden Angle Sampling for better distribution than random)
+float3 GetRandomDirectionFromNoise(float noiseVal) {
+    float z = 1.0 - 2.0 * noiseVal;
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = 2.0 * 3.14159 * frac(noiseVal * 1.61803); // Golden ratio
+    return float3(r * cos(phi), r * sin(phi), z);
+}
+
+// --- DEBUG: Clear Kernel ---
+RWTexture3D<float4> _ClearTarget;
+[numthreads(8,8,8)]
+void CSClearVolume(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
+
+    _ClearTarget[id] = float4(0.0, 0.0, 0.0, 0.0);
+}
+
+// --- MAIN KERNEL ---
+
+[numthreads(8, 8, 8)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
+
+    float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
+    float3 uvw = WorldToVoxelUV(voxelCenter);
+    
+    // 1. Determine Identity (Surface vs Air)
+    // We fetch exact SDF value at the voxel center
+    float dist = _DistanceField.SampleLevel(pointClampSampler, uvw, 0).r;
+
+    // Read control data from previous frame to track dominant light direction and stability
+    float4 prevControlData = _ControlRead.SampleLevel(linearClampSampler, uvw, 0);
+    float3 dominantDir = UnpackDirection(prevControlData.xy); // Dominant light direction
+
+    // "Surface Shell" is half a voxel thickness
+    bool isSurface = abs(dist) <= ((float)_VoxelSize * 0.5f);
+    float3 incomingLight = float3(0, 0, 0);
+    float blendSpeed = 0.05f; // Default: Slow blend (history dominates)
+
+    // Get direct light hit factor for control data
+    float3 hitPos; // TODO: Not really needed here
+    float voxelLit = Raymarch(voxelCenter, _DirectLightDir, hitPos);
+
+    float maxBrightness = 0;
+    float3 newDominantDir = dominantDir; // Start with old assumption
+
+
+    // ----------------------------------------------------------
+    // SURFACE VOXEL (Stores IRRADIANCE)
+    // ----------------------------------------------------------
+    if (isSurface) {       
+        // Direct Light (Injection)
+        float3 directIrradiance = voxelLit * _DirectLightColor.rgb;
+        // Indirect Light (Read Neighbor)
+        // We read the AIR voxel directly in front of the surface.
+        // Since Air Voxels store RADIANCE, this gives us incoming light.
+        float3 N = GetNormalFromSDF(voxelCenter);
+        float3 samplePos = voxelCenter + (N * _VoxelSize * 1.1f);
+        float3 indirectIrradiance = _GiFieldRead.SampleLevel(linearClampSampler, WorldToVoxelUV(samplePos), 0).rgb;
+
+        // Note: We DO NOT multiply by Albedo here. 
+        // We store pure Irradiance so the Fragment Shader can multiply by Albedo later.
+        incomingLight = directIrradiance + indirectIrradiance;
+        
+        // Surface updates fast so moving shadows don't ghost
+        blendSpeed = 0.3f;
+    }
+    // ----------------------------------------------------------
+    // AIR VOXEL (Stores RADIANCE)
+    // ----------------------------------------------------------
+    else {
+        [unroll]
+        for (int i = 0; i < GI_RAYS_PER_FRAME; i++) {
+            // float3 rayDir = GetRandomDirection(float3(id) + (i * 2.0) + _FrameCount);
+            float noiseVal = GetIGN(float3(id), _FrameCount + i);
+            float3 rayDir = GetRandomDirectionFromNoise(noiseVal);
+            float3 hitPos;
+            float lit = Raymarch(voxelCenter, rayDir, hitPos);
+            if (lit < 0.99f) { // Surface was hit
+                float3 hitUV = WorldToVoxelUV(hitPos);
+                // 1. Read Surface Irradiance from hit from last frame readonly field.
+                float3 hitIrradiance = _GiFieldRead.SampleLevel(linearClampSampler, hitUV, 0).rgb;
+                // 2. Read Surface Albedo
+                float4 hitAlbedoRoughness = _MaterialAlbedoRoughness.SampleLevel(linearClampSampler, hitUV, 0);
+                // 3. Convert to Radiance (The Bounce)
+                // Incoming Irradiance * Albedo = Outgoing Radiance
+                incomingLight += hitIrradiance * hitAlbedoRoughness.rgb;
+            } else {
+                // Missed everything, assume we hit the sky.
+                incomingLight += _SkyColor;
+            }
+            // Air updates slow to filter out noise
+            blendSpeed = 0.5f;
+
+            // Track Dominant Light
+            float brightness = Luminance(incomingLight);
+            if (brightness > maxBrightness) {
+                maxBrightness = brightness;
+                newDominantDir = rayDir;
+            }
+        }
+        incomingLight /= GI_RAYS_PER_FRAME;
+    }
+    // ----------------------------------------------------------
+    // TEMPORAL ACCUMULATION
+    // ----------------------------------------------------------
+    
+    // Read previous frame values for this voxel to blend with new result. This is our "history" that smooths out noise over time.
+    float4 history = _GiFieldRead.SampleLevel(linearClampSampler, WorldToVoxelUV(voxelCenter), 0);
+    float3 oldEnergy = history.rgb * 0.96f; // Decay history slightly to prevent infinite ghosting
+
+    // Firefly clamping: limit how much a single frame can change the value to prevent extreme outliers from causing instability.
+    float3 maxChange = max(oldEnergy, 0.05) * 1.2; 
+    float3 minChange = oldEnergy * 0.8;
+    float3 clampedNew = clamp(incomingLight, minChange, maxChange);
+    // Blend
+    float3 finalColor = lerp(oldEnergy, clampedNew, blendSpeed);
+
+    // // Optional: Firefly Clamping (Stability)
+    // float lumNew = Luminance(incomingLight);
+    // float lumOld = Luminance(oldEnergy);
+    
+    // // If new value is massively brighter than history, reject/clamp it
+    // if (lumNew > lumOld * 10.0f && lumOld > 0.01f) {
+    //     blendSpeed *= 0.1f;
+    // }
+
+    // Blend
+    // float3 finalColor = lerp(oldEnergy, incomingLight, blendSpeed);
+
+    // Write Output
+    _GiFieldWrite[id] = float4(finalColor, 1.0f);
+    float2 packedDir = PackDirection(normalize(newDominantDir));
+    float stability = 0;
+    // TODO: Add surface normal? Maybe more performant to calculate it.
+    _ControlWrite[id] = float4(packedDir, stability, voxelLit);
+}

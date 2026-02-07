@@ -1,0 +1,91 @@
+using UnityEngine;
+
+namespace Lotec.Lighting {
+    public class LightingVolume : MonoBehaviour {
+        [Header("Bake Input")]
+        [SerializeField] Transform _root;
+
+        [Tooltip("Extra padding added to computed bounds (world units).")]
+        [Min(0f)]
+        [SerializeField] float _paddingWorld = 0.25f;
+
+        [Tooltip("Maximum voxel resolution along the largest axis.")]
+        [Min(4)]
+        [SerializeField] int _maxResolution = 128;
+
+        [Tooltip("Computed max voxel resolution")]
+        public Vector3Int TrimmedMaxResolution;
+
+        [Tooltip("Computed bounds used for baking.")]
+        public Bounds Bounds = new Bounds(Vector3.zero, Vector3.one);
+
+        [Header("Baked static fields")]
+        public Texture3D sdfHiresTexture;
+        public Texture3D sdfLowresTexture;
+        public Texture3D occlusionBitmaskTexture;
+        [Tooltip("Lower-resolution material property: albedo.rgb + roughness (a)")]
+        public Texture3D materialAlbedoRoughnessTexture;
+        [Tooltip("Lower-resolution material property: emission.rgb + metallic (a)")]
+        public Texture3D materialEmissionMetallicTexture;
+
+        public Transform BakeRoot { get => _root; set => _root = value; }
+
+        void OnValidate() {
+            _maxResolution = Mathf.Max(4, _maxResolution);
+            _paddingWorld = Mathf.Max(0f, _paddingWorld);
+            if (BakeRoot == null) {
+                BakeRoot = transform;
+            }
+            RecomputeBoundsAndResolution();
+        }
+
+        void RecomputeBoundsAndResolution() {
+            if (_root == null) return;
+
+            ComputeBounds();
+            ComputeMaxResolutionForBounds();
+        }
+
+        /// <summary>
+        /// Expands Bounds to encapsulate all meshes under _root
+        /// </summary>
+        void ComputeBounds() {
+            Bounds = new Bounds();
+            MeshRenderer[] meshRenderers = _root.GetComponentsInChildren<MeshRenderer>(true);
+            foreach (MeshRenderer mr in meshRenderers) {
+                if (mr == null)
+                    continue;
+                MeshFilter mf = mr.GetComponent<MeshFilter>();
+                if (mf == null || mf.sharedMesh == null)
+                    continue;
+
+                Bounds.Encapsulate(mr.bounds);
+            }
+
+            if (_paddingWorld > 0f) {
+                Bounds.Expand(_paddingWorld * 2f);
+            }
+        }
+
+        /// <summary>
+        /// Compute TrimmedMaxResolution based on bounds and _maxResolution
+        /// Example: 128x128x128 -> 128x67x24 for a long thin volume
+        /// </summary>
+        void ComputeMaxResolutionForBounds() {
+            _maxResolution = Mathf.Max(4, _maxResolution);
+
+            Vector3 size = Bounds.size;
+            float maxAxis = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
+            maxAxis = Mathf.Max(0.0001f, maxAxis);
+
+            float voxelSize = maxAxis / _maxResolution;
+            voxelSize = Mathf.Max(0.0001f, voxelSize);
+
+            int rx = Mathf.Clamp(Mathf.CeilToInt(size.x / voxelSize), 4, _maxResolution);
+            int ry = Mathf.Clamp(Mathf.CeilToInt(size.y / voxelSize), 4, _maxResolution);
+            int rz = Mathf.Clamp(Mathf.CeilToInt(size.z / voxelSize), 4, _maxResolution);
+
+            TrimmedMaxResolution = new Vector3Int(rx, ry, rz);
+        }
+    }
+}

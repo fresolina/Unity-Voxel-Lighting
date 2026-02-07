@@ -38,9 +38,13 @@ namespace Lotec.Lighting.Editor {
             Debug.Log("VoxelLighting Baker bake completed successfully.", baker);
             string basePath = baker.assetPath;
             // Save baked SDF asset
-            if (baker.targetSdfVolume.sdfTexture != null && !string.IsNullOrEmpty(basePath)) {
-                string sdfPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.sdfTexture.name}.asset");
-                SaveAsset(baker.targetSdfVolume.sdfTexture, sdfPath, "SDF");
+            if (baker.targetSdfVolume.sdfHiresTexture != null && !string.IsNullOrEmpty(basePath)) {
+                string sdfPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.sdfHiresTexture.name}.asset");
+                SaveAsset(baker.targetSdfVolume.sdfHiresTexture, sdfPath, "SDF");
+            }
+            if (baker.targetSdfVolume.sdfLowresTexture != null && !string.IsNullOrEmpty(basePath)) {
+                string sdfPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.sdfLowresTexture.name}.asset");
+                SaveAsset(baker.targetSdfVolume.sdfLowresTexture, sdfPath, "SDF");
             }
             // Save baked Bitmask asset
             if (baker.targetSdfVolume.occlusionBitmaskTexture != null && !string.IsNullOrEmpty(basePath)) {

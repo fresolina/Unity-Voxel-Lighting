@@ -17,9 +17,12 @@ namespace Lotec.Lighting {
         static readonly int sShadowMinStep = Shader.PropertyToID("_SdfShadowMinStep");
         static readonly int sShadowStartOffset = Shader.PropertyToID("_SdfShadowStartOffset");
         static readonly int sFibonacciDirections = Shader.PropertyToID("_FibonacciDirections");
+        static readonly int s_volumeSize = Shader.PropertyToID("_VolumeSize");
+        static readonly int s_volumePosition = Shader.PropertyToID("_VolumePosition");
+
 
         [Header("Source")]
-        public SdfVolume volume;
+        public LightingVolume volume;
 
         [Header("Shadow Raymarch")]
         [Min(0f)] public float shadowMaxDistance = 10f;
@@ -56,29 +59,32 @@ namespace Lotec.Lighting {
         void Update() {
             if (autoUpdate)
                 ApplyGlobals();
+            // Always set these globals every frame since they are used by other shaders and the volume may move.
+            Shader.SetGlobalVector(s_volumeSize, volume.Bounds.size);
+            Shader.SetGlobalVector(s_volumePosition, volume.Bounds.min);
         }
 
         public void ApplyGlobals() {
             // Always upload the Fibonacci direction list.
             Shader.SetGlobalVectorArray(sFibonacciDirections, OcclusionBitmaskBaker.GetOrCreateFibonacciDirectionsV4());
 
-            if (volume == null || volume.sdfTexture == null) return;
+            if (volume == null || volume.sdfHiresTexture == null) return;
 
-            Shader.SetGlobalTexture(sSdfTex, volume.sdfTexture);
+            Shader.SetGlobalTexture(sSdfTex, volume.sdfHiresTexture);
 
             if (volume.occlusionBitmaskTexture != null) {
                 Shader.SetGlobalTexture(sBitmaskTex, volume.occlusionBitmaskTexture);
                 Shader.SetGlobalVector(sVoxelResolution,
-                    new Vector3(volume.bakedResolution.x, volume.bakedResolution.y, volume.bakedResolution.z));
+                    new Vector3(volume.TrimmedMaxResolution.x, volume.TrimmedMaxResolution.y, volume.TrimmedMaxResolution.z));
             }
 
-            Shader.SetGlobalVector(sSdfBoundsMin, volume.bakedBounds.min);
-            Shader.SetGlobalVector(sSdfBoundsSize, volume.bakedBounds.size);
+            Shader.SetGlobalVector(sSdfBoundsMin, volume.Bounds.min);
+            Shader.SetGlobalVector(sSdfBoundsSize, volume.Bounds.size);
             // Compute and set inverse voxel size (world units per voxel -> 1/voxelSize)
             Vector3 voxelSize = new Vector3(
-                volume.bakedBounds.size.x / Mathf.Max(1, volume.bakedResolution.x),
-                volume.bakedBounds.size.y / Mathf.Max(1, volume.bakedResolution.y),
-                volume.bakedBounds.size.z / Mathf.Max(1, volume.bakedResolution.z));
+                volume.Bounds.size.x / Mathf.Max(1, volume.TrimmedMaxResolution.x),
+                volume.Bounds.size.y / Mathf.Max(1, volume.TrimmedMaxResolution.y),
+                volume.Bounds.size.z / Mathf.Max(1, volume.TrimmedMaxResolution.z));
             Vector3 invVoxelSize = new Vector3(
                 1.0f / Mathf.Max(1e-9f, voxelSize.x),
                 1.0f / Mathf.Max(1e-9f, voxelSize.y),

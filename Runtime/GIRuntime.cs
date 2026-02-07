@@ -4,7 +4,7 @@ namespace Lotec.Lighting {
     [ExecuteAlways]
     [DisallowMultipleComponent]
     public class GIRuntime : MonoBehaviour {
-        public SdfVolume targetVolume;
+        public LightingVolume targetVolume;
         public ComputeShader giCompute;
         public bool useHDR = true;
         [Min(1)] public int raysPerVoxel = 1;
@@ -45,7 +45,7 @@ namespace Lotec.Lighting {
             // Prefer material field resolution if available
             var mat = targetVolume.materialAlbedoRoughnessTexture;
             if (mat != null) return new Vector3Int(mat.width, mat.height, mat.depth);
-            return targetVolume.bakedResolution;
+            return targetVolume.TrimmedMaxResolution;
         }
 
         void EnsureTextures(Vector3Int res) {
@@ -151,22 +151,22 @@ namespace Lotec.Lighting {
                 PublishGlobals();
                 return;
             }
-            if (targetVolume.sdfTexture == null || targetVolume.materialAlbedoRoughnessTexture == null) {
+            if (targetVolume.sdfHiresTexture == null || targetVolume.materialAlbedoRoughnessTexture == null) {
                 Debug.LogWarning("GIRuntime: Required input textures missing on targetVolume, skipping dispatch.");
                 PublishGlobals();
                 return;
             }
             // bind resources
             giCompute.SetInts("_Resolution", res.x, res.y, res.z);
-            giCompute.SetVector("_BoundsMin", targetVolume.bakedBounds.min);
-            giCompute.SetVector("_BoundsSize", targetVolume.bakedBounds.size);
+            giCompute.SetVector("_BoundsMin", targetVolume.Bounds.min);
+            giCompute.SetVector("_BoundsSize", targetVolume.Bounds.size);
             giCompute.SetInt("_RaysPerVoxel", raysPerVoxel);
             giCompute.SetFloat("_MaxRayDistance", maxRayDistance);
             giCompute.SetInt("_FrameIndex", (int)_frameIndex);
             giCompute.SetInt("_RandomSeed", Random.Range(1, int.MaxValue));
 
             // Bind textures (all guaranteed non-null above)
-            giCompute.SetTexture(_kernel, "_SdfField", targetVolume.sdfTexture);
+            giCompute.SetTexture(_kernel, "_SdfField", targetVolume.sdfHiresTexture);
             giCompute.SetTexture(_kernel, "_MaterialFieldA", targetVolume.materialAlbedoRoughnessTexture);
             if (targetVolume.materialEmissionMetallicTexture != null) giCompute.SetTexture(_kernel, "_MaterialFieldB", targetVolume.materialEmissionMetallicTexture);
 
@@ -198,8 +198,8 @@ namespace Lotec.Lighting {
         void PublishGlobals() {
             if (_radiance[_readIdx] != null) {
                 Shader.SetGlobalTexture("_GIRadiance", _radiance[_readIdx]);
-                var bmin = targetVolume.bakedBounds.min;
-                var bsize = targetVolume.bakedBounds.size;
+                var bmin = targetVolume.Bounds.min;
+                var bsize = targetVolume.Bounds.size;
                 Shader.SetGlobalVector("_GIBoundsMin", new Vector4(bmin.x, bmin.y, bmin.z, 0f));
                 Shader.SetGlobalVector("_GIBoundsSize", new Vector4(bsize.x, bsize.y, bsize.z, 0f));
             } else {

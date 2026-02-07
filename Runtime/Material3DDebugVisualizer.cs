@@ -16,8 +16,8 @@ namespace Lotec.Lighting {
         Color[] _cachedPixels;
         int _rx, _ry, _rz;
 
-        public SdfVolume Volume => _sdfShaderGlobalas.volume;
-        SdfShaderGlobals _sdfShaderGlobalas;
+        public LightingVolume Volume => _sdfShaderGlobals.volume;
+        SdfShaderGlobals _sdfShaderGlobals;
 
         void OnEnable() {
             CacheIfNeeded();
@@ -32,8 +32,8 @@ namespace Lotec.Lighting {
         }
 
         void CacheIfNeeded() {
-            if (_sdfShaderGlobalas == null)
-                _sdfShaderGlobalas = FindAnyObjectByType<SdfShaderGlobals>();
+            if (_sdfShaderGlobals == null)
+                _sdfShaderGlobals = FindAnyObjectByType<SdfShaderGlobals>();
 
             Texture3D tex = (field == FieldType.EmissionMetallic) ? Volume.materialEmissionMetallicTexture : Volume.materialAlbedoRoughnessTexture;
             if (tex == _currentTex && _cachedPixels != null)
@@ -61,7 +61,7 @@ namespace Lotec.Lighting {
             if (_rx <= 0 || _ry <= 0 || _rz <= 0) return;
 
             // Iterate voxels with a skip to reduce draw count
-            Bounds bounds = Volume.bakedBounds;
+            Bounds bounds = Volume.Bounds;
             for (int z = 0; z < _rz; z += skip) {
                 for (int y = 0; y < _ry; y += skip) {
                     for (int x = 0; x < _rx; x += skip) {

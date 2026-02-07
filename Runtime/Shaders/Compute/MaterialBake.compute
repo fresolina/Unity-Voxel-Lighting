@@ -56,7 +56,7 @@ uint2 _EmissionSize;
 [numthreads(8,8,8)]
 void CSMain(uint3 id : SV_DispatchThreadID) {
     // Bounds check: threads outside the requested resolution do nothing
-    if (id.x >= _Resolution.x || id.y >= _Resolution.y || id.z >= _Resolution.z) return;
+    if (any(id >= _Resolution)) return;
 
     // Compute normalized voxel coordinate in [0,1] and then world position at voxel center
     float3 uvw = (float3(id.x + 0.5, id.y + 0.5, id.z + 0.5)) / (float3)_Resolution;

@@ -43,6 +43,38 @@ float2 PackOctahedral(float3 dir) {
     return p * 0.5 + 0.5;
 }
 
+// Octahedral Packing (Vector3 -> Vector2)
+float2 PackDirection(float3 n) {
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z < 0) {
+        n.xy = (1.0 - abs(n.yx)) * (n.xy >= 0 ? 1.0 : -1.0);
+    }
+    return n.xy * 0.5 + 0.5;
+}
+
+float3 UnpackDirection(float2 p) {
+    p = p * 2.0 - 1.0;
+    float3 n = float3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
+    float t = max(-n.z, 0.0);
+    n.x += n.x >= 0 ? -t : t;
+    n.y += n.y >= 0 ? -t : t;
+    return normalize(n);
+}
+
+/// Compute luminance of a color via Rec. 709 luminance coefficients.
+float Luminance(float3 color) {
+    return dot(color, float3(0.2126, 0.7152, 0.0722));
+}
+
+float Random(float3 position, float seed) {
+    return frac(sin(dot(position + seed, float3(12.9898, 78.233, 45.164))) * 43758.5453);
+}
+// Generates a value 0.0 -> 1.0 that is spatially balanced
+float GetIGN(float3 position, int frame) {
+    float3 p = position + float(frame) * 5.588238f;
+    return frac(52.9829189f * frac(0.06711056f * p.x + 0.00583715f * p.y + 0.0123456f * p.z));
+}
+
 // Intersect ray (ro + rd * t) with unit AABB [0,1]^3.
 // ro/rd are in UVW space; t is still in world-distance units (because rd already includes invSize).
 inline bool RayIntersectUnitAabb(float3 ro, float3 rd, out float tEnter, out float tExit)
@@ -103,13 +135,6 @@ inline bool RayTriangleIntersect(float3 rayOrigin, float3 rayDir, float3 v0, flo
 	dist = f * dot(e1, q);
 	// Accept hits slightly above zero; origin offset is applied by caller to avoid self-intersection.
 	return dist > 1e-5;
-}
-
-// Wrapper that explicitly exposes non-culling behavior (accepts both sides).
-// Kept separate so we can switch to a culling variant if desired.
-inline bool RayTriangleIntersect_NoCull(float3 rayOrigin, float3 rayDir, float3 v0, float3 v1, float3 v2, out float dist)
-{
-	return RayTriangleIntersect(rayOrigin, rayDir, v0, v1, v2, dist);
 }
 
 // Compute closest point on triangle and squared distance

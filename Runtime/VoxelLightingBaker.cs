@@ -5,17 +5,18 @@ namespace Lotec.Lighting {
     /// MonoBehaviour for coordinating baking.
     /// </summary>
     public class VoxelLightingBaker : MonoBehaviour {
+        [Tooltip("Downscale factor to produce lower-res voxel field for material and GI")]
+        [Range(1, 6)]
+        public int LowresDownscaleFactor = 4;
         [Header("Bakers")]
         [SerializeField] SdfBaker _sdfBaker = new SdfBaker();
         [SerializeField] OcclusionBitmaskBaker _occlusionBitmaskBaker = new OcclusionBitmaskBaker();
         [SerializeField] MaterialBaker _materialBaker = new MaterialBaker();
-
         [Tooltip("Where to save the baked Texture3D asset(s) (must be under Assets/).")]
         public string assetPath = "Assets/VoxelLighting";
+        public LightingVolume targetSdfVolume => _sdfShaderGlobals.volume;
 
         SdfShaderGlobals _sdfShaderGlobals;
-
-        public SdfVolume targetSdfVolume => _sdfShaderGlobals.volume;
 
         void OnValidate() {
             if (_sdfShaderGlobals == null)
@@ -23,24 +24,27 @@ namespace Lotec.Lighting {
         }
 
         public bool TryBake(out string error) {
-            SdfVolume volume = _sdfShaderGlobals.volume;
+            LightingVolume volume = _sdfShaderGlobals.volume;
             if (volume == null) {
                 error = "Target SdfVolume is not assigned.";
                 return false;
             }
 
-            // Set up SDF baker
+            // Bake SDF fields.
             if (_sdfBaker.sdfBakeCompute == null) {
                 error = "SDF Bake Compute is not assigned to SdfBaker.";
                 return false;
             }
-
-            // Execute the bake
-            if (!_sdfBaker.TryBake(volume, out Texture3D bakedSdf, out error)) {
+            if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution, volume.BakeRoot.name, out Texture3D bakedSdf, out error)) {
                 return false;
             }
-            volume.sdfTexture = bakedSdf;
+            volume.sdfHiresTexture = bakedSdf;
+            if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution / LowresDownscaleFactor, volume.BakeRoot.name + "_Lowres", out bakedSdf, out error)) {
+                return false;
+            }
+            volume.sdfLowresTexture = bakedSdf;
 
+            // Bake occlusion bitmask field. TODO: Make this optional.
             if (!_occlusionBitmaskBaker.TryBake(volume, out Texture3D bakedBitmask, out error)) {
                 return false;
             }
@@ -51,7 +55,7 @@ namespace Lotec.Lighting {
                 error = "Material Bake Compute is not assigned to MaterialBaker.";
                 return false;
             }
-            string matErr = _materialBaker.Bake(volume, out Texture3D bakedAlbedoRoughness, out Texture3D bakedEmissionMetallic);
+            string matErr = _materialBaker.Bake(volume, out Texture3D bakedAlbedoRoughness, out Texture3D bakedEmissionMetallic, LowresDownscaleFactor);
             if (!string.IsNullOrEmpty(matErr)) {
                 error = "MaterialBaker failed: " + matErr;
                 return false;

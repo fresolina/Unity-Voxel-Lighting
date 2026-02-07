@@ -10,7 +10,6 @@ namespace Lotec.Lighting {
     /// </summary>
     [Serializable]
     public class SdfBaker {
-        [SerializeField] bool _bakeMipMaps = false;
         public ComputeShader sdfBakeCompute;
 
         // Variables the SDF compute shader needs.
@@ -23,12 +22,14 @@ namespace Lotec.Lighting {
         int _kernel = -1;
 
         public bool TryBake(
-            SdfVolume volume,
+            LightingVolume volume,
+            Vector3Int resolution,
+            string textureName,
             out Texture3D bakedSdf,
             out string error
         ) {
             bakedSdf = null;
-
+            Debug.Log($"Starting SDF bake with resolution {resolution} for volume '{volume.name}'", volume);
             if (volume == null) {
                 error = "Target SdfVolume is null.";
                 return false;
@@ -43,14 +44,6 @@ namespace Lotec.Lighting {
                 return false;
             }
 
-            if (!volume.TryComputeBoundsFromRoot(out Bounds bounds)) {
-                error = "No meshes found under Bake Root (MeshRenderer+MeshFilter).";
-                return false;
-            }
-
-            volume.bakedBounds = bounds;
-            volume.RecomputeBoundsAndResolution();
-
             if (_kernel < 0)
                 _kernel = sdfBakeCompute.FindKernel("CSMain");
 
@@ -63,7 +56,7 @@ namespace Lotec.Lighting {
                 return false;
             }
 
-            int voxelCount = volume.bakedResolution.x * volume.bakedResolution.y * volume.bakedResolution.z;
+            int voxelCount = resolution.x * resolution.y * resolution.z;
             if (voxelCount <= 0) {
                 error = "Invalid resolution.";
                 return false;
@@ -78,18 +71,18 @@ namespace Lotec.Lighting {
                 sdfBakeCompute.SetBuffer(_kernel, sTriVerts, triBuffer);
                 sdfBakeCompute.SetInt(sTriCount, triCount);
 
-                Vector3 bmin = volume.bakedBounds.min;
-                Vector3 bsize = volume.bakedBounds.size;
+                Vector3 bmin = volume.Bounds.min;
+                Vector3 bsize = volume.Bounds.size;
 
                 sdfBakeCompute.SetVector(sBoundsMin, bmin);
                 sdfBakeCompute.SetVector(sBoundsSize, bsize);
-                sdfBakeCompute.SetInts(sResolution, volume.bakedResolution.x, volume.bakedResolution.y, volume.bakedResolution.z);
+                sdfBakeCompute.SetInts(sResolution, resolution.x, resolution.y, resolution.z);
                 sdfBakeCompute.SetBuffer(_kernel, sOutSdf, sdfBuffer);
 
                 sdfBakeCompute.GetKernelThreadGroupSizes(_kernel, out uint tx, out uint ty, out uint tz);
-                int gx = Mathf.CeilToInt(volume.bakedResolution.x / (float)tx);
-                int gy = Mathf.CeilToInt(volume.bakedResolution.y / (float)ty);
-                int gz = Mathf.CeilToInt(volume.bakedResolution.z / (float)tz);
+                int gx = Mathf.CeilToInt(resolution.x / (float)tx);
+                int gy = Mathf.CeilToInt(resolution.y / (float)ty);
+                int gz = Mathf.CeilToInt(resolution.z / (float)tz);
                 sdfBakeCompute.Dispatch(_kernel, gx, gy, gz);
 
                 var req = AsyncGPUReadback.Request(sdfBuffer);
@@ -111,10 +104,10 @@ namespace Lotec.Lighting {
                 for (int i = 0; i < expected; i++)
                     packed[i] = (ushort)(data[i] & 0xFFFFu);
 
-                bakedSdf = new Texture3D(volume.bakedResolution.x, volume.bakedResolution.y, volume.bakedResolution.z, TextureFormat.RHalf, mipChain: _bakeMipMaps, true) {
+                bakedSdf = new Texture3D(resolution.x, resolution.y, resolution.z, TextureFormat.RHalf, mipChain: false, true) {
                     wrapMode = TextureWrapMode.Clamp,
                     filterMode = FilterMode.Trilinear,
-                    name = $"{root.name}_SDF"
+                    name = $"{textureName}_SDF"
                 };
 
                 bakedSdf.SetPixelData(packed, 0);

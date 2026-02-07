@@ -18,11 +18,13 @@ float RayMarchTex3D(
     float epsilon,
     float minStep,
     int maxSteps,
-    half softness // Lower = softer shadows
+    half softness, // Lower = softer shadows
+    out float3 hitPos
 ) {
+    hitPos = 0;
     float3 size = max(boundsSize, 1e-6);
     float3 invSize = rcp(size);
-    // Transform ray into SDF UVW space once.
+    // Transform ray into SDF local space once.
     float3 rayOrigin = (worldPos - boundsMin) * invSize;
     float3 dirUvw = dir * invSize;
 
@@ -39,6 +41,7 @@ float RayMarchTex3D(
     for (int stepIndex = 0; stepIndex < maxSteps; stepIndex++) {
         // Traveled max distance
         if (t > maxDistance) {
+            hitPos = worldPos + dir * maxDistance;
             return lit;
         }
 
@@ -48,6 +51,7 @@ float RayMarchTex3D(
 
         // Inside surface -> full shadow
         if (d <= epsilon) {
+            hitPos = worldPos + dir * t;
             return 0.0;
         }
 
@@ -56,6 +60,7 @@ float RayMarchTex3D(
         lit = min(lit, softness * d * rcp(max(t, 1e-6)));
         // Early exit if we are effectively in total darkness
         if (lit < 0.01) {
+            hitPos = worldPos + dir * t;
             return 0.0;
         }
         
@@ -63,7 +68,38 @@ float RayMarchTex3D(
     }
 
     // return 0.0;
+    hitPos = worldPos + dir * t;
     return saturate(lit);
 }
-
+float RayMarchTex3D(
+    Texture3D<float> sdfTex,
+    SamplerState sampler_SdfTex,
+    float3 worldPos,
+    float3 dir,
+    float3 boundsMin,
+    float3 boundsSize,
+    float startOffset,
+    float maxDistance, // Use to not travel past the flashlight
+    float epsilon,
+    float minStep,
+    int maxSteps,
+    half softness // Lower = softer shadows
+) {
+    float3 hitPos;
+    return RayMarchTex3D(
+        sdfTex,
+        sampler_SdfTex,
+        worldPos,
+        dir,
+        boundsMin,
+        boundsSize,
+        startOffset,
+        maxDistance,
+        epsilon,
+        minStep,
+        maxSteps,
+        softness,
+        hitPos
+    );
+}
 #endif

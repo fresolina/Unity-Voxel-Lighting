@@ -9,10 +9,6 @@ namespace Lotec.Lighting {
     public class MaterialBaker {
         public ComputeShader MaterialBakeCompute;
 
-        [Tooltip("Downscale factor to produce lower-res material field (choose 2 - 6.")]
-        [Range(2, 6)]
-        public int DownscaleFactor = 4;
-
         static readonly int s_triVerts = Shader.PropertyToID("_TriVerts");
         static readonly int s_triCount = Shader.PropertyToID("_TriCount");
         static readonly int s_triMatA = Shader.PropertyToID("_TriMatA");
@@ -34,7 +30,7 @@ namespace Lotec.Lighting {
 
         // Bake materials into two CPU-side Texture3D assets.
         // Returns null on success, or an error string describing the failure.
-        public string Bake(SdfVolume volume, out Texture3D albedoRoughness, out Texture3D emissionMetallic) {
+        public string Bake(LightingVolume volume, out Texture3D albedoRoughness, out Texture3D emissionMetallic, int downscaleFactor = 1) {
             albedoRoughness = null;
             emissionMetallic = null;
             Transform root = volume.BakeRoot;
@@ -43,16 +39,13 @@ namespace Lotec.Lighting {
             if (root == null) return "Bake Root is null.";
 
             // Low resolution is bakedResolution / downscaleFactor
-            Bounds bounds = volume.bakedBounds;
-            Vector3Int highRes = volume.bakedResolution;
-
-            // Validate DownscaleFactor, ensuring nearest allowed value.
-            DownscaleFactor = Mathf.Clamp(DownscaleFactor, 2, 6);
+            Bounds bounds = volume.Bounds;
+            Vector3Int highRes = volume.sdfHiresTexture.GetResolutionInt();
 
             Vector3Int lowRes = new Vector3Int(
-                Math.Max(1, highRes.x / DownscaleFactor),
-                Math.Max(1, highRes.y / DownscaleFactor),
-                Math.Max(1, highRes.z / DownscaleFactor)
+                Math.Max(1, highRes.x / downscaleFactor),
+                Math.Max(1, highRes.y / downscaleFactor),
+                Math.Max(1, highRes.z / downscaleFactor)
             );
 
             if (_kernel < 0)

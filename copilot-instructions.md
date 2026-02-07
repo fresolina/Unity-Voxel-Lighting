@@ -13,3 +13,4 @@ This repo is a **Unity Package Manager (UPM) package** (`com.lotecsoftware.light
 - Never name classes with two leading uppercase letters (e.g., use `SdfVolume` not `SDFVolume`), except for enums and structs.
 - Never add "private" to private methods or fields; it's implicit in C#.
 - Private fields should start with an underscore (_).
+- Static fields should start with an "s_" (e.g., `s_myStaticField`).
