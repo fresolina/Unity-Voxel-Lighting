@@ -76,7 +76,8 @@ namespace Lotec.Lighting {
             _irradianceFieldSampleCount++;
             if (_irradianceFieldSampleCount > _maxSamples)
                 _irradianceFieldSampleCount = _maxSamples; // Clamp to max to avoid uint overflow in shader
-            _irradianceStability = 1f / (_irradianceFieldSampleCount + 1f);
+            // _irradianceStability = 1f / (_irradianceFieldSampleCount + 1f);
+            _irradianceStability = 1f / _maxSamples;
             prevLightSettings = new LightSettings {
                 sunDirection = RenderSettings.sun != null ? -RenderSettings.sun.transform.forward : Vector3.down,
                 sunColor = RenderSettings.sun != null ? (Vector4)RenderSettings.sun.color * RenderSettings.sun.intensity : Vector4.zero,

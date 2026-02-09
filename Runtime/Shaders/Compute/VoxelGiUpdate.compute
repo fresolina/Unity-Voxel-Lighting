@@ -152,11 +152,6 @@ void CSComputeIrradiance(uint3 id : SV_DispatchThreadID)
 
     float4 history = _IrradianceFieldHistory.Load(int4(id, 0));
     float3 oldColor = history.rgb;
-    if (_IrradianceFieldSampleCount >= _MaxSamples) {
-        _IrradianceFieldWrite[id] = history;
-        // _IrradianceFieldWrite[id] = float4(history, 1.0);
-        return; // We are stable, no need to keep accumulating.
-    }
 
     float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
     float3 uvw = WorldToVoxelUV(voxelCenter);
@@ -174,8 +169,8 @@ void CSComputeIrradiance(uint3 id : SV_DispatchThreadID)
         seed ^= (_FrameCount * 1664525u);
         seed += (uint)i * 1013904223u;
         float noiseVal = HashTo01(seed);
-        // float3 rayDir = GetRandomDirectionFromNoise(noiseVal);
-        float3 rayDir = FibonacciDirection64((baseSeed + _FrameCount + i) & 63u); // DEBUG: test with fixed directions
+        float3 rayDir = GetRandomDirectionFromNoise(noiseVal);
+        // float3 rayDir = FibonacciDirection64((baseSeed + _FrameCount + i) & 63u); // DEBUG: test with fixed directions
 
         float3 hitPos;
         float lit = RaymarchSDF(voxelCenter, rayDir, hitPos);
@@ -189,8 +184,10 @@ void CSComputeIrradiance(uint3 id : SV_DispatchThreadID)
         }
     }
     incomingLight /= _RaysPerFrame;
-    // Accumulate median value over time to get a more stable estimate of the true irradiance.
-    float3 finalColor = lerp(oldColor, incomingLight, _IrradianceStability);
 
-    _IrradianceFieldWrite[id] = float4(finalColor, 1.0);
+    // Exponential Moving Average: S_t = S_{t-1} + alpha * (x_t - S_{t-1})
+    float alpha = saturate(_IrradianceStability);
+    float3 newMean = oldColor + alpha * (incomingLight - oldColor);
+
+    _IrradianceFieldWrite[id] = float4(newMean, 1.0);
 }
