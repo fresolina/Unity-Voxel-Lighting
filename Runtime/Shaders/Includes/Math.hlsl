@@ -61,6 +61,22 @@ float3 UnpackDirection(float2 p) {
     return normalize(n);
 }
 
+// Simple 32-bit integer hash (Wang/Jenkins-style) to produce decorrelated seeds
+inline uint WangHash(uint v) {
+    v = (v ^ 61u) ^ (v >> 16);
+    v *= 9u;
+    v = v ^ (v >> 4);
+    v *= 0x27d4eb2du;
+    v = v ^ (v >> 15);
+    return v;
+}
+
+inline float HashTo01(uint v) {
+    // convert to float in [0,1)
+    return (float)WangHash(v) * (1.0 / 4294967296.0);
+}
+
+
 /// Compute luminance of a color via Rec. 709 luminance coefficients.
 float Luminance(float3 color) {
     return dot(color, float3(0.2126, 0.7152, 0.0722));

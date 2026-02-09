@@ -42,13 +42,6 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 float _Roughness;
             CBUFFER_END
 
-            // GI field bindings (set from GIRuntime or global shader properties)
-            // These are not exposed in the Properties block; set via Material/Shader.SetGlobalTexture
-            TEXTURE3D(_RadianceRead);
-            SAMPLER(sampler_RadianceRead);
-            float3 _GIBoundsMin;
-            float3 _GIBoundsSize;
-
             struct Attributes
             {
                 float4 positionOS : POSITION;
@@ -112,10 +105,12 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 // Global Illumination from Voxel GI field
                 float3 gi = SampleVoxelGI(IN.positionWS, N);
 
-                float3 lit = albedo * gi; // DEBUG: Indirect lit only for testing
-                // float3 lit = albedo * light.color * ndotl * shadow + // Direct lit
-                //     albedo * gi + // Indirect lit
-                //     light.color * spec * shadow; // Specular lit
+                // float3 lit = albedo * gi; // DEBUG: Indirect lit only for testing
+                float3 lit =
+                    // albedo * light.color * ndotl * shadow // Direct lit
+                    + albedo * gi // Indirect lit
+                    // + light.color * spec * shadow // Specular lit
+                    ;
 
                 return half4(lit, _BaseColor.a);
             }

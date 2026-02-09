@@ -61,7 +61,7 @@ float RayMarchTex3D(
         // Early exit if we are effectively in total darkness
         if (lit < 0.01) {
             hitPos = worldPos + dir * t;
-            return 0.0;
+            return 0.01;
         }
         
         t += max(d, minStep);

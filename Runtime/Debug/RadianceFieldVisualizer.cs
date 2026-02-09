@@ -19,7 +19,7 @@ namespace Lotec.Lighting {
                 if (source == null) { LogStatus("GetTexture: no LightingManager found"); return null; }
             }
 
-            RenderTexture rt = source.GiUpdater != null ? source.GiUpdater.RadianceRead : null;
+            RenderTexture rt = source.GiUpdater != null ? source.GiUpdater.IrradianceFinal : null;
             if (rt == null) { LogStatus("GetTexture: current radiance RT is null"); return null; }
             if (!rt.IsCreated()) rt.Create();
             if (rt.width == 0 || rt.height == 0 || rt.volumeDepth == 0) { LogStatus($"GetTexture: RT has invalid dims {rt.width}x{rt.height}x{rt.volumeDepth}"); return null; }
@@ -88,7 +88,7 @@ namespace Lotec.Lighting {
         // DEBUG: Utility to log center pixel of radiance field for testing readback and visualization.
         [ContextMenu("Log RadianceRead Center Pixel")]
         void LogRadianceCenter() {
-            var tex = source.GiUpdater.RadianceRead as Texture;
+            var tex = source.GiUpdater.IrradianceFinal as Texture;
             Texture3DReadback.ReadbackRGBAAsync(tex, "Hidden/Unpack3D", (ok, pixels, w, h, d) => {
                 if (!ok) { Debug.Log("readback failed"); return; }
                 int cx = w / 2, cy = h / 2, cz = d / 2;
