@@ -43,6 +43,54 @@ float2 PackOctahedral(float3 dir) {
     return p * 0.5 + 0.5;
 }
 
+// Octahedral Packing (Vector3 -> Vector2)
+float2 PackDirection(float3 n) {
+    n /= (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z < 0) {
+        n.xy = (1.0 - abs(n.yx)) * (n.xy >= 0 ? 1.0 : -1.0);
+    }
+    return n.xy * 0.5 + 0.5;
+}
+
+float3 UnpackDirection(float2 p) {
+    p = p * 2.0 - 1.0;
+    float3 n = float3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y));
+    float t = max(-n.z, 0.0);
+    n.x += n.x >= 0 ? -t : t;
+    n.y += n.y >= 0 ? -t : t;
+    return normalize(n);
+}
+
+// Simple 32-bit integer hash (Wang/Jenkins-style) to produce decorrelated seeds
+inline uint WangHash(uint v) {
+    v = (v ^ 61u) ^ (v >> 16);
+    v *= 9u;
+    v = v ^ (v >> 4);
+    v *= 0x27d4eb2du;
+    v = v ^ (v >> 15);
+    return v;
+}
+
+inline float HashTo01(uint v) {
+    // convert to float in [0,1)
+    return (float)WangHash(v) * (1.0 / 4294967296.0);
+}
+
+
+/// Compute luminance of a color via Rec. 709 luminance coefficients.
+float Luminance(float3 color) {
+    return dot(color, float3(0.2126, 0.7152, 0.0722));
+}
+
+float Random(float3 position, float seed) {
+    return frac(sin(dot(position + seed, float3(12.9898, 78.233, 45.164))) * 43758.5453);
+}
+// Generates a value 0.0 -> 1.0 that is spatially balanced
+float GetIGN(float3 position, int frame) {
+    float3 p = position + float(frame) * 5.588238f;
+    return frac(52.9829189f * frac(0.06711056f * p.x + 0.00583715f * p.y + 0.0123456f * p.z));
+}
+
 // Intersect ray (ro + rd * t) with unit AABB [0,1]^3.
 // ro/rd are in UVW space; t is still in world-distance units (because rd already includes invSize).
 inline bool RayIntersectUnitAabb(float3 ro, float3 rd, out float tEnter, out float tExit)
@@ -105,11 +153,48 @@ inline bool RayTriangleIntersect(float3 rayOrigin, float3 rayDir, float3 v0, flo
 	return dist > 1e-5;
 }
 
-// Wrapper that explicitly exposes non-culling behavior (accepts both sides).
-// Kept separate so we can switch to a culling variant if desired.
-inline bool RayTriangleIntersect_NoCull(float3 rayOrigin, float3 rayDir, float3 v0, float3 v1, float3 v2, out float dist)
-{
-	return RayTriangleIntersect(rayOrigin, rayDir, v0, v1, v2, dist);
+// Compute closest point on triangle and squared distance
+static float3 ClosestPointOnTriangle(float3 p, float3 a, float3 b, float3 c) {
+    float3 ab = b - a;
+    float3 ac = c - a;
+    float3 ap = p - a;
+    float d1 = dot(ab, ap);
+    float d2 = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0) return a;
+
+    float3 bp = p - b;
+    float d3 = dot(ab, bp);
+    float d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3) return b;
+
+    float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+        float v = d1 / (d1 - d3);
+        return a + v * ab;
+    }
+
+    float3 cp = p - c;
+    float d5 = dot(ab, cp);
+    float d6 = dot(ac, cp);
+    if (d6 >= 0.0 && d5 <= d6) return c;
+
+    float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+        float w = d2 / (d2 - d6);
+        return a + w * ac;
+    }
+
+    float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+        float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return b + w * (c - b);
+    }
+
+    // Inside face region. Compute barycentric coordinates (u,v,w)
+    float denom = 1.0 / (va + vb + vc);
+    float v = vb * denom;
+    float w = vc * denom;
+    return a + ab * v + ac * w;
 }
 
 #endif

@@ -72,7 +72,7 @@ namespace Lotec.Lighting {
         static readonly int sOcclusionDistance = Shader.PropertyToID("_OcclusionDistance");
 
         public bool TryBake(
-            SdfVolume sourceVolume,
+            LightingVolume sourceVolume,
             out Texture3D result,
             out string error
         ) {
@@ -89,8 +89,8 @@ namespace Lotec.Lighting {
                 return false;
             }
 
-            Bounds bounds = sourceVolume.bakedBounds;
-            Vector3Int resolution = sourceVolume.bakedResolution;
+            Bounds bounds = sourceVolume.Bounds;
+            Vector3Int resolution = sourceVolume.TrimmedMaxResolution;
             int bitmaskSize = resolution.x * resolution.y * resolution.z;
 
             if (bounds.size.magnitude < 0.01f || resolution.x < 2) {
@@ -126,13 +126,13 @@ namespace Lotec.Lighting {
             int kernelIdx = bitmaskBakeCompute.FindKernel("CSMain");
 
             // Bind SDF texture and parameters
-            if (sourceVolume.sdfTexture == null) {
+            if (sourceVolume.sdfHiresTexture == null) {
                 error = "BitmaskOcclusionBaker: sourceVolume has no sdfTexture";
                 bitmaskBuffer.Dispose();
                 return false;
             }
 
-            bitmaskBakeCompute.SetTexture(kernelIdx, "_SdfTex", sourceVolume.sdfTexture);
+            bitmaskBakeCompute.SetTexture(kernelIdx, "_SdfTex", sourceVolume.sdfHiresTexture);
             // Reasonable defaults for SDF tracing
             // int defaultMaxSteps = Mathf.Clamp(resolution.x * 2, 16, 256);
             int defaultMaxSteps = 256;

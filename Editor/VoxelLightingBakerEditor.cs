@@ -30,23 +30,35 @@ namespace Lotec.Lighting.Editor {
                 return;
 
             if (!baker.TryBake(out string error)) {
-                EditorUtility.DisplayDialog("Bake Failed", $"SDF Baker bake failed:\n{error}", "OK");
-                Debug.LogError($"SDF Baker bake failed: {error}", baker);
+                EditorUtility.DisplayDialog("Bake Failed", $"VoxelLighting Baker bake failed:\n{error}", "OK");
+                Debug.LogError($"VoxelLighting Baker bake failed: {error}", baker);
                 return;
             }
 
-            Debug.Log("SDF Baker bake completed successfully.", baker);
-
+            Debug.Log("VoxelLighting Baker bake completed successfully.", baker);
             string basePath = baker.assetPath;
             // Save baked SDF asset
-            if (baker.targetSdfVolume.sdfTexture != null && !string.IsNullOrEmpty(basePath)) {
-                string sdfPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.sdfTexture.name}.asset");
-                SaveAsset(baker.targetSdfVolume.sdfTexture, sdfPath, "SDF");
+            if (baker.targetSdfVolume.sdfHiresTexture != null && !string.IsNullOrEmpty(basePath)) {
+                string sdfPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.sdfHiresTexture.name}.asset");
+                SaveAsset(baker.targetSdfVolume.sdfHiresTexture, sdfPath, "SDF");
+            }
+            if (baker.targetSdfVolume.sdfLowresTexture != null && !string.IsNullOrEmpty(basePath)) {
+                string sdfPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.sdfLowresTexture.name}.asset");
+                SaveAsset(baker.targetSdfVolume.sdfLowresTexture, sdfPath, "SDF");
             }
             // Save baked Bitmask asset
             if (baker.targetSdfVolume.occlusionBitmaskTexture != null && !string.IsNullOrEmpty(basePath)) {
                 string bitmaskPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.occlusionBitmaskTexture.name}.asset");
                 SaveAsset(baker.targetSdfVolume.occlusionBitmaskTexture, bitmaskPath, "Occlusion Bitmask");
+            }
+            // Save baked Material textures (albedo+roughness and emission+metallic)
+            if (baker.targetSdfVolume.materialAlbedoRoughnessTexture != null && !string.IsNullOrEmpty(basePath)) {
+                string matAPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.materialAlbedoRoughnessTexture.name}.asset");
+                SaveAsset(baker.targetSdfVolume.materialAlbedoRoughnessTexture, matAPath, "Material AlbedoRoughness");
+            }
+            if (baker.targetSdfVolume.materialEmissionMetallicTexture != null && !string.IsNullOrEmpty(basePath)) {
+                string matBPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.materialEmissionMetallicTexture.name}.asset");
+                SaveAsset(baker.targetSdfVolume.materialEmissionMetallicTexture, matBPath, "Material EmissionMetallic");
             }
         }
 
@@ -60,21 +72,20 @@ namespace Lotec.Lighting.Editor {
                 System.IO.Directory.CreateDirectory(dir);
             }
 
-            // Check if asset already exists
+            // If asset exists, delete it first to avoid stale format/serialization issues,
+            // then create a fresh asset from the provided object.
             Object existing = AssetDatabase.LoadAssetAtPath<Object>(path);
             if (existing != null) {
-                // Update existing asset
-                EditorUtility.CopySerialized(asset, existing);
-                EditorUtility.SetDirty(existing);
-                Debug.Log($"{assetType} asset updated: {path}", existing);
-            } else {
-                // Create new asset
-                AssetDatabase.CreateAsset(asset, path);
-                Debug.Log($"{assetType} asset created: {path}", asset);
+                AssetDatabase.DeleteAsset(path);
             }
 
+            AssetDatabase.CreateAsset(asset, path);
+            Debug.Log($"{assetType} asset written: {path}", asset);
+
+            // Ensure the new asset is marked dirty and reimported so Unity reloads the latest data
+            EditorUtility.SetDirty(asset);
             AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
         }
     }
 }
