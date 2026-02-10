@@ -36,7 +36,7 @@ float3 SampleVoxelGI(float3 worldPos, float3 normal)
     }
     if (length(irradiance) == 0.0) {
         // return uvw visualization to debug coords (map 0..1 -> 0..1)
-        // return uvw; // DEBUG: shows UVW in RGB
+        return uvw; // DEBUG: shows UVW in RGB
     }
     return irradiance;
 }

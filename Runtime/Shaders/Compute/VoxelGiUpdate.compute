@@ -21,7 +21,7 @@ Texture3D<float> _DistanceField; // Low-res
 // GI field buffers
 Texture3D<float4> _RadianceField;          // Current Frame Radiance (read in irradiance pass)
 RWTexture3D<float4> _RadianceFieldWrite;   // Current Frame Radiance (write in radiance pass)
-Texture3D<float4> _IrradianceFieldHistory;        // Previous Frame Irradiance (read in both passes)
+Texture3D<float4> _IrradianceFieldHistory; // Previous Frame Irradiance (read in both passes)
 RWTexture3D<float4> _IrradianceFieldWrite; // Current Frame Irradiance (write in irradiance pass)
 
 Texture3D<float4> _ControlRead;      // Previous Frame Control

@@ -107,7 +107,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
 
                 // float3 lit = albedo * gi; // DEBUG: Indirect lit only for testing
                 float3 lit =
-                    albedo * light.color * ndotl * shadow // Direct lit
+                    // albedo * light.color * ndotl * shadow // Direct lit
                     + albedo * gi // Indirect lit
                     // + light.color * spec * shadow // Specular lit
                     ;
