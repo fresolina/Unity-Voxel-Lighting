@@ -1,4 +1,3 @@
-using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -12,6 +11,7 @@ namespace Lotec.Lighting {
         public Texture3D MaterialFieldEmissionMetallic { get; set; }
         public Texture3D SurfaceDistanceFieldHighRes { get; set; }
         public Texture3D SurfaceDistanceFieldLowRes { get; set; }
+        public ComputeShader GiComputeShader { get => _giComputeShader; set => _giComputeShader = value; }
 
         RenderTexture _radianceField;
         RenderTexture _irradianceFieldA;  // Ping

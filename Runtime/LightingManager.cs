@@ -1,5 +1,7 @@
-using System;
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace Lotec.Lighting {
     public static class TextureExtensions {
@@ -21,8 +23,27 @@ namespace Lotec.Lighting {
         public LightingVolume Volume => _sdfShaderGlobals.volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
 
+#if UNITY_EDITOR
+        void Reset() {
+            _giUpdater = new GiFieldUpdater();
+            // Editor fallback: search the project for a matching compute shader asset by name
+            if (_giUpdater.GiComputeShader == null) {
+                string[] guids = AssetDatabase.FindAssets("VoxelGiUpdate t:ComputeShader");
+                if (guids.Length > 0) {
+                    Debug.Log($"Auto-assigning VoxelGiUpdate compute shader to LightingManager from project search (found {guids.Length} candidates, using '{AssetDatabase.GUIDToAssetPath(guids[0])}').");
+                    string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                    _giUpdater.GiComputeShader = AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                    EditorUtility.SetDirty(this);
+                } else {
+                    Debug.LogWarning("Could not find VoxelGiUpdate compute shader in project. Please assign it manually to the LightingManager.");
+                }
+            }
+        }
+#endif
+
         void Awake() {
             _sdfShaderGlobals = GetComponent<SdfShaderGlobals>();
+            AssignComputeShader();
         }
 
         // Update is called once per frame
@@ -33,6 +54,8 @@ namespace Lotec.Lighting {
 
         void OnDisable() {
             _giUpdater.ReleaseBuffers();
+        }
+        void AssignComputeShader() {
         }
 
         void EnsureFieldsAssigned() {

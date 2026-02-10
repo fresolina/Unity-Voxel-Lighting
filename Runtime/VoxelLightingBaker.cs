@@ -1,4 +1,7 @@
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace Lotec.Lighting {
     /// <summary>
@@ -18,10 +21,45 @@ namespace Lotec.Lighting {
 
         SdfShaderGlobals _sdfShaderGlobals;
 
+#if UNITY_EDITOR
         void OnValidate() {
             if (_sdfShaderGlobals == null)
                 _sdfShaderGlobals = FindAnyObjectByType<SdfShaderGlobals>();
         }
+        void Reset() {
+            // Editor fallback: search the project for a matching compute shader asset by name
+            if (_occlusionBitmaskBaker.bitmaskBakeCompute == null) {
+                string[] guids = AssetDatabase.FindAssets("OcclusionBitmaskBake t:ComputeShader");
+                if (guids.Length > 0) {
+                    string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                    _occlusionBitmaskBaker.bitmaskBakeCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                    EditorUtility.SetDirty(this);
+                } else {
+                    Debug.LogWarning("Could not find OcclusionBitmaskBake compute shader in project. Please assign it manually to the VoxelLightingBaker.");
+                }
+            }
+            if (_materialBaker.MaterialBakeCompute == null) {
+                string[] guids = AssetDatabase.FindAssets("MaterialBake t:ComputeShader");
+                if (guids.Length > 0) {
+                    string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                    _materialBaker.MaterialBakeCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                    EditorUtility.SetDirty(this);
+                } else {
+                    Debug.LogWarning("Could not find MaterialBake compute shader in project. Please assign it manually to the VoxelLightingBaker.");
+                }
+            }
+            if (_sdfBaker.sdfBakeCompute == null) {
+                string[] guids = AssetDatabase.FindAssets("SdfBake t:ComputeShader");
+                if (guids.Length > 0) {
+                    string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                    _sdfBaker.sdfBakeCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                    EditorUtility.SetDirty(this);
+                } else {
+                    Debug.LogWarning("Could not find SdfBake compute shader in project. Please assign it manually to the VoxelLightingBaker.");
+                }
+            }
+        }
+#endif
 
         public bool TryBake(out string error) {
             LightingVolume volume = _sdfShaderGlobals.volume;

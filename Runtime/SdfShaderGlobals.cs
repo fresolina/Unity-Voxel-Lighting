@@ -59,9 +59,6 @@ namespace Lotec.Lighting {
         void Update() {
             if (autoUpdate)
                 ApplyGlobals();
-            // Always set these globals every frame since they are used by other shaders and the volume may move.
-            Shader.SetGlobalVector(s_volumeSize, volume.Bounds.size);
-            Shader.SetGlobalVector(s_volumePosition, volume.Bounds.min);
         }
 
         public void ApplyGlobals() {
@@ -78,6 +75,8 @@ namespace Lotec.Lighting {
                     new Vector3(volume.TrimmedMaxResolution.x, volume.TrimmedMaxResolution.y, volume.TrimmedMaxResolution.z));
             }
 
+            Shader.SetGlobalVector(s_volumeSize, volume.Bounds.size);
+            Shader.SetGlobalVector(s_volumePosition, volume.Bounds.min);
             Shader.SetGlobalVector(sSdfBoundsMin, volume.Bounds.min);
             Shader.SetGlobalVector(sSdfBoundsSize, volume.Bounds.size);
             // Compute and set inverse voxel size (world units per voxel -> 1/voxelSize)
