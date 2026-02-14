@@ -3,6 +3,12 @@
 #define LOTEC_MATH_INCLUDED
 
 static const float LOTEC_MATH_PI = 3.14159265f;
+static const float LOTEC_MATH_INV_PI = 0.318309886f;
+static const uint BLUE_NOISE_SIZE = 128;
+
+float Random(float3 position, float seed) {
+    return frac(sin(dot(position + seed, float3(12.9898, 78.233, 45.164))) * 43758.5453);
+}
 
 /**
  * Extracts a single bit from the 64-bit mask (uint2).
@@ -76,15 +82,62 @@ inline float HashTo01(uint v) {
     return (float)WangHash(v) * (1.0 / 4294967296.0);
 }
 
+float3 GetRandomDirection(float3 seedPos, uint frame) {
+    float r1 = Random(seedPos, frame);
+    float r2 = Random(seedPos, frame + 1.34);
+    float r3 = Random(seedPos, frame + 2.51);
+    return normalize(float3(r1 - 0.5, r2 - 0.5, r3 - 0.5));
+}
+
+// Map 1D noise to Sphere Direction
+// (Golden Angle Sampling for better distribution than random)
+float3 GetRandomDirectionFromNoise(float noiseVal) {
+    float z = 1.0 - 2.0 * noiseVal;
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = 2.0 * LOTEC_MATH_PI * frac(noiseVal * 1.61803); // Golden ratio
+    return float3(r * cos(phi), r * sin(phi), z);
+}
+
+float2 GetBlueNoise2(Texture2D<float> tex, uint3 id, uint frame, uint salt) {
+    uint2 baseCoord = uint2(id.x, id.y);
+    uint2 offset = uint2(frame * 17u + salt * 101u, frame * 23u + salt * 59u);
+    uint2 coord0 = (baseCoord + offset) & (BLUE_NOISE_SIZE - 1);
+    uint2 coord1 = (baseCoord + offset + uint2(37u, 61u)) & (BLUE_NOISE_SIZE - 1);
+    float n0 = tex.Load(int3(coord0, 0)).r;
+    float n1 = tex.Load(int3(coord1, 0)).r;
+    return float2(n0, n1);
+}
+
+float2 GetNoise2(uint3 id, uint frame, uint salt) {
+    uint seed = id.x * 73856093u ^ id.y * 19349663u ^ id.z * 83492791u;
+    seed += salt * 1013904223u + frame * 747796405u;
+    float n0 = HashTo01(seed);
+    float n1 = HashTo01(seed ^ 0x9e3779b9u);
+    return float2(n0, n1);
+}
+
+void BuildOrthonormalBasis(float3 n, out float3 t, out float3 b) {
+    float3 up = (abs(n.z) < 0.999f) ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
+    t = normalize(cross(up, n));
+    b = cross(n, t);
+}
+
+float3 CosineSampleHemisphere(float3 normal, float2 u) {
+    float r = sqrt(u.x);
+    float theta = 2.0 * LOTEC_MATH_PI * u.y;
+    float2 d = r * float2(cos(theta), sin(theta));
+    float z = sqrt(max(0.0, 1.0 - u.x));
+
+    float3 t, b;
+    BuildOrthonormalBasis(normal, t, b);
+    return normalize(t * d.x + b * d.y + normal * z);
+}
 
 /// Compute luminance of a color via Rec. 709 luminance coefficients.
 float Luminance(float3 color) {
     return dot(color, float3(0.2126, 0.7152, 0.0722));
 }
 
-float Random(float3 position, float seed) {
-    return frac(sin(dot(position + seed, float3(12.9898, 78.233, 45.164))) * 43758.5453);
-}
 // Generates a value 0.0 -> 1.0 that is spatially balanced
 float GetIGN(float3 position, int frame) {
     float3 p = position + float(frame) * 5.588238f;
