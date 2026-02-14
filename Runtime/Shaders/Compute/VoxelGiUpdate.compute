@@ -157,9 +157,6 @@ void CSComputeIrradiance(uint3 id : SV_DispatchThreadID)
             // Sample value half a voxel away from the surface hit point, to avoid sampling a voxel center inside the surface.
             float3 surfaceUVW = WorldToVoxelUV(hitPos - rayDir * _VoxelSize * 0.51);
             incomingLight += _RadianceField.SampleLevel(linearClampSampler, surfaceUVW, 0).rgb;
-        } else {
-            // No hit means we get sky light.
-            incomingLight += _SkyColor;
         }
     }
 
