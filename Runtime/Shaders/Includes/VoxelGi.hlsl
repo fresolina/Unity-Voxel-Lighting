@@ -3,8 +3,8 @@
 #include "Volume.hlsl"
 
 // Bind these globals from C# script (Shader.SetGlobalTexture, etc.)
-Texture3D<float4> _IrradianceFieldWrite; 
-SamplerState sampler_IrradianceFieldWrite; // Unity binds this automatically if named matches texture
+Texture3D<float4> _IrradianceFieldFinal; 
+SamplerState sampler_IrradianceFieldFinal; // Unity binds this automatically if named matches texture
 
 float3 _RadianceFieldVoxelSize; // meters per voxel
 
@@ -28,15 +28,5 @@ float3 SampleVoxelGI(float3 worldPos, float3 normal)
 
     // The GPU automatically unpacks the R11G11B10 HDR format to floats here.
     // We use .rgb because this format has no Alpha channel.
-    float3 irradiance = _IrradianceFieldWrite.Sample(sampler_IrradianceFieldWrite, uvw).rgb;
-    // DEBUG: Detect NaN/Inf (robust): NaN != NaN, and clamp huge values as Inf check.
-    if (any(irradiance != irradiance) || any(abs(irradiance) > 1e20)) {
-        // magenta = invalid data
-        return float3(1, 0, 1);
-    }
-    if (length(irradiance) == 0.0) {
-        // return uvw visualization to debug coords (map 0..1 -> 0..1)
-        // return uvw; // DEBUG: shows UVW in RGB
-    }
-    return irradiance;
+    return _IrradianceFieldFinal.Sample(sampler_IrradianceFieldFinal, uvw).rgb;
 }
