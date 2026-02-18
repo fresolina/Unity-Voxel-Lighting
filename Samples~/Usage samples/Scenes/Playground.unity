@@ -260,7 +260,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0.7071068, z: 0, w: 0.7071068}
   m_LocalPosition: {x: 2, y: 0, z: 3}
-  m_LocalScale: {x: 0.2, y: 3, z: 4}
+  m_LocalScale: {x: 0.3, y: 3, z: 4.2}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 340827034}
@@ -1264,10 +1264,10 @@ MonoBehaviour:
   _root: {fileID: 1127919669}
   _paddingWorld: 0.25
   _maxResolution: 128
-  TrimmedMaxResolution: {x: 69, y: 69, z: 128}
+  TrimmedMaxResolution: {x: 69, y: 68, z: 128}
   Bounds:
-    m_Center: {x: 1.9999998, y: 2.139, z: -1.315}
-    m_Extent: {x: 2.5, y: 2.4890003, z: 4.665}
+    m_Center: {x: 1.9999998, y: 2.139, z: -1.29}
+    m_Extent: {x: 2.5, y: 2.4890003, z: 4.69}
   sdfHiresTexture: {fileID: 11700000, guid: 6e3361234c2158741b145929af00343d, type: 2}
   sdfLowresTexture: {fileID: 11700000, guid: 286810e30bd98d2498000fd1581d40ad, type: 2}
   occlusionBitmaskTexture: {fileID: 11700000, guid: de1d9e5fceb08754687012604c6d31b0, type: 2}
@@ -1628,7 +1628,7 @@ Transform:
   m_GameObject: {fileID: 1287967117}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0.835, y: 0.613, z: 1.901}
+  m_LocalPosition: {x: 3.297, y: 0.629, z: 2.235}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1887,7 +1887,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0.7071068, z: 0, w: 0.7071068}
   m_LocalPosition: {x: 2, y: 0, z: -3}
-  m_LocalScale: {x: 0.2, y: 3, z: 4}
+  m_LocalScale: {x: 0.2, y: 3, z: 4.2}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 340827034}
@@ -2044,6 +2044,9 @@ MonoBehaviour:
     _maxSamples: 90
     _raysPerFrame: 1
     _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
+    _aoStep: 0.08
+    _aoIntensity: 2
+    _aoQuality: 2
 --- !u!114 &1437948844
 MonoBehaviour:
   m_ObjectHideFlags: 0
