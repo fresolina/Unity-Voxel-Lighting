@@ -8,8 +8,17 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
   a) Accuracy mode: Ray marching on every pixel.
   b) Performance mode: Occlusion bitmask in the voxel field.
 
+## TODO
+
+* Shadow map field: Cache the raymarch "is lit" result per voxel. Use for cheap shadows, or to determine if this voxel radiates (early exit).
+* AO: Use the SDF to compute an AO term for each pixel. This is a cheap approximation of how much ambient light should reach that point, based on how enclosed it is. It can be used as a simple way to add more depth and realism to the lighting, especially in corners and crevices where light has a harder time reaching.
+* Specular reflections: Use the SDF to compute a reflection vector for each pixel, and ray march in that direction to find the nearest surface. Sample the material properties at the hit point to compute the reflected light contribution. This can add a lot of realism, especially for shiny surfaces, but it can be expensive to compute, so it might need some optimization (e.g. only compute for pixels with low roughness).
+* Emission: Add support for emissive materials by storing emission data in a separate voxel field. During ray marching, if we hit an emissive voxel, we can add its emission contribution to the final lighting. This allows for dynamic light sources that can be placed in the scene without needing to be baked into lightmaps.
+* Support for multiple light sources: Extend the system to handle multiple dynamic lights, each with their own contribution to the voxel lighting. This will require some way to blend the contributions from different lights in the voxel field.
+
 ## Refactoring TODOs
 
+* Dra ner på antalet uniforms. Kanske gör om de flesta sdf-relaterade typ epsilon osv som konstanter.
 * Använd Texture3DReadback.cs där det behövs.
 * BakeFibonacciLookup.cs:UnpackOctahedral() ta bort och ersätt med Math.hsls. Även Fibonacci. Pack/UnpackOctahedral -> Pack/UnpackDirection
 * RadianceField -> IrradianceField. (Light hitting the voxel, not leaving the voxel)
@@ -17,11 +26,8 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
   * Vi borde nog ha en global VolumePosition och VolumeSize. Sen egna Resolution och VoxelSize per fält.
 * Compile-flagga för att ta bort bitmask-occlusion osv (även emission field).
 * Döp om stuff till ...Field.
-* SdfVolume -> VoxelVolume
 * Extrahera DirectShadows raymarch från SdfShaderGlobals till egen klass.
-* LightingVolume: HiresSdf, LowresSdf, MaterialField, RadianceField, OcclusionBitmaskField.
-* Vi behöver se till att GIMono kan referera till lowresSdf och material field.
-* Renade Sdf... stuff to Volume... if it is not SDF specific.
+* Rename Sdf... stuff to Volume... if it is not SDF specific.
   * Kalla worldPos transformerat till sdf uvw, positionVS eller positionVolumeSpace. Definiera position utan postfix som worldspace.
 * Rename SdfShaderGlobals to LightingManager.
 * Se till att foldern Assets/VoxelLighting finns. Skapa om inte.
