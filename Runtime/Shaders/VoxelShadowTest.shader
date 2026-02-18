@@ -5,7 +5,6 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
         _BaseColor ("Base Color", Color) = (1,1,1,1)
         _BaseMap ("Base Map", 2D) = "white" {}
         _Roughness ("Roughness", Range(0,1)) = 1.0
-        [Toggle(_SDF_AO)] _UseSdfAo ("Use SDF AO", Float) = 1
     }
 
     SubShader
@@ -36,7 +35,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             // Choose shadow implementation at compile-time only.
             // Keywords: SDF_ONLY, BITMASK_POINT (single bit), BITMASK_4TAP (spatial 4-tap), BITMASK_RAY3 (3-step traversal), BITMASK_8TAP (trilinear 2x2x2)
             #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_4TAP BITMASK_RAY3 BITMASK_8TAP
-            #pragma shader_feature_local_fragment _SDF_AO
+            #pragma multi_compile SDF_AO_OFF SDF_AO_LQ SDF_AO_HQ
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _BaseColor;
@@ -107,10 +106,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 
                 // Global Illumination from Voxel GI field
                 float3 gi = SampleVoxelGI(IN.positionWS, N);
-                float ao = 1.0;
-                #if defined(_SDF_AO)
-                    ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
-                #endif
+                float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
 
                 // float3 lit = albedo * gi; // DEBUG: Indirect lit only for testing
                 float3 lit =

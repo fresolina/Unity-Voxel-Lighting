@@ -18,9 +18,9 @@ namespace Lotec.Lighting {
         [Min(0f)]
         [Tooltip("AO darkening strength.")]
         [SerializeField] float _aoIntensity = 1.95f;
-        public enum AoQuality { Samples2 = 0, Samples4 = 1, Samples6 = 2 }
-        [Tooltip("Number of raymarching steps to take when computing AO.")]
-        [SerializeField] AoQuality _aoQuality = AoQuality.Samples4;
+        public enum AoQuality { SDF_AO_OFF = 0, SDF_AO_LQ = 1, SDF_AO_HQ = 2 }
+        [Tooltip("SDF AO mode: OFF, LQ (2 samples), HQ (4 samples).")]
+        [SerializeField] AoQuality _aoQuality = AoQuality.SDF_AO_HQ;
 
         public Texture3D MaterialFieldAlbedoRoughness { get; set; }
         public Texture3D MaterialFieldEmissionMetallic { get; set; }
@@ -276,19 +276,26 @@ namespace Lotec.Lighting {
 
         void ApplyAoShaderKeywords() {
             switch (_aoQuality) {
-                case AoQuality.Samples2:
-                    Shader.EnableKeyword("SDF_AO_SAMPLES_2");
-                    Shader.DisableKeyword("SDF_AO_SAMPLES_6");
+                case AoQuality.SDF_AO_OFF:
+                    Shader.EnableKeyword("SDF_AO_OFF");
+                    Shader.DisableKeyword("SDF_AO_LQ");
+                    Shader.DisableKeyword("SDF_AO_HQ");
                     break;
-                case AoQuality.Samples4:
-                    Shader.DisableKeyword("SDF_AO_SAMPLES_2");
-                    Shader.DisableKeyword("SDF_AO_SAMPLES_6");
+                case AoQuality.SDF_AO_LQ:
+                    Shader.DisableKeyword("SDF_AO_OFF");
+                    Shader.EnableKeyword("SDF_AO_LQ");
+                    Shader.DisableKeyword("SDF_AO_HQ");
                     break;
-                case AoQuality.Samples6:
-                    Shader.DisableKeyword("SDF_AO_SAMPLES_2");
-                    Shader.EnableKeyword("SDF_AO_SAMPLES_6");
+                case AoQuality.SDF_AO_HQ:
+                    Shader.DisableKeyword("SDF_AO_OFF");
+                    Shader.DisableKeyword("SDF_AO_LQ");
+                    Shader.EnableKeyword("SDF_AO_HQ");
                     break;
             }
+
+            // Backward compatibility cleanup for old AO sample keywords.
+            Shader.DisableKeyword("SDF_AO_SAMPLES_2");
+            Shader.DisableKeyword("SDF_AO_SAMPLES_6");
         }
 
         void ApplyAoShaderGlobals() {

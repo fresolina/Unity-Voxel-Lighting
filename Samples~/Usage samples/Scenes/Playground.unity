@@ -1628,7 +1628,7 @@ Transform:
   m_GameObject: {fileID: 1287967117}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 1.151, y: 0.629, z: 1.708}
+  m_LocalPosition: {x: 3.297, y: 0.629, z: 2.235}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -2040,13 +2040,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.LightingManager
   _giUpdater:
     _giComputeShader: {fileID: 7200000, guid: 02f9a08ea0218754cac3ba8d03fd4a99, type: 3}
-    _continuousGi: 1
+    _continuousGi: 0
     _maxSamples: 90
     _raysPerFrame: 1
     _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
     _aoStep: 0.08
-    _aoIntensity: 4
-    _aoQuality: 0
+    _aoIntensity: 2
+    _aoQuality: 2
 --- !u!114 &1437948844
 MonoBehaviour:
   m_ObjectHideFlags: 0
