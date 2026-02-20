@@ -4,9 +4,15 @@
 #pragma kernel CSClearVolume
 
 // --- CONSTANTS ---
-// TODO: Use value from Volume conf.
+// TODO: Use Volume.Bounds value from Volume conf.
 #define MAX_SDF_DIST 30.0
-#define EPSILON 0.001
+// Use a larger epsilon for raymarching to avoid light leaking through thin walls.
+// Because SDF:s have rounded corners, a ray can get very close to the surface without actually hitting it, which causes light to leak through. A larger epsilon means we consider it a hit even if we're not super close, which helps block light in these cases. The downside is that it can cause shadow acne or make shadows look blocky, especially on low-res volumes. A more robust solution would be to detect these near-hit cases and apply a bias based on the surface normal to prevent acne while still blocking light. 
+// Value depends on the wall thickness and voxel size.
+// Wall thickness 0.2, voxel size 0.16: requires 0.04
+// Wall thickness 0.5, voxel size 0.16: requires 0.02
+// TODO: Calculate and set this from C# side automatically.
+#define EPSILON 0.04
 
 #include "../Includes/Math.hlsl"
 #include "../Includes/Volume.hlsl"
