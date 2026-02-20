@@ -98,6 +98,13 @@ float3 GetRandomDirectionFromNoise(float noiseVal) {
     return float3(r * cos(phi), r * sin(phi), z);
 }
 
+float3 GetRandomDirectionFromNoise2(float2 noiseVal) {
+    float z = 1.0 - 2.0 * noiseVal.x;
+    float r = sqrt(max(0.0, 1.0 - z * z));
+    float phi = 2.0 * LOTEC_MATH_PI * noiseVal.y; // Golden ratio
+    return float3(r * cos(phi), r * sin(phi), z);
+}
+
 float2 GetBlueNoise2(Texture2D<float> tex, uint3 id, uint frame, uint salt) {
     uint2 baseCoord = uint2(id.x, id.y);
     uint2 offset = uint2(frame * 17u + salt * 101u, frame * 23u + salt * 59u);
