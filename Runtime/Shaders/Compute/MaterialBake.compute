@@ -82,6 +82,16 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         }
     }
 
+    // Early out: only bake voxels that are within one voxel size from nearest surface.
+    float3 voxelSize3 = _BoundsSize / max((float3)_Resolution, 1.0);
+    float voxelSize = max(voxelSize3.x, max(voxelSize3.y, voxelSize3.z));
+    float maxBakeDistSq = voxelSize * voxelSize;
+    if (bestDistSq > maxBakeDistSq) {
+        _OutAlbedo[id.xyz] = 0;
+        _OutEmission[id.xyz] = 0;
+        return;
+    }
+
     // Pull material vectors for the nearest triangle and write to the output volume
     float4 matA = _TriMatA[bestIdx];
     float4 matB = _TriMatB[bestIdx];
@@ -97,39 +107,21 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     float4 outA = matA;
     float4 outB = matB;
 
-    // If we have texture arrays and valid indices, compute barycentric UV and sample
     int aTexIdx = _TriAlbedoTex[bestIdx];
-    if (aTexIdx >= 0) {
-        // read per-triangle UVs (3 entries)
+    int eTexIdx = _TriEmissionTex[bestIdx];
+    bool needsSampleUV = (aTexIdx >= 0) || (eTexIdx >= 0);
+
+    float2 uv = 0.0;
+    if (needsSampleUV) {
         int baseUV = bestIdx * 3;
         float2 uv0 = _TriUVs[baseUV + 0];
         float2 uv1 = _TriUVs[baseUV + 1];
         float2 uv2 = _TriUVs[baseUV + 2];
+        uv = ComputeClosestPointUV(cp, bestV0, bestV1, bestV2, uv0, uv1, uv2);
+    }
 
-        // triangle verts (use precomputed bestV*)
-        float3 v0 = bestV0;
-        float3 v1 = bestV1;
-        float3 v2 = bestV2;
-
-        // compute barycentric coordinates of closest point
-        float3 v0v1 = v1 - v0;
-        float3 v0v2 = v2 - v0;
-        float3 vp = cp - v0;
-        float d00 = dot(v0v1, v0v1);
-        float d01 = dot(v0v1, v0v2);
-        float d11 = dot(v0v2, v0v2);
-        float d20 = dot(vp, v0v1);
-        float d21 = dot(vp, v0v2);
-        float denom = d00 * d11 - d01 * d01;
-        float v = 0.0;
-        float w = 0.0;
-        if (abs(denom) > 1e-8) {
-            v = (d11 * d20 - d01 * d21) / denom;
-            w = (d00 * d21 - d01 * d20) / denom;
-        }
-        float u = 1.0 - v - w;
-
-        float2 uv = uv0 * u + uv1 * v + uv2 * w;
+    // If we have texture arrays and valid indices, compute barycentric UV and sample
+    if (aTexIdx >= 0) {
         // sample albedo array via texel Load (avoids separate sampler issues)
         int tx = (int)clamp(uv.x * (_AlbedoSize.x - 1), 0.0, (float)(_AlbedoSize.x - 1));
         int ty = (int)clamp(uv.y * (_AlbedoSize.y - 1), 0.0, (float)(_AlbedoSize.y - 1));
@@ -138,35 +130,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         outA = float4(sampled.rgb, matA.a); // preserve roughness in alpha
     }
 
-    int eTexIdx = _TriEmissionTex[bestIdx];
     if (eTexIdx >= 0) {
-        int baseUV = bestIdx * 3;
-        float2 uv0 = _TriUVs[baseUV + 0];
-        float2 uv1 = _TriUVs[baseUV + 1];
-        float2 uv2 = _TriUVs[baseUV + 2];
-
-        float3 v0 = bestV0;
-        float3 v1 = bestV1;
-        float3 v2 = bestV2;
-
-        float3 v0v1 = v1 - v0;
-        float3 v0v2 = v2 - v0;
-        float3 vp = cp - v0;
-        float d00 = dot(v0v1, v0v1);
-        float d01 = dot(v0v1, v0v2);
-        float d11 = dot(v0v2, v0v2);
-        float d20 = dot(vp, v0v1);
-        float d21 = dot(vp, v0v2);
-        float denom = d00 * d11 - d01 * d01;
-        float v = 0.0;
-        float w = 0.0;
-        if (abs(denom) > 1e-8) {
-            v = (d11 * d20 - d01 * d21) / denom;
-            w = (d00 * d21 - d01 * d20) / denom;
-        }
-        float u = 1.0 - v - w;
-
-        float2 uv = uv0 * u + uv1 * v + uv2 * w;
         int tx = (int)clamp(uv.x * (_EmissionSize.x - 1), 0.0, (float)(_EmissionSize.x - 1));
         int ty = (int)clamp(uv.y * (_EmissionSize.y - 1), 0.0, (float)(_EmissionSize.y - 1));
         int4 coord4 = int4(tx, ty, eTexIdx, 0);

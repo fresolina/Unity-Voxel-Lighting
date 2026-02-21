@@ -257,4 +257,40 @@ static float3 ClosestPointOnTriangle(float3 p, float3 a, float3 b, float3 c) {
     return a + ab * v + ac * w;
 }
 
+/**
+ * Computes triangle UV at the closest point on a triangle.
+ *
+ * Expected usage:
+ * 1) Compute world-space closest point `cp` with `ClosestPointOnTriangle`.
+ * 2) Call this function with triangle vertices and matching per-vertex UVs.
+ *
+ * The function derives barycentric weights of `cp` in triangle (v0,v1,v2),
+ * then interpolates (uv0,uv1,uv2) with those weights.
+ *
+ * Degenerate triangle handling:
+ * - If the barycentric denominator is near zero, the function falls back to
+ *   `u=1, v=0, w=0`, effectively returning `uv0`.
+ */
+inline float2 ComputeClosestPointUV(float3 cp, float3 v0, float3 v1, float3 v2, float2 uv0, float2 uv1, float2 uv2) {
+    float3 v0v1 = v1 - v0;
+    float3 v0v2 = v2 - v0;
+    float3 vp = cp - v0;
+    float d00 = dot(v0v1, v0v1);
+    float d01 = dot(v0v1, v0v2);
+    float d11 = dot(v0v2, v0v2);
+    float d20 = dot(vp, v0v1);
+    float d21 = dot(vp, v0v2);
+    float denom = d00 * d11 - d01 * d01;
+
+    float v = 0.0;
+    float w = 0.0;
+    if (abs(denom) > 1e-8) {
+        v = (d11 * d20 - d01 * d21) / denom;
+        w = (d00 * d21 - d01 * d20) / denom;
+    }
+    float u = 1.0 - v - w;
+
+    return uv0 * u + uv1 * v + uv2 * w;
+}
+
 #endif
