@@ -10,11 +10,10 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
 
 ## TODO
 
-* Shadow map field: Cache the raymarch "is lit" result per voxel. Use for cheap shadows, or to determine if this voxel radiates (early exit).
-* AO: Use the SDF to compute an AO term for each pixel. This is a cheap approximation of how much ambient light should reach that point, based on how enclosed it is. It can be used as a simple way to add more depth and realism to the lighting, especially in corners and crevices where light has a harder time reaching.
-* Specular reflections: Use the SDF to compute a reflection vector for each pixel, and ray march in that direction to find the nearest surface. Sample the material properties at the hit point to compute the reflected light contribution. This can add a lot of realism, especially for shiny surfaces, but it can be expensive to compute, so it might need some optimization (e.g. only compute for pixels with low roughness).
+* Material roughness: Store dominant radiance direction in a second field, for bouncing light on a glossy surface.
 * Emission: Add support for emissive materials by storing emission data in a separate voxel field. During ray marching, if we hit an emissive voxel, we can add its emission contribution to the final lighting. This allows for dynamic light sources that can be placed in the scene without needing to be baked into lightmaps.
 * Support for multiple light sources: Extend the system to handle multiple dynamic lights, each with their own contribution to the voxel lighting. This will require some way to blend the contributions from different lights in the voxel field.
+* Shadow map field: Cache the raymarch "is lit" result per voxel. Use for cheap shadows, or to determine if this voxel radiates (early exit).
 
 ## Refactoring TODOs
 

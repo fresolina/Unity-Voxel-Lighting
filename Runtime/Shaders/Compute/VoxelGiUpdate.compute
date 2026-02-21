@@ -106,25 +106,16 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    float3 surfacePos = voxelCenter;
-    float3 surfaceNormal = GetNormalFromSDF(surfacePos);
-
-    // Get direct sun light. TODO: Optimize by sampling a shadowmap as a crude first step, then only raymarch if needed?
-    float3 uvwSurface = WorldToVoxelUV(surfacePos);
-    float4 albedoRoughness = _MaterialAlbedoRoughness.SampleLevel(linearClampSampler, uvwSurface, 0);
-
     // Get indirect light from GI field.
-    // Get corner position for more linear interpolation blur.
-    float3 irradianceSamplePos = surfacePos + surfaceNormal * (_VoxelSize * 0.5);
-    float3 irradianceUVW = WorldToVoxelUV(irradianceSamplePos);
-    float3 surfaceIrradiance = _IrradianceFieldHistory.SampleLevel(linearClampSampler, irradianceUVW, 0).rgb;
-
-    float3 sunStart = surfacePos + surfaceNormal * (_VoxelSize * 0.1);
-    float3 hitPos;
-    // In most cases visibility is 0 or 1, but in shadow edge cases it can be fractional like 0.1 when ray almost hits a surface. This adds softness to shadow edges.
-    float sunVisibility = RaymarchSDF(sunStart, _DirectLightDir, hitPos);
-    float3 sunLight = _DirectLightColor.rgb * sunVisibility;
+    float3 surfaceIrradiance = _IrradianceFieldHistory.SampleLevel(pointClampSampler, uvw, 0).rgb;
+    // Get direct sun light
     // TODO: Support another direct light source, like a flashlight.
+    // TODO: Optimize by sampling a shadowmap as a crude first step, then only raymarch if needed?
+    float3 hitPos;
+    float sunVisibility = RaymarchSDF(voxelCenter, _DirectLightDir, hitPos);
+    float3 sunLight = _DirectLightColor.rgb * sunVisibility;
+    // Get surface albedo and roughness
+    float4 albedoRoughness = _MaterialAlbedoRoughness.SampleLevel(pointClampSampler, uvw, 0);
 
     // Radiate incoming light (sun + indirect) modulated by surface albedo and roughness.
     // TODO: Modulate by roughness and light direction. 0 roughness = 100% reflection * (N.L).
@@ -145,17 +136,27 @@ void CSComputeIrradiance(uint3 id : SV_DispatchThreadID)
     float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
     float3 uvw = WorldToVoxelUV(voxelCenter);
     // Abort if inside geometry.
-    if (_DistanceField.SampleLevel(pointClampSampler, uvw, 0).r <= 0) return;
+    half dist = _DistanceField.SampleLevel(pointClampSampler, uvw, 0).r;
+    if (dist < 0) {
+        _IrradianceFieldWrite[id] = 0;
+        return;
+    }
+    bool isAir = (dist > _VoxelSize.x);
 
     // Shoot cosine-weighted rays aligned to the surface normal.
     float3 incomingLight = float3(0, 0, 0);
     float3 surfaceNormal = GetNormalFromSDF(voxelCenter);
     uint rayCount = max(_RaysPerFrame, 1u);
 
-    [loop]
+    [loop] // TODO: Change to [unroll] and rayCount to compile time constant (1=Mobile, 4=PC)
     for (uint rayIndex = 0u; rayIndex < rayCount; rayIndex++) {
         float2 noise2 = GetBlueNoise2(_BlueNoiseTex, id, _FrameCount, rayIndex);
-        float3 rayDir = CosineSampleHemisphere(surfaceNormal, noise2);
+        half3 rayDir;
+        if (isAir) {
+            rayDir = CosineSampleHemisphere(surfaceNormal, noise2);
+        } else {
+            rayDir = GetRandomDirectionFromNoise2(noise2);
+        }
 
         float3 hitPos;
         float lit = RaymarchSDF(voxelCenter, rayDir, hitPos);
@@ -165,7 +166,7 @@ void CSComputeIrradiance(uint3 id : SV_DispatchThreadID)
             incomingLight += _RadianceField.SampleLevel(linearClampSampler, surfaceUVW, 0).rgb;
         } else {
             // No hit means we get sky light.
-            incomingLight += _SkyColor;
+            incomingLight += _SkyColor * lit;
         }
     }
 

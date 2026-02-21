@@ -29,11 +29,7 @@ namespace Lotec.Lighting.Editor {
             if (baker == null)
                 return;
 
-            if (!baker.TryBake(out string error)) {
-                EditorUtility.DisplayDialog("Bake Failed", $"VoxelLighting Baker bake failed:\n{error}", "OK");
-                Debug.LogError($"VoxelLighting Baker bake failed: {error}", baker);
-                return;
-            }
+            baker.Bake();
 
             Debug.Log("VoxelLighting Baker bake completed successfully.", baker);
             string basePath = baker.assetPath;

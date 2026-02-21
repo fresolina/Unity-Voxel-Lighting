@@ -2,8 +2,9 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
 {
     Properties
     {
-        _BaseColor ("Base Color", Color) = (1,1,1,1)
         _BaseMap ("Base Map", 2D) = "white" {}
+        _BaseColor ("Base Color", Color) = (1,1,1,1)
+        _BumpMap ("Normal Map", 2D) = "bump" {}
         _Roughness ("Roughness", Range(0,1)) = 1.0
     }
 
@@ -17,9 +18,10 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             Tags { "LightMode" = "UniversalForward" }
 
             HLSLPROGRAM
+            #pragma target 3.0
             #pragma vertex vert
             #pragma fragment frag
-            #pragma target 3.0
+            #pragma shader_feature _NORMALMAP
 
             // URP
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
@@ -38,36 +40,64 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             #pragma multi_compile SDF_AO_OFF SDF_AO_LQ SDF_AO_HQ
 
             CBUFFER_START(UnityPerMaterial)
+                TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
+                TEXTURE2D(_BumpMap); SAMPLER(sampler_BumpMap);
                 float4 _BaseColor;
-                TEXTURE2D(_BaseMap);
-                SAMPLER(sampler_BaseMap);
                 float _Roughness;
             CBUFFER_END
 
-            struct Attributes
-            {
+            struct v {
                 float4 positionOS : POSITION;
                 float3 normalOS   : NORMAL;
                 float2 uv         : TEXCOORD0;
+                #ifdef _NORMALMAP
+                    float4 tangent : TANGENT;
+                #endif
             };
 
-            struct Varyings
-            {
+            struct v2f {
                 float4 positionHCS : SV_POSITION;
+                float2 uv          : TEXCOORD0;
                 float3 positionWS  : TEXCOORD1;
-                float3 normalWS    : TEXCOORD2;
-                float2 uv          : TEXCOORD3;
+                #ifdef _NORMALMAP
+                    half3 normal  : TEXCOORD2;
+                    half3 tangent : TEXCOORD3;
+                    half3 bitangent: TEXCOORD4;
+                #else
+                    half3 normalWS: TEXCOORD2;
+                #endif
             };
 
-            Varyings vert(Attributes IN)
-            {
-                Varyings OUT;
+            v2f vert(v IN) {
+                v2f OUT;
                 OUT.positionWS = TransformObjectToWorld(IN.positionOS.xyz);
-                OUT.normalWS = TransformObjectToWorldNormal(IN.normalOS);
+                #ifdef _NORMALMAP
+                    OUT.normal = TransformObjectToWorldNormal(IN.normalOS);
+                    OUT.tangent = normalize(TransformObjectToWorldDir(IN.tangent.xyz));
+                    float tangentSign = IN.tangent.w * GetOddNegativeScale();
+                    OUT.bitangent = cross(OUT.normal, OUT.tangent) * tangentSign;
+                #else
+                    OUT.normalWS = TransformObjectToWorldNormal(IN.normalOS);
+                #endif
                 OUT.uv = IN.uv;
                 OUT.positionHCS = TransformWorldToHClip(OUT.positionWS);
 
                 return OUT;
+            }
+
+            // Get pixel normal, either from normal map or interpolated vertex normal if no normal map is used.
+            half3 GetNormal(v2f input) {
+                #ifdef _NORMALMAP
+                    // Convert tangent space normal from normal map to world space.
+                    half4 normSample = SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, input.uv);
+                    half3 normTex = UnpackNormal(normSample);
+                    half3x3 TBN = half3x3(normalize(input.tangent),
+                                          normalize(input.bitangent),
+                                          normalize(input.normal));
+                    return normalize(TransformTangentToWorld(normTex, TBN));
+                #else
+                    return normalize(input.normalWS);
+                #endif
             }
 
             // Default to SDF if no keyword is set
@@ -81,11 +111,11 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 #endif
             }
 
-            half4 frag(Varyings IN) : SV_Target
+            half4 frag(v2f IN) : SV_Target
             {
                 Light light = GetMainLight();
-                float3 N = normalize(IN.normalWS);
-                float3 L = normalize(light.direction);
+                half3 N = GetNormal(IN);
+                half3 L = normalize(light.direction);
 
                 // Self shadowing factor
                 float ndotl = saturate(dot(N, L));
@@ -95,8 +125,8 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                     shadow = GetShadow(light, IN.positionWS, N);
 
                 // Albedo: texture modulated by base color
-                float3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
-                float3 albedo = _BaseColor.rgb * texAlbedo;
+                half3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
+                half3 albedo = _BaseColor.rgb * texAlbedo;
 
                 // Simple Blinn-Phong specular modulated by roughness (1 = very rough -> no specular)
                 // float3 V = normalize(_WorldSpaceCameraPos - IN.positionWS);
@@ -109,7 +139,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
 
                 // float3 lit = albedo * gi; // DEBUG: Indirect lit only for testing
-                float3 lit =
+                half3 lit =
                     albedo * light.color * ndotl * shadow // Direct lit
                     + albedo * gi * ao // Indirect lit (ambient occlusion from SDF)
                     // + light.color * spec * shadow // Specular lit
