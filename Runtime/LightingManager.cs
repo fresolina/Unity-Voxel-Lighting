@@ -68,11 +68,8 @@ namespace Lotec.Lighting {
             if (_giUpdater.Volume == null) {
                 _giUpdater.Volume = Volume;
             }
-            if (_giUpdater.MaterialFieldAlbedoRoughness == null) {
-                _giUpdater.MaterialFieldAlbedoRoughness = Volume.materialAlbedoRoughnessTexture;
-            }
-            if (_giUpdater.MaterialFieldEmissionMetallic == null) {
-                _giUpdater.MaterialFieldEmissionMetallic = Volume.materialEmissionMetallicTexture;
+            if (_giUpdater.MaterialFieldAlbedoIntensity == null) {
+                _giUpdater.MaterialFieldAlbedoIntensity = Volume.materialAlbedoIntensityTexture;
             }
             if (_giUpdater.SurfaceDistanceFieldHighRes == null) {
                 _giUpdater.SurfaceDistanceFieldHighRes = Volume.sdfHiresTexture;

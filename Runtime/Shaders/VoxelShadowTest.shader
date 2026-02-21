@@ -6,6 +6,9 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
         _BaseColor ("Base Color", Color) = (1,1,1,1)
         _BumpMap ("Normal Map", 2D) = "bump" {}
         _Roughness ("Roughness", Range(0,1)) = 1.0
+        [Toggle] _Emission ("Emission", Float) = 0.0
+        _EmissionMap ("Emission Map", 2D) = "white" {}
+        [HDR] _EmissionColor ("Emission Color", Color) = (1,1,1,1)
     }
 
     SubShader
@@ -44,6 +47,9 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 TEXTURE2D(_BumpMap); SAMPLER(sampler_BumpMap);
                 float4 _BaseColor;
                 float _Roughness;
+                float _Emission;
+                TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
+                float4 _EmissionColor;
             CBUFFER_END
 
             struct v {

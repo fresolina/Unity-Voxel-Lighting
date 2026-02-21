@@ -13,6 +13,7 @@
 // Wall thickness 0.5, voxel size 0.16: requires 0.02
 // TODO: Calculate and set this from C# side automatically.
 #define EPSILON 0.04
+#define EMISSION_INTENSITY_MAX 1024.0
 
 #include "../Includes/Math.hlsl"
 #include "../Includes/Volume.hlsl"
@@ -23,8 +24,7 @@
 // --- RESOURCES ---
 
 // Inputs (Read Only)
-Texture3D<float4> _MaterialAlbedoRoughness; // RGB = Albedo, A = Roughness
-Texture3D<float4> _MaterialEmissionMetallic; // RGB = Emission, A = Metallic
+Texture3D<float4> _MaterialAlbedoIntensity; // RGB = Albedo, A = Emission Intensity
 Texture3D<float> _DistanceField; // Low-res
 
 // GI field buffers
@@ -76,6 +76,11 @@ float RaymarchSDF(float3 voxelCenter, float3 rayDir, out float3 hitPos) {
     return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, 0, MAX_SDF_DIST, EPSILON, 0.01, 64, 0.5, hitPos);
 }
 
+float DecodeEmissionIntensityFrom8Bit(float encodedIntensity) {
+    float t = saturate(encodedIntensity);
+    return exp2(t * log2(1.0 + EMISSION_INTENSITY_MAX)) - 1.0;
+}
+
 // --- DEBUG: Clear Kernel ---
 RWTexture3D<float4> _ClearTarget;
 [numthreads(8,8,8)]
@@ -114,13 +119,13 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
     float3 hitPos;
     float sunVisibility = RaymarchSDF(voxelCenter, _DirectLightDir, hitPos);
     float3 sunLight = _DirectLightColor.rgb * sunVisibility;
-    // Get surface albedo and roughness
-    float4 albedoRoughness = _MaterialAlbedoRoughness.SampleLevel(pointClampSampler, uvw, 0);
+    // Get surface albedo and emissive intensity (alpha is 8-bit log-encoded intensity)
+    float4 albedoIntensity = _MaterialAlbedoIntensity.SampleLevel(pointClampSampler, uvw, 0);
+    float emissionIntensity = DecodeEmissionIntensityFrom8Bit(albedoIntensity.a);
+    float3 emissiveLight = albedoIntensity.rgb * emissionIntensity;
 
-    // Radiate incoming light (sun + indirect) modulated by surface albedo and roughness.
-    // TODO: Modulate by roughness and light direction. 0 roughness = 100% reflection * (N.L).
-    // float3 outgoingLight = (surfaceIrradiance + sunLight) * (albedoRoughness.rgb * LOTEC_MATH_INV_PI);
-    float3 outgoingLight = (surfaceIrradiance + sunLight) * (albedoRoughness.rgb);
+    // Radiate reflected incoming light plus emissive contribution.
+    float3 outgoingLight = ((surfaceIrradiance + sunLight) * albedoIntensity.rgb) + emissiveLight;
     _RadianceFieldWrite[id] = float4(outgoingLight, 1.0);
 }
 
@@ -196,6 +201,9 @@ void CSBlurIrradiance(uint3 id : SV_DispatchThreadID)
     float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
     float3 uvwCenter = WorldToVoxelUV(voxelCenter);
     float3 uvwHalf = (_VoxelSize * 0.5) * rcp(max(_VolumeSize, 1e-6));
+
+    // _IrradianceFieldFinal[id] = _IrradianceFieldInput.SampleLevel(linearClampSampler, uvwCenter, 0);
+    // return;
 
     float3 sum = 0.0;
     sum += _IrradianceFieldInput.SampleLevel(linearClampSampler, uvwCenter + float3(-uvwHalf.x, -uvwHalf.y, -uvwHalf.z), 0).rgb;

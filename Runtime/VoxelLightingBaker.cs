@@ -87,18 +87,17 @@ namespace Lotec.Lighting {
             }
             volume.occlusionBitmaskTexture = bakedBitmask;
 
-            // Material baker produces two lower-res material textures (albedo+roughness, emission+metallic)
+            // Material baker produces one lower-res packed material texture (albedo+emissionIntensity)
             if (_materialBaker.MaterialBakeCompute == null) {
                 error = "Material Bake Compute is not assigned to MaterialBaker.";
                 return;
             }
-            string matErr = _materialBaker.Bake(volume, out Texture3D bakedAlbedoRoughness, out Texture3D bakedEmissionMetallic, LowresDownscaleFactor);
+            string matErr = _materialBaker.Bake(volume, out Texture3D bakedAlbedoIntensity, LowresDownscaleFactor);
             if (!string.IsNullOrEmpty(matErr)) {
                 error = "MaterialBaker failed: " + matErr;
                 return;
             }
-            volume.materialAlbedoRoughnessTexture = bakedAlbedoRoughness;
-            volume.materialEmissionMetallicTexture = bakedEmissionMetallic;
+            volume.materialAlbedoIntensityTexture = bakedAlbedoIntensity;
         }
     }
 }

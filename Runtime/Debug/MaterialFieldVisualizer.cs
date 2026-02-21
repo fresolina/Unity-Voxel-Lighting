@@ -3,9 +3,6 @@ using UnityEngine;
 namespace Lotec.Lighting {
     [ExecuteAlways]
     public class MaterialFieldVisualizer : VoxelFieldVisualizerBase {
-        public enum FieldType { AlbedoRoughness, EmissionMetallic }
-        public FieldType field = FieldType.AlbedoRoughness;
-
         public LightingVolume Volume => _sdfShaderGlobals != null ? _sdfShaderGlobals.volume : null;
         SdfShaderGlobals _sdfShaderGlobals;
 
@@ -14,9 +11,7 @@ namespace Lotec.Lighting {
                 _sdfShaderGlobals = FindAnyObjectByType<SdfShaderGlobals>();
 
             if (Volume == null) return null;
-            return (field == FieldType.EmissionMetallic)
-                ? Volume.materialEmissionMetallicTexture
-                : Volume.materialAlbedoRoughnessTexture;
+            return Volume.materialAlbedoIntensityTexture;
         }
 
         protected override bool TryGetBounds(out Bounds bounds) {
@@ -33,7 +28,7 @@ namespace Lotec.Lighting {
         }
 
         protected override Color ProcessColor(Color c) {
-            c.a = 1f; // show RGB only; alpha channel holds roughness
+            c.a = 1f; // show RGB only; alpha channel holds emission intensity
             return c;
         }
     }

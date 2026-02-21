@@ -47,14 +47,10 @@ namespace Lotec.Lighting.Editor {
                 string bitmaskPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.occlusionBitmaskTexture.name}.asset");
                 SaveAsset(baker.targetSdfVolume.occlusionBitmaskTexture, bitmaskPath, "Occlusion Bitmask");
             }
-            // Save baked Material textures (albedo+roughness and emission+metallic)
-            if (baker.targetSdfVolume.materialAlbedoRoughnessTexture != null && !string.IsNullOrEmpty(basePath)) {
-                string matAPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.materialAlbedoRoughnessTexture.name}.asset");
-                SaveAsset(baker.targetSdfVolume.materialAlbedoRoughnessTexture, matAPath, "Material AlbedoRoughness");
-            }
-            if (baker.targetSdfVolume.materialEmissionMetallicTexture != null && !string.IsNullOrEmpty(basePath)) {
-                string matBPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.materialEmissionMetallicTexture.name}.asset");
-                SaveAsset(baker.targetSdfVolume.materialEmissionMetallicTexture, matBPath, "Material EmissionMetallic");
+            // Save baked packed material texture (albedo+emissionIntensity)
+            if (baker.targetSdfVolume.materialAlbedoIntensityTexture != null && !string.IsNullOrEmpty(basePath)) {
+                string matPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.materialAlbedoIntensityTexture.name}.asset");
+                SaveAsset(baker.targetSdfVolume.materialAlbedoIntensityTexture, matPath, "Material AlbedoIntensity");
             }
         }
 

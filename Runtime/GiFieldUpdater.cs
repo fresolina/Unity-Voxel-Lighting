@@ -22,8 +22,7 @@ namespace Lotec.Lighting {
         [Tooltip("SDF AO mode: OFF, LQ (2 samples), HQ (4 samples).")]
         [SerializeField] AoQuality _aoQuality = AoQuality.SDF_AO_HQ;
 
-        public Texture3D MaterialFieldAlbedoRoughness { get; set; }
-        public Texture3D MaterialFieldEmissionMetallic { get; set; }
+        public Texture3D MaterialFieldAlbedoIntensity { get; set; }
         public Texture3D SurfaceDistanceFieldHighRes { get; set; }
         public Texture3D SurfaceDistanceFieldLowRes { get; set; }
         public ComputeShader GiComputeShader { get => _giComputeShader; set => _giComputeShader = value; }
@@ -56,8 +55,7 @@ namespace Lotec.Lighting {
         static readonly int s_irradianceFieldFinal = Shader.PropertyToID("_IrradianceFieldFinal");
         static readonly int s_irradianceField = Shader.PropertyToID("_IrradianceFieldHistory");
         static readonly int s_radianceTextureSize = Shader.PropertyToID("_RadianceTextureSize");
-        static readonly int s_materialAlbedo = Shader.PropertyToID("_MaterialAlbedoRoughness");
-        static readonly int s_materialEmission = Shader.PropertyToID("_MaterialEmissionMetallic");
+        static readonly int s_materialAlbedoIntensity = Shader.PropertyToID("_MaterialAlbedoIntensity");
         static readonly int s_distanceField = Shader.PropertyToID("_DistanceField");
         static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
@@ -192,7 +190,7 @@ namespace Lotec.Lighting {
 
         void DispatchGIUpdate() {
             // Shared parameters
-            Vector3 resolution = MaterialFieldAlbedoRoughness.GetResolution();
+            Vector3 resolution = MaterialFieldAlbedoIntensity.GetResolution();
             float voxelSize = (float)Volume.Bounds.size.x / resolution.x;
             _giComputeShader.SetVector(s_voxelSize, voxelSize * Vector4.one);
             _giComputeShader.SetInt(s_frameCount, Time.frameCount);
@@ -209,8 +207,7 @@ namespace Lotec.Lighting {
             _giComputeShader.SetTexture(_radianceKernel, s_radianceFieldWrite, _radianceField);
             _giComputeShader.SetTexture(_radianceKernel, s_irradianceField, IrradianceRead);
             _giComputeShader.SetTexture(_radianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
-            _giComputeShader.SetTexture(_radianceKernel, s_materialAlbedo, MaterialFieldAlbedoRoughness);
-            if (MaterialFieldEmissionMetallic) _giComputeShader.SetTexture(_radianceKernel, s_materialEmission, MaterialFieldEmissionMetallic);
+            _giComputeShader.SetTexture(_radianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
             _giComputeShader.Dispatch(_radianceKernel, groupsX, groupsY, groupsZ);
 
             // Irradiance pass
@@ -218,8 +215,7 @@ namespace Lotec.Lighting {
             _giComputeShader.SetTexture(_irradianceKernel, s_irradianceFieldWrite, IrradianceFinal);
             _giComputeShader.SetTexture(_irradianceKernel, s_irradianceField, IrradianceRead);
             _giComputeShader.SetTexture(_irradianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
-            _giComputeShader.SetTexture(_irradianceKernel, s_materialAlbedo, MaterialFieldAlbedoRoughness);
-            if (MaterialFieldEmissionMetallic) _giComputeShader.SetTexture(_irradianceKernel, s_materialEmission, MaterialFieldEmissionMetallic);
+            _giComputeShader.SetTexture(_irradianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
             _giComputeShader.SetTexture(_irradianceKernel, s_blueNoiseTex, _blueNoiseTexture);
             _giComputeShader.Dispatch(_irradianceKernel, groupsX, groupsY, groupsZ);
 
@@ -269,8 +265,8 @@ namespace Lotec.Lighting {
             Shader.SetGlobalTexture(s_irradianceFieldFinal, _irradianceFieldFinal);
 
             // Update these every frame in case the volume moves
-            Vector3 resolution = MaterialFieldAlbedoRoughness.GetResolution();
-            float voxelSize = MaterialFieldAlbedoRoughness.width / resolution.x;
+            Vector3 resolution = MaterialFieldAlbedoIntensity.GetResolution();
+            float voxelSize = MaterialFieldAlbedoIntensity.width / resolution.x;
             Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector4.one);
         }
 
