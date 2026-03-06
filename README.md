@@ -8,9 +8,13 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
   a) Accuracy mode: Ray marching on every pixel.
   b) Performance mode: Occlusion bitmask in the voxel field.
 
-* For indirect lighting in the GI system, how about prebaking the irradiance into a 2D texture using uv2. The difference between Unity lightmap being we only bake the indirect irradiance, not the direct light. Could this be an OK solution, or is this actually what Unity does?
-
 ## TODO
+
+Refactorera ut LPV från path tracing till två olika compute shaders.
+
+* Sen: Inject _SkyColor med top down...
+Add: Top-Down Sky Sweep (often called a Sky Volume or Voxel Heightmap) for fast approximate GI from the sky. Inject into Radiance field.
+* option: Turn off realtime shadow
 
 * Emission: Add support for emissive materials by storing emission data in a separate voxel field. During ray marching, if we hit an emissive voxel, we can add its emission contribution to the final lighting. This allows for dynamic light sources that can be placed in the scene without needing to be baked into lightmaps.
 * Material roughness: Store dominant radiance direction in a second field, for bouncing light on a glossy surface.

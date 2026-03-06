@@ -10,7 +10,7 @@ namespace Lotec.Lighting {
     public class VoxelLightingBaker : MonoBehaviour {
         [Tooltip("Downscale factor to produce lower-res voxel field for material and GI")]
         [Range(1, 6)]
-        public int LowresDownscaleFactor = 4;
+        public int LowresDownscaleFactor = 2;
         [Header("Bakers")]
         [SerializeField] SdfBaker _sdfBaker = new SdfBaker();
         [SerializeField] OcclusionBitmaskBaker _occlusionBitmaskBaker = new OcclusionBitmaskBaker();
