@@ -2,8 +2,9 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
-    [System.Serializable]
-    public class GiFieldUpdater {
+    [DisallowMultipleComponent]
+    [ExecuteInEditMode]
+    public class GiFieldUpdater : MonoBehaviour {
         [SerializeField] ComputeShader _giComputeShader;
         [SerializeField] bool _continuousGi;
         [Tooltip("Consider GI stable after this many samples. Stops GI updates until a lighting change is detected or continuousGI is enabled.")]
@@ -58,7 +59,6 @@ namespace Lotec.Lighting {
         Vector3 _radianceTextureResolution;
         int _irradianceFieldSampleCount;
         LightSettings _prevLightSettings;
-        Color _skyColor;
 
         #region Shader Property IDs
         // Property IDs local to gi update compute shader
@@ -92,13 +92,25 @@ namespace Lotec.Lighting {
 
         public LightingVolume Volume { get; set; }
 
-        public void Update() {
+        void Update() {
             ApplyAoShaderGlobals();
             ApplyAoShaderKeywords();
 
             if (Volume == null || _giComputeShader == null) {
                 Debug.LogWarning("GI Field Updater is missing required references; skipping GI update.");
                 return;
+            }
+
+            if (Volume == null) return;
+
+            if (MaterialFieldAlbedoIntensity == null) {
+                MaterialFieldAlbedoIntensity = Volume.materialAlbedoIntensityTexture;
+            }
+            if (SurfaceDistanceFieldHighRes == null) {
+                SurfaceDistanceFieldHighRes = Volume.sdfHiresTexture;
+            }
+            if (SurfaceDistanceFieldLowRes == null) {
+                SurfaceDistanceFieldLowRes = Volume.sdfLowresTexture;
             }
 
             if (HasLightChanged()) {
@@ -120,6 +132,10 @@ namespace Lotec.Lighting {
             };
             _isEvenFrame = !_isEvenFrame;
             SetGlobalShaderVariables();
+        }
+
+        void OnDisable() {
+            ReleaseBuffers();
         }
 
         bool HasLightChanged() {
@@ -282,7 +298,6 @@ namespace Lotec.Lighting {
             }
 
             Color sky = RenderSettings.ambientMode == AmbientMode.Flat ? RenderSettings.ambientLight : RenderSettings.ambientSkyColor;
-            _skyColor = sky;
             _giComputeShader.SetVector(s_skyColor, (Vector4)sky);
         }
 
