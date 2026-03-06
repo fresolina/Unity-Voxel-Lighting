@@ -19,17 +19,6 @@ namespace Lotec.Lighting {
         [Tooltip("LPV light retention per iteration. Injection uses (1 - decay).")]
         [SerializeField] float _lpvDecay = 0.97f;
 
-        [Header("SDF AO")]
-        [Min(0.000001f)]
-        [Tooltip("How far each raymarching step is in world units.")]
-        [SerializeField] float _aoStep = 0.08f;
-        [Min(0f)]
-        [Tooltip("AO darkening strength.")]
-        [SerializeField] float _aoIntensity = 1.95f;
-        public enum AoQuality { SDF_AO_OFF = 0, SDF_AO_LQ = 1, SDF_AO_HQ = 2 }
-        [Tooltip("SDF AO mode: OFF, LQ (2 samples), HQ (4 samples).")]
-        [SerializeField] AoQuality _aoQuality = AoQuality.SDF_AO_HQ;
-
         public enum LightingMethod {
             PathTracing = 0,
             LPV = 1,
@@ -42,9 +31,6 @@ namespace Lotec.Lighting {
         public Texture2D BlueNoiseTexture { get => _blueNoiseTexture; set => _blueNoiseTexture = value; }
         public LightingMethod GiLightingMethod { get => _lightingMethod; set => _lightingMethod = value; }
         public float LpvDecay { get => _lpvDecay; set => _lpvDecay = Mathf.Clamp01(value); }
-        public float AoStep { get => _aoStep; set => _aoStep = Mathf.Max(1e-6f, value); }
-        public float AoIntensity { get => _aoIntensity; set => _aoIntensity = Mathf.Max(0f, value); }
-        public AoQuality AoSampleQuality { get => _aoQuality; set => _aoQuality = value; }
 
         RenderTexture _radianceField;
         RenderTexture _irradianceFieldA;  // Ping
@@ -82,8 +68,6 @@ namespace Lotec.Lighting {
         static readonly int s_lpvDecay = Shader.PropertyToID("_LpvDecay");
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
-        static readonly int s_aoStep = Shader.PropertyToID("_SdfAoStep");
-        static readonly int s_aoIntensity = Shader.PropertyToID("_SdfAoIntensity");
         #endregion
 
         public RenderTexture IrradianceFinal => _isEvenFrame ? _irradianceFieldA : _irradianceFieldB;
@@ -93,9 +77,6 @@ namespace Lotec.Lighting {
         public LightingVolume Volume { get; set; }
 
         void Update() {
-            ApplyAoShaderGlobals();
-            ApplyAoShaderKeywords();
-
             if (Volume == null || _giComputeShader == null) {
                 Debug.LogWarning("GI Field Updater is missing required references; skipping GI update.");
                 return;
@@ -310,35 +291,6 @@ namespace Lotec.Lighting {
             Vector3 resolution = MaterialFieldAlbedoIntensity.GetResolution();
             float voxelSize = MaterialFieldAlbedoIntensity.width / resolution.x;
             Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector4.one);
-        }
-
-        void ApplyAoShaderKeywords() {
-            switch (_aoQuality) {
-                case AoQuality.SDF_AO_OFF:
-                    Shader.EnableKeyword("SDF_AO_OFF");
-                    Shader.DisableKeyword("SDF_AO_LQ");
-                    Shader.DisableKeyword("SDF_AO_HQ");
-                    break;
-                case AoQuality.SDF_AO_LQ:
-                    Shader.DisableKeyword("SDF_AO_OFF");
-                    Shader.EnableKeyword("SDF_AO_LQ");
-                    Shader.DisableKeyword("SDF_AO_HQ");
-                    break;
-                case AoQuality.SDF_AO_HQ:
-                    Shader.DisableKeyword("SDF_AO_OFF");
-                    Shader.DisableKeyword("SDF_AO_LQ");
-                    Shader.EnableKeyword("SDF_AO_HQ");
-                    break;
-            }
-
-            // Backward compatibility cleanup for old AO sample keywords.
-            Shader.DisableKeyword("SDF_AO_SAMPLES_2");
-            Shader.DisableKeyword("SDF_AO_SAMPLES_6");
-        }
-
-        void ApplyAoShaderGlobals() {
-            Shader.SetGlobalFloat(s_aoStep, _aoStep);
-            Shader.SetGlobalFloat(s_aoIntensity, _aoIntensity);
         }
     }
 
