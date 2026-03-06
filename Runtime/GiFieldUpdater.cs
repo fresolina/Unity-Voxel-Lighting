@@ -104,6 +104,8 @@ namespace Lotec.Lighting {
                 SetDirectLightParams();
                 DispatchGIUpdate();
                 _irradianceFieldSampleCount++;
+                _isEvenFrame = !_isEvenFrame;
+                SetGlobalShaderVariables();
             }
 
             _prevLightSettings = new LightSettings {
@@ -111,8 +113,6 @@ namespace Lotec.Lighting {
                 sunColor = RenderSettings.sun != null ? (Vector4)RenderSettings.sun.color * RenderSettings.sun.intensity : Vector4.zero,
                 skyColor = RenderSettings.ambientMode == AmbientMode.Flat ? (Vector4)RenderSettings.ambientLight : (Vector4)RenderSettings.ambientSkyColor
             };
-            _isEvenFrame = !_isEvenFrame;
-            SetGlobalShaderVariables();
         }
 
         void OnDisable() {

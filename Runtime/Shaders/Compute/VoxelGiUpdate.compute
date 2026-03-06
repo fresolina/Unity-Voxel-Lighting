@@ -202,14 +202,7 @@ void CSComputeIrradianceLPV(uint3 id : SV_DispatchThreadID)
     // Inverted decay (1 - decay) is used as radiance injection weight.
     float3 injectedRadiance = _RadianceField.Load(int4(id, 0)).rgb * (1.0 - _LpvDecay);
     float3 incomingLight = max((propagated * _LpvDecay) + injectedRadiance, 0.0);
-
-    float4 history = _IrradianceFieldHistory.Load(int4(id, 0));
-    float3 oldColor = history.rgb;
-    // Temporal accumulation: high _MaxSamples converges slower but is more stable.
-    float weight = 1.0f / _MaxSamples;
-    float3 finalColor = lerp(oldColor, incomingLight, weight);
-
-    _IrradianceFieldWrite[id] = float4(finalColor, 1.0);
+    _IrradianceFieldWrite[id] = float4(incomingLight, 1.0);
 }
 
 // ----------------------------------------------------------
