@@ -2,6 +2,8 @@
 #ifndef LOTEC_MATH_INCLUDED
 #define LOTEC_MATH_INCLUDED
 
+#define EMISSION_INTENSITY_MAX 1024.0
+
 static const float LOTEC_MATH_PI = 3.14159265f;
 static const float LOTEC_MATH_INV_PI = 0.318309886f;
 static const uint BLUE_NOISE_SIZE = 128;
@@ -143,6 +145,11 @@ float3 CosineSampleHemisphere(float3 normal, float2 u) {
 /// Compute luminance of a color via Rec. 709 luminance coefficients.
 float Luminance(float3 color) {
     return dot(color, float3(0.2126, 0.7152, 0.0722));
+}
+
+float DecodeEmissionIntensityFrom8Bit(float encodedIntensity) {
+    float t = saturate(encodedIntensity);
+    return exp2(t * log2(1.0 + EMISSION_INTENSITY_MAX)) - 1.0;
 }
 
 // Generates a value 0.0 -> 1.0 that is spatially balanced

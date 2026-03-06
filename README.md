@@ -15,6 +15,7 @@ Refactorera ut LPV från path tracing till två olika compute shaders.
 * Sen: Inject _SkyColor med top down...
 Add: Top-Down Sky Sweep (often called a Sky Volume or Voxel Heightmap) for fast approximate GI from the sky. Inject into Radiance field.
 * option: Turn off realtime shadow
+* Nåt verkar fel på sdf shadow, den förstör normalmap.
 
 * Emission: Add support for emissive materials by storing emission data in a separate voxel field. During ray marching, if we hit an emissive voxel, we can add its emission contribution to the final lighting. This allows for dynamic light sources that can be placed in the scene without needing to be baked into lightmaps.
 * Material roughness: Store dominant radiance direction in a second field, for bouncing light on a glossy surface.
