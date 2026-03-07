@@ -7,8 +7,6 @@
 // --- CONSTANTS ---
 // LPV neighbor propagation factor
 #define LPV_PROPAGATION_STRENGTH 0.97
-// LPV midpoint occlusion threshold
-#define LPV_OCCLUSION_THRESHOLD 0.0
 
 #include "../Includes/Volume.hlsl"
 #include "../Includes/Fibonacci.hlsl"
@@ -162,6 +160,7 @@ void CSComputeIrradianceLPV(uint3 id : SV_DispatchThreadID)
         return;
     }
 
+    // Gather light from air neighbors. Skip neighbors inside geometry.
     float3 sum = 0.0;
     const int3 neighborOffsets[6] = {
         int3(1, 0, 0),
@@ -172,24 +171,24 @@ void CSComputeIrradianceLPV(uint3 id : SV_DispatchThreadID)
         int3(0, 0, -1)
     };
     float3 maxNeighbor = 0.0; // Track the brightest neighbor!
-
     [unroll]
     for (int i = 0; i < 6; i++) {
         int3 delta = neighborOffsets[i];
         int3 n = id + delta;
         if (any(n < 0) || any(n >= _RadianceTextureSize)) continue;
 
-        // Prevent light leaking through walls, by excluding neighbors inside geometry.
-        // float3 midPos = voxelCenter + float3(delta) * (_VoxelSize * 0.5);
-        float3 midPos = voxelCenter + float3(delta) * _VoxelSize;
+        // Prevent light bleed through walls by checking the SDF at the midpoint between the two voxels.
+        // If distance is < 0, weight is 0.0 (fully blocked).
+        // If distance is > a full voxel away, weight is 1.0 (fully open).
+        // If it's in between, fade. This removes squared blocky AO.
+        float3 midPos = voxelCenter + float3(delta) * (_VoxelSize * 0.5f);
         float midDist = SampleSDF(midPos);
-        if (midDist <= LPV_OCCLUSION_THRESHOLD)
-            continue;
+        float transferWeight = saturate(midDist / _VoxelSize.x);
+        if (transferWeight <= 0.0f) continue;
 
         float3 neighborLight = _IrradianceFieldHistory.Load(int4(n, 0)).rgb;
-        sum += neighborLight;
-        // Keep track of the absolute brightest light feeding into this voxel
-        maxNeighbor = max(maxNeighbor, neighborLight);
+        sum += neighborLight * transferWeight;
+        maxNeighbor = max(maxNeighbor, neighborLight * transferWeight);
     }
 
     // Add lights from neighbors together, but clamp to brightest neighbor.
