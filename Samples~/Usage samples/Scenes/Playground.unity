@@ -748,7 +748,7 @@ Transform:
   m_LocalScale: {x: 0.05, y: 0.05, z: 0.05}
   m_ConstrainProportionsScale: 1
   m_Children: []
-  m_Father: {fileID: 1127919669}
+  m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!135 &659102739
 SphereCollider:
@@ -969,7 +969,7 @@ Light:
   serializedVersion: 12
   m_Type: 1
   m_Color: {r: 1, g: 0.99825907, b: 0.9213836, a: 1}
-  m_Intensity: 1
+  m_Intensity: 0.5
   m_Range: 10
   m_SpotAngle: 30
   m_InnerSpotAngle: 21.80208
@@ -1031,13 +1031,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 784264324}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.6427876, y: 0, z: 0, w: 0.7660445}
+  m_LocalRotation: {x: 0.16160385, y: 0, z: 0, w: 0.98685575}
   m_LocalPosition: {x: 0, y: 3.8, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 80, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 18.6, y: 0, z: 0}
 --- !u!114 &784264327
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1472,7 +1472,6 @@ Transform:
   - {fileID: 601257322}
   - {fileID: 16022736}
   - {fileID: 670863183}
-  - {fileID: 659102738}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &1127919670
@@ -2207,6 +2206,7 @@ GameObject:
   - component: {fileID: 1437948841}
   - component: {fileID: 1437948844}
   - component: {fileID: 1437948843}
+  - component: {fileID: 1437948845}
   m_Layer: 0
   m_Name: Lighting manager
   m_TagString: Untagged
@@ -2226,7 +2226,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 99c5355d30b95b848bc438aba6a5472d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.SdfShaderGlobals
-  volume: {fileID: 1127919670}
   shadowMaxDistance: 20
   shadowMaxSteps: 64
   shadowEpsilon: 0.001
@@ -2236,6 +2235,9 @@ MonoBehaviour:
   autoUpdate: 1
   fibonacciCheatIndices: {fileID: 2800000, guid: 4c3e0bbf57fbd74418ef35bf222d8bfb, type: 3}
   shadowMode: 0
+  _aoStep: 0.08
+  _aoIntensity: 1.95
+  _aoQuality: 0
 --- !u!4 &1437948842
 Transform:
   m_ObjectHideFlags: 0
@@ -2263,17 +2265,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9fedd48fb531db84b9fa6c40eae32ada, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.LightingManager
-  _giUpdater:
-    _giComputeShader: {fileID: 7200000, guid: 02f9a08ea0218754cac3ba8d03fd4a99, type: 3}
-    _continuousGi: 1
-    _maxSamples: 1
-    _raysPerFrame: 1
-    _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
-    _lightingMethod: 1
-    _lpvDecay: 0.998
-    _aoStep: 0.08
-    _aoIntensity: 1.4
-    _aoQuality: 0
+  _volume: {fileID: 1127919670}
+  _giUpdater: {fileID: 1437948845}
 --- !u!114 &1437948844
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2296,6 +2289,25 @@ MonoBehaviour:
   _materialBaker:
     MaterialBakeCompute: {fileID: 7200000, guid: 7f32bd09c6a495746a7840c188a184c4, type: 3}
   assetPath: Assets/VoxelLighting/Playground
+--- !u!114 &1437948845
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1437948840}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 511cad81882958d489e01a3d1e19706e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.GiFieldUpdater
+  _giComputeShader: {fileID: 7200000, guid: 02f9a08ea0218754cac3ba8d03fd4a99, type: 3}
+  _continuousGi: 1
+  _maxSamples: 90
+  _raysPerFrame: 1
+  _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
+  _lightingMethod: 1
+  _lpvDecay: 0.97
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0
@@ -3016,3 +3028,4 @@ SceneRoots:
   - {fileID: 1033441897}
   - {fileID: 1287967121}
   - {fileID: 1588789277}
+  - {fileID: 659102738}

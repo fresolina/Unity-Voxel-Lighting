@@ -3,21 +3,14 @@ using UnityEngine;
 namespace Lotec.Lighting {
     [ExecuteAlways]
     public class MaterialFieldVisualizer : VoxelFieldVisualizerBase {
-        public LightingVolume Volume => _sdfShaderGlobals != null ? _sdfShaderGlobals.volume : null;
-        SdfShaderGlobals _sdfShaderGlobals;
+        LightingVolume Volume => LightingManager.Instance.Volume;
 
         protected override Texture GetTexture() {
-            if (_sdfShaderGlobals == null)
-                _sdfShaderGlobals = FindAnyObjectByType<SdfShaderGlobals>();
-
             if (Volume == null) return null;
             return Volume.materialAlbedoIntensityTexture;
         }
 
         protected override bool TryGetBounds(out Bounds bounds) {
-            if (_sdfShaderGlobals == null)
-                _sdfShaderGlobals = FindAnyObjectByType<SdfShaderGlobals>();
-
             if (Volume == null) {
                 bounds = default;
                 return false;

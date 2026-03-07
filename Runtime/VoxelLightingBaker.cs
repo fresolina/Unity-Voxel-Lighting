@@ -17,14 +17,14 @@ namespace Lotec.Lighting {
         [SerializeField] MaterialBaker _materialBaker = new MaterialBaker();
         [Tooltip("Where to save the baked Texture3D asset(s) (must be under Assets/).")]
         public string assetPath = "Assets/VoxelLighting";
-        public LightingVolume targetSdfVolume => _sdfShaderGlobals.volume;
+        public LightingVolume targetSdfVolume => _lightingManager.Volume;
 
-        SdfShaderGlobals _sdfShaderGlobals;
+        LightingManager _lightingManager;
 
 #if UNITY_EDITOR
         void OnValidate() {
-            if (_sdfShaderGlobals == null)
-                _sdfShaderGlobals = FindAnyObjectByType<SdfShaderGlobals>();
+            if (_lightingManager == null)
+                _lightingManager = FindAnyObjectByType<LightingManager>();
         }
         void Reset() {
             // Editor fallback: search the project for a matching compute shader asset by name
@@ -62,21 +62,21 @@ namespace Lotec.Lighting {
 #endif
 
         public void Bake() {
-            LightingVolume volume = _sdfShaderGlobals.volume;
+            LightingVolume volume = _lightingManager.Volume;
             string error;
             if (volume == null) {
-                Debug.LogError("Target SdfVolume is not assigned.", _sdfShaderGlobals);
+                Debug.LogError("Target SdfVolume is not assigned.", _lightingManager);
                 return;
             }
 
             // Bake SDF fields.
             if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution, volume.BakeRoot.name, out Texture3D bakedSdf, out error)) {
-                Debug.LogError("SDF Bake failed: " + error, _sdfShaderGlobals);
+                Debug.LogError("SDF Bake failed: " + error, _lightingManager);
                 return;
             }
             volume.sdfHiresTexture = bakedSdf;
             if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution / LowresDownscaleFactor, volume.BakeRoot.name + "_Lowres", out bakedSdf, out error)) {
-                Debug.LogError("SDF Bake failed: " + error, _sdfShaderGlobals);
+                Debug.LogError("SDF Bake failed: " + error, _lightingManager);
                 return;
             }
             volume.sdfLowresTexture = bakedSdf;
@@ -95,6 +95,7 @@ namespace Lotec.Lighting {
             string matErr = _materialBaker.Bake(volume, out Texture3D bakedAlbedoIntensity, LowresDownscaleFactor);
             if (!string.IsNullOrEmpty(matErr)) {
                 error = "MaterialBaker failed: " + matErr;
+                Debug.LogError(error, _lightingManager);
                 return;
             }
             volume.materialAlbedoIntensityTexture = bakedAlbedoIntensity;

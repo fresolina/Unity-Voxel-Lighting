@@ -19,21 +19,15 @@ namespace Lotec.Lighting {
     [RequireComponent(typeof(SdfShaderGlobals))]
     [RequireComponent(typeof(GiFieldUpdater))]
     public class LightingManager : MonoBehaviour {
+        public static LightingManager Instance { get; private set; }
+
+        [Header("Source")]
+        [SerializeField] LightingVolume _volume;
         [SerializeField] GiFieldUpdater _giUpdater;
         SdfShaderGlobals _sdfShaderGlobals; // TODO: Merge SdfShaderGlobals into this class.
 
-        public LightingVolume Volume => _sdfShaderGlobals.volume;
+        public LightingVolume Volume => _volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
-
-#if UNITY_EDITOR
-        void Reset() {
-            _giUpdater = GetComponent<GiFieldUpdater>();
-        }
-#endif
-
-        void Awake() {
-            _sdfShaderGlobals = GetComponent<SdfShaderGlobals>();
-        }
 
         // Update is called once per frame
         void Update() {
@@ -41,14 +35,15 @@ namespace Lotec.Lighting {
         }
 
         void EnsureFieldsAssigned() {
+            Instance = this;
+            _sdfShaderGlobals = GetComponent<SdfShaderGlobals>();
+            _sdfShaderGlobals.Volume = _volume;
+
             if (_giUpdater == null) {
                 _giUpdater = GetComponent<GiFieldUpdater>();
                 if (_giUpdater == null) return;
             }
 
-            if (_sdfShaderGlobals == null) {
-                _sdfShaderGlobals = GetComponent<SdfShaderGlobals>();
-            }
             if (_giUpdater.Volume == null) {
                 _giUpdater.Volume = Volume;
             }
