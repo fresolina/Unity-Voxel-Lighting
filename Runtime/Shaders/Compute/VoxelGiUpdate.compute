@@ -1,4 +1,5 @@
 #pragma kernel CSComputeRadiance
+#pragma kernel CSComputeRadianceLPVSkySweep
 #pragma kernel CSComputeIrradiancePathTracing
 #pragma kernel CSComputeIrradianceLPV
 #pragma kernel CSBlurIrradiance
@@ -85,6 +86,36 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
     float3 safeAlbedo = albedoIntensity.rgb;
     float3 outgoingLight = ((surfaceIrradiance + sunLight) * safeAlbedo.rgb) + emissiveLight;
     _RadianceFieldWrite[id] = float4(outgoingLight, 1.0);
+}
+
+// ----------------------------------------------------------
+// LPV SKY SWEEP RADIANCE PASS
+// Inject top-down sky visibility directly into radiance field.
+// ----------------------------------------------------------
+[numthreads(8, 8, 1)]
+void CSComputeRadianceLPVSkySweep(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_RadianceTextureSize.x || id.y >= (uint)_RadianceTextureSize.z) return;
+
+    int maxY = (int)_RadianceTextureSize.y;
+    bool blocked = false;
+
+    // Sweep from top to bottom in this (x,z) column. (Unity world up = +Y)
+    for (int y = maxY - 1; y >= 0; --y) {
+        int3 cell = int3((int)id.x, y, (int)id.y);
+        float dist = _DistanceField.Load(int4(cell, 0)).r;
+
+        // A solid voxel blocks sky for everything below.
+        if (dist < 0.0) {
+            blocked = true;
+            continue;
+        }
+
+        if (!blocked) {
+            float3 currentRadiance = _RadianceFieldWrite[cell].rgb;
+            _RadianceFieldWrite[cell] = float4(currentRadiance + _SkyColor, 1.0);
+        }
+    }
 }
 
 // ----------------------------------------------------------
