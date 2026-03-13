@@ -10,10 +10,16 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
 
 ## TODO
 
-* Material roughness: Store dominant radiance direction in a second field, for bouncing light on a glossy surface.
-* Emission: Add support for emissive materials by storing emission data in a separate voxel field. During ray marching, if we hit an emissive voxel, we can add its emission contribution to the final lighting. This allows for dynamic light sources that can be placed in the scene without needing to be baked into lightmaps.
+* option: Turn off realtime shadow
+* Nåt verkar fel på sdf shadow, den förstör normalmap.
+* Fixa SDF Shadows, i vissa vinklar räcker inte 64 max steps, måste gå upp till 80.
 * Support for multiple light sources: Extend the system to handle multiple dynamic lights, each with their own contribution to the voxel lighting. This will require some way to blend the contributions from different lights in the voxel field.
 * Shadow map field: Cache the raymarch "is lit" result per voxel. Use for cheap shadows, or to determine if this voxel radiates (early exit).
+
+## TODO 2 PC
+
+* Emission: Separate emission from albedo field. Add emissive materials field that supports light being a different color than albedo.
+* Material roughness: Store material roughness, and dominant radiance direction in a second field, for bouncing light on a glossy surface.
 
 ## Refactoring TODOs
 

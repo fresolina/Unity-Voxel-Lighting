@@ -10,21 +10,21 @@ namespace Lotec.Lighting {
     public class VoxelLightingBaker : MonoBehaviour {
         [Tooltip("Downscale factor to produce lower-res voxel field for material and GI")]
         [Range(1, 6)]
-        public int LowresDownscaleFactor = 4;
+        public int LowresDownscaleFactor = 2;
         [Header("Bakers")]
         [SerializeField] SdfBaker _sdfBaker = new SdfBaker();
         [SerializeField] OcclusionBitmaskBaker _occlusionBitmaskBaker = new OcclusionBitmaskBaker();
         [SerializeField] MaterialBaker _materialBaker = new MaterialBaker();
         [Tooltip("Where to save the baked Texture3D asset(s) (must be under Assets/).")]
         public string assetPath = "Assets/VoxelLighting";
-        public LightingVolume targetSdfVolume => _sdfShaderGlobals.volume;
+        public LightingVolume targetSdfVolume => _lightingManager.Volume;
 
-        SdfShaderGlobals _sdfShaderGlobals;
+        LightingManager _lightingManager;
 
 #if UNITY_EDITOR
         void OnValidate() {
-            if (_sdfShaderGlobals == null)
-                _sdfShaderGlobals = FindAnyObjectByType<SdfShaderGlobals>();
+            if (_lightingManager == null)
+                _lightingManager = FindAnyObjectByType<LightingManager>();
         }
         void Reset() {
             // Editor fallback: search the project for a matching compute shader asset by name
@@ -62,21 +62,21 @@ namespace Lotec.Lighting {
 #endif
 
         public void Bake() {
-            LightingVolume volume = _sdfShaderGlobals.volume;
+            LightingVolume volume = _lightingManager.Volume;
             string error;
             if (volume == null) {
-                Debug.LogError("Target SdfVolume is not assigned.", _sdfShaderGlobals);
+                Debug.LogError("Target SdfVolume is not assigned.", _lightingManager);
                 return;
             }
 
             // Bake SDF fields.
             if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution, volume.BakeRoot.name, out Texture3D bakedSdf, out error)) {
-                Debug.LogError("SDF Bake failed: " + error, _sdfShaderGlobals);
+                Debug.LogError("SDF Bake failed: " + error, _lightingManager);
                 return;
             }
             volume.sdfHiresTexture = bakedSdf;
             if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution / LowresDownscaleFactor, volume.BakeRoot.name + "_Lowres", out bakedSdf, out error)) {
-                Debug.LogError("SDF Bake failed: " + error, _sdfShaderGlobals);
+                Debug.LogError("SDF Bake failed: " + error, _lightingManager);
                 return;
             }
             volume.sdfLowresTexture = bakedSdf;
@@ -87,18 +87,18 @@ namespace Lotec.Lighting {
             }
             volume.occlusionBitmaskTexture = bakedBitmask;
 
-            // Material baker produces two lower-res material textures (albedo+roughness, emission+metallic)
+            // Material baker produces one lower-res packed material texture (albedo+emissionIntensity)
             if (_materialBaker.MaterialBakeCompute == null) {
                 error = "Material Bake Compute is not assigned to MaterialBaker.";
                 return;
             }
-            string matErr = _materialBaker.Bake(volume, out Texture3D bakedAlbedoRoughness, out Texture3D bakedEmissionMetallic, LowresDownscaleFactor);
+            string matErr = _materialBaker.Bake(volume, out Texture3D bakedAlbedoIntensity, LowresDownscaleFactor);
             if (!string.IsNullOrEmpty(matErr)) {
                 error = "MaterialBaker failed: " + matErr;
+                Debug.LogError(error, _lightingManager);
                 return;
             }
-            volume.materialAlbedoRoughnessTexture = bakedAlbedoRoughness;
-            volume.materialEmissionMetallicTexture = bakedEmissionMetallic;
+            volume.materialAlbedoIntensityTexture = bakedAlbedoIntensity;
         }
     }
 }

@@ -12,6 +12,7 @@ namespace Lotec.Lighting {
         SdfShaderGlobals _sdfShaderGlobals;
         int _lastStatusFrame;
         protected override string ConversionShaderName => "Hidden/Unpack3D";
+        LightingVolume Volume => LightingManager.Instance.Volume;
 
         protected override Texture GetTexture() {
             if (source == null) {
@@ -31,13 +32,12 @@ namespace Lotec.Lighting {
         }
 
         protected override bool TryGetBounds(out Bounds bounds) {
-            LightingVolume volume = GetVolumeSafe();
-            if (volume == null) {
+            if (Volume == null) {
                 bounds = default;
                 return false;
             }
 
-            bounds = volume.Bounds;
+            bounds = Volume.Bounds;
             return true;
         }
 
@@ -72,11 +72,6 @@ namespace Lotec.Lighting {
                 v.b / (1.0f + v.b),
                 1.0f
             );
-        }
-
-        LightingVolume GetVolumeSafe() {
-            if (_sdfShaderGlobals == null) _sdfShaderGlobals = FindAnyObjectByType<SdfShaderGlobals>();
-            return _sdfShaderGlobals != null ? _sdfShaderGlobals.volume : null;
         }
 
         void LogStatus(string msg) {

@@ -1,31 +1,21 @@
 #pragma kernel CSComputeRadiance
-#pragma kernel CSComputeIrradiance
+#pragma kernel CSComputeRadianceLPVSkySweep
+#pragma kernel CSComputeIrradiancePathTracing
+#pragma kernel CSComputeIrradianceLPV
 #pragma kernel CSBlurIrradiance
 #pragma kernel CSClearVolume
 
 // --- CONSTANTS ---
-// TODO: Use Volume.Bounds value from Volume conf.
-#define MAX_SDF_DIST 30.0
-// Use a larger epsilon for raymarching to avoid light leaking through thin walls.
-// Because SDF:s have rounded corners, a ray can get very close to the surface without actually hitting it, which causes light to leak through. A larger epsilon means we consider it a hit even if we're not super close, which helps block light in these cases. The downside is that it can cause shadow acne or make shadows look blocky, especially on low-res volumes. A more robust solution would be to detect these near-hit cases and apply a bias based on the surface normal to prevent acne while still blocking light. 
-// Value depends on the wall thickness and voxel size.
-// Wall thickness 0.2, voxel size 0.16: requires 0.04
-// Wall thickness 0.5, voxel size 0.16: requires 0.02
-// TODO: Calculate and set this from C# side automatically.
-#define EPSILON 0.04
+// LPV neighbor propagation factor
+#define LPV_PROPAGATION_STRENGTH 0.97
 
-#include "../Includes/Math.hlsl"
 #include "../Includes/Volume.hlsl"
-#include "../Includes/VoxelSdfShadows.hlsl"
-#include "../Includes/Raymarch.hlsl"
 #include "../Includes/Fibonacci.hlsl"
 
 // --- RESOURCES ---
 
 // Inputs (Read Only)
-Texture3D<float4> _MaterialAlbedoRoughness; // RGB = Albedo, A = Roughness
-Texture3D<float4> _MaterialEmissionMetallic; // RGB = Emission, A = Metallic
-Texture3D<float> _DistanceField; // Low-res
+Texture3D<float4> _MaterialAlbedoIntensity; // RGB = Albedo, A = Emission Intensity
 
 // GI field buffers
 Texture3D<float4> _RadianceField;          // Current Frame Radiance (read in irradiance pass)
@@ -38,43 +28,15 @@ RWTexture3D<float4> _IrradianceFieldFinal; // Final blurred irradiance
 // Blue noise for stochastic sampling
 Texture2D<float> _BlueNoiseTex;
 
-// Samplers
-SamplerState linearClampSampler;
-SamplerState pointClampSampler;  // For precise SDF reads
-
 // --- UNIFORMS ---
 float3 _RadianceTextureSize;
-float3 _VoxelSize;
 uint _FrameCount;
 uint _MaxSamples;
 uint _RaysPerFrame;
 float3 _DirectLightDir;
 float4 _DirectLightColor;
 float3 _SkyColor;
-
-// --- HELPERS ---
-
-float SampleSDF(float3 pos) {
-    float3 uvw = WorldToVoxelUV(pos);
-    return _DistanceField.SampleLevel(linearClampSampler, uvw, 0).r;
-}
-// Calculate normal from SDF gradient
-float3 GetNormalFromSDF(float3 pos) {
-    float2 k = float2(1, -1);
-    float3 h = _VoxelSize * 0.1; // Sampling step size
-    
-    // Tetrahedron technique (efficient gradient calculation)
-    return normalize(
-        k.xyy * SampleSDF(pos + k.xyy * h) + 
-        k.yyx * SampleSDF(pos + k.yyx * h) + 
-        k.yxy * SampleSDF(pos + k.yxy * h) + 
-        k.xxx * SampleSDF(pos + k.xxx * h)
-    );
-}
-
-float RaymarchSDF(float3 voxelCenter, float3 rayDir, out float3 hitPos) {
-    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, 0, MAX_SDF_DIST, EPSILON, 0.01, 64, 0.5, hitPos);
-}
+float _LpvDecay;
 
 // --- DEBUG: Clear Kernel ---
 RWTexture3D<float4> _ClearTarget;
@@ -114,14 +76,46 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
     float3 hitPos;
     float sunVisibility = RaymarchSDF(voxelCenter, _DirectLightDir, hitPos);
     float3 sunLight = _DirectLightColor.rgb * sunVisibility;
-    // Get surface albedo and roughness
-    float4 albedoRoughness = _MaterialAlbedoRoughness.SampleLevel(pointClampSampler, uvw, 0);
+    // Get surface albedo and emissive intensity (alpha is 8-bit log-encoded intensity)
+    float4 albedoIntensity = _MaterialAlbedoIntensity.SampleLevel(pointClampSampler, uvw, 0);
+    float emissionIntensity = DecodeEmissionIntensityFrom8Bit(albedoIntensity.a);
+    float3 emissiveLight = albedoIntensity.rgb * emissionIntensity;
 
-    // Radiate incoming light (sun + indirect) modulated by surface albedo and roughness.
-    // TODO: Modulate by roughness and light direction. 0 roughness = 100% reflection * (N.L).
-    // float3 outgoingLight = (surfaceIrradiance + sunLight) * (albedoRoughness.rgb * LOTEC_MATH_INV_PI);
-    float3 outgoingLight = (surfaceIrradiance + sunLight) * (albedoRoughness.rgb);
+    // Radiate reflected incoming light plus emissive contribution.
+    // float3 safeAlbedo = min(albedoIntensity.rgb, float3(0.9f, 0.9f, 0.9f));
+    float3 safeAlbedo = albedoIntensity.rgb;
+    float3 outgoingLight = ((surfaceIrradiance + sunLight) * safeAlbedo.rgb) + emissiveLight;
     _RadianceFieldWrite[id] = float4(outgoingLight, 1.0);
+}
+
+// ----------------------------------------------------------
+// LPV SKY SWEEP RADIANCE PASS
+// Inject top-down sky visibility directly into radiance field.
+// ----------------------------------------------------------
+[numthreads(8, 8, 1)]
+void CSComputeRadianceLPVSkySweep(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_RadianceTextureSize.x || id.y >= (uint)_RadianceTextureSize.z) return;
+
+    int maxY = (int)_RadianceTextureSize.y;
+    bool blocked = false;
+
+    // Sweep from top to bottom in this (x,z) column. (Unity world up = +Y)
+    for (int y = maxY - 1; y >= 0; --y) {
+        int3 cell = int3((int)id.x, y, (int)id.y);
+        float dist = _DistanceField.Load(int4(cell, 0)).r;
+
+        // A solid voxel blocks sky for everything below.
+        if (dist < 0.0) {
+            blocked = true;
+            continue;
+        }
+
+        if (!blocked) {
+            float3 currentRadiance = _RadianceFieldWrite[cell].rgb;
+            _RadianceFieldWrite[cell] = float4(currentRadiance + _SkyColor, 1.0);
+        }
+    }
 }
 
 // ----------------------------------------------------------
@@ -129,7 +123,7 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
 // How much light is arriving at this voxel.
 // ----------------------------------------------------------
 [numthreads(8, 8, 8)]
-void CSComputeIrradiance(uint3 id : SV_DispatchThreadID)
+void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
 {
     if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
 
@@ -143,7 +137,6 @@ void CSComputeIrradiance(uint3 id : SV_DispatchThreadID)
     }
     bool isAir = (dist > _VoxelSize.x);
 
-    // Shoot cosine-weighted rays aligned to the surface normal.
     float3 incomingLight = float3(0, 0, 0);
     float3 surfaceNormal = GetNormalFromSDF(voxelCenter);
     uint rayCount = max(_RaysPerFrame, 1u);
@@ -174,14 +167,72 @@ void CSComputeIrradiance(uint3 id : SV_DispatchThreadID)
 
     float4 history = _IrradianceFieldHistory.Load(int4(id, 0));
     float3 oldColor = history.rgb;
-    // Hysteresis blend: fast-in for brightening, slow-out for darkening. Maybe for flashlight?
-    // float newLuma = Luminance(incomingLight);
-    // float historyLuma = Luminance(oldColor);
-    // float weight = (newLuma > historyLuma) ? 0.25 : 0.01;
-    float weight = 1.0f / _MaxSamples;
+    float weight = 1.0f / (_MaxSamples * 2);
     float3 finalColor = lerp(oldColor, incomingLight, weight);
 
     _IrradianceFieldWrite[id] = float4(finalColor, 1.0);
+}
+
+// Light Propagation Volumes (LPV) in this implementation:
+// 1) Gather irradiance from the 6 axis-aligned neighbors.
+// 2) Reject propagation through potential walls using an SDF midpoint test.
+// 3) Inject fresh radiance from this voxel (emissive + reflected/direct from radiance pass).
+// 4) Apply damping controls to prevent runaway brightening over many frames.
+[numthreads(8, 8, 8)]
+void CSComputeIrradianceLPV(uint3 id : SV_DispatchThreadID)
+{
+    // Early exit if out of bounds (can happen with non-dispatch-aligned volume sizes)
+    if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
+
+    float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
+    half dist = _DistanceField.Load(int4(id, 0)).r;
+    if (dist < 0) {
+        _IrradianceFieldWrite[id] = 0;
+        return;
+    }
+
+    // Gather light from air neighbors. Skip neighbors inside geometry.
+    float3 sum = 0.0;
+    const int3 neighborOffsets[6] = {
+        int3(1, 0, 0),
+        int3(-1, 0, 0),
+        int3(0, 1, 0),
+        int3(0, -1, 0),
+        int3(0, 0, 1),
+        int3(0, 0, -1)
+    };
+    float3 maxNeighbor = 0.0; // Track the brightest neighbor!
+    [unroll]
+    for (int i = 0; i < 6; i++) {
+        int3 delta = neighborOffsets[i];
+        int3 n = id + delta;
+        if (any(n < 0) || any(n >= _RadianceTextureSize)) continue;
+
+        // Prevent light bleed through walls by checking the SDF at the midpoint between the two voxels.
+        // If distance is < 0, weight is 0.0 (fully blocked).
+        // If distance is > a full voxel away, weight is 1.0 (fully open).
+        // If it's in between, fade. This removes squared blocky AO.
+        float3 midPos = voxelCenter + float3(delta) * (_VoxelSize * 0.5f);
+        float midDist = SampleSDF(midPos);
+        float transferWeight = saturate(midDist / _VoxelSize.x);
+        if (transferWeight <= 0.0f) continue;
+
+        float3 neighborLight = _IrradianceFieldHistory.Load(int4(n, 0)).rgb;
+        sum += neighborLight * transferWeight;
+        maxNeighbor = max(maxNeighbor, neighborLight * transferWeight);
+    }
+
+    // Add lights from neighbors together, but clamp to brightest neighbor.
+    float3 propagated = min(sum, maxNeighbor);
+    // Controls "how fast" light travels through the grid per iteration.
+    // 1.0 = full neighbor average, lower values = slower spread.
+    propagated *= LPV_PROPAGATION_STRENGTH;
+
+    // Decay controls retention of propagated light.
+    // Inverted decay (1 - decay) is used as radiance injection weight.
+    float3 injectedRadiance = _RadianceField.Load(int4(id, 0)).rgb * (1.0 - _LpvDecay);
+    float3 incomingLight = max((propagated * _LpvDecay) + injectedRadiance, 0.0);
+    _IrradianceFieldWrite[id] = float4(incomingLight, 1.0);
 }
 
 // ----------------------------------------------------------
@@ -196,6 +247,9 @@ void CSBlurIrradiance(uint3 id : SV_DispatchThreadID)
     float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
     float3 uvwCenter = WorldToVoxelUV(voxelCenter);
     float3 uvwHalf = (_VoxelSize * 0.5) * rcp(max(_VolumeSize, 1e-6));
+
+    // _IrradianceFieldFinal[id] = _IrradianceFieldInput.SampleLevel(linearClampSampler, uvwCenter, 0);
+    // return;
 
     float3 sum = 0.0;
     sum += _IrradianceFieldInput.SampleLevel(linearClampSampler, uvwCenter + float3(-uvwHalf.x, -uvwHalf.y, -uvwHalf.z), 0).rgb;

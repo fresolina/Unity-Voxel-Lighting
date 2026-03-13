@@ -2,8 +2,9 @@ using UnityEngine;
 using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
-    [System.Serializable]
-    public class GiFieldUpdater {
+    [DisallowMultipleComponent]
+    [ExecuteInEditMode]
+    public class GiFieldUpdater : MonoBehaviour {
         [SerializeField] ComputeShader _giComputeShader;
         [SerializeField] bool _continuousGi;
         [Tooltip("Consider GI stable after this many samples. Stops GI updates until a lighting change is detected or continuousGI is enabled.")]
@@ -11,26 +12,25 @@ namespace Lotec.Lighting {
         [SerializeField] int _raysPerFrame = 1;
         [SerializeField] Texture2D _blueNoiseTexture;
 
-        [Header("SDF AO")]
-        [Min(0.000001f)]
-        [Tooltip("How far each raymarching step is in world units.")]
-        [SerializeField] float _aoStep = 0.08f;
-        [Min(0f)]
-        [Tooltip("AO darkening strength.")]
-        [SerializeField] float _aoIntensity = 1.95f;
-        public enum AoQuality { SDF_AO_OFF = 0, SDF_AO_LQ = 1, SDF_AO_HQ = 2 }
-        [Tooltip("SDF AO mode: OFF, LQ (2 samples), HQ (4 samples).")]
-        [SerializeField] AoQuality _aoQuality = AoQuality.SDF_AO_HQ;
+        [Header("Lighting")]
+        [Tooltip("Select GI solve method.")]
+        [SerializeField] LightingMethod _lightingMethod = LightingMethod.PathTracing;
+        [Range(0f, 1f)]
+        [Tooltip("LPV light retention per iteration. Injection uses (1 - decay).")]
+        [SerializeField] float _lpvDecay = 0.97f;
 
-        public Texture3D MaterialFieldAlbedoRoughness { get; set; }
-        public Texture3D MaterialFieldEmissionMetallic { get; set; }
+        public enum LightingMethod {
+            PathTracing = 0,
+            LPV = 1,
+        }
+
+        public Texture3D MaterialFieldAlbedoIntensity { get; set; }
         public Texture3D SurfaceDistanceFieldHighRes { get; set; }
         public Texture3D SurfaceDistanceFieldLowRes { get; set; }
         public ComputeShader GiComputeShader { get => _giComputeShader; set => _giComputeShader = value; }
         public Texture2D BlueNoiseTexture { get => _blueNoiseTexture; set => _blueNoiseTexture = value; }
-        public float AoStep { get => _aoStep; set => _aoStep = Mathf.Max(1e-6f, value); }
-        public float AoIntensity { get => _aoIntensity; set => _aoIntensity = Mathf.Max(0f, value); }
-        public AoQuality AoSampleQuality { get => _aoQuality; set => _aoQuality = value; }
+        public LightingMethod GiLightingMethod { get => _lightingMethod; set => _lightingMethod = value; }
+        public float LpvDecay { get => _lpvDecay; set => _lpvDecay = Mathf.Clamp01(value); }
 
         RenderTexture _radianceField;
         RenderTexture _irradianceFieldA;  // Ping
@@ -38,7 +38,9 @@ namespace Lotec.Lighting {
         RenderTexture _irradianceFieldFinal; // Blurred final
         bool _isEvenFrame = true;
         int _radianceKernel;
-        int _irradianceKernel;
+        int _radianceLpvSkySweepKernel;
+        int _irradiancePathTracingKernel;
+        int _irradianceLpvKernel;
         int _blurKernel;
         int _clearKernel = -1;
         Vector3 _radianceTextureResolution;
@@ -56,8 +58,7 @@ namespace Lotec.Lighting {
         static readonly int s_irradianceFieldFinal = Shader.PropertyToID("_IrradianceFieldFinal");
         static readonly int s_irradianceField = Shader.PropertyToID("_IrradianceFieldHistory");
         static readonly int s_radianceTextureSize = Shader.PropertyToID("_RadianceTextureSize");
-        static readonly int s_materialAlbedo = Shader.PropertyToID("_MaterialAlbedoRoughness");
-        static readonly int s_materialEmission = Shader.PropertyToID("_MaterialEmissionMetallic");
+        static readonly int s_materialAlbedoIntensity = Shader.PropertyToID("_MaterialAlbedoIntensity");
         static readonly int s_distanceField = Shader.PropertyToID("_DistanceField");
         static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
@@ -65,10 +66,9 @@ namespace Lotec.Lighting {
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
         static readonly int s_skyColor = Shader.PropertyToID("_SkyColor");
         static readonly int s_blueNoiseTex = Shader.PropertyToID("_BlueNoiseTex");
+        static readonly int s_lpvDecay = Shader.PropertyToID("_LpvDecay");
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
-        static readonly int s_aoStep = Shader.PropertyToID("_SdfAoStep");
-        static readonly int s_aoIntensity = Shader.PropertyToID("_SdfAoIntensity");
         #endregion
 
         public RenderTexture IrradianceFinal => _isEvenFrame ? _irradianceFieldA : _irradianceFieldB;
@@ -77,13 +77,22 @@ namespace Lotec.Lighting {
 
         public LightingVolume Volume { get; set; }
 
-        public void Update() {
-            ApplyAoShaderGlobals();
-            ApplyAoShaderKeywords();
-
+        void Update() {
             if (Volume == null || _giComputeShader == null) {
                 Debug.LogWarning("GI Field Updater is missing required references; skipping GI update.");
                 return;
+            }
+
+            if (Volume == null) return;
+
+            if (MaterialFieldAlbedoIntensity == null) {
+                MaterialFieldAlbedoIntensity = Volume.materialAlbedoIntensityTexture;
+            }
+            if (SurfaceDistanceFieldHighRes == null) {
+                SurfaceDistanceFieldHighRes = Volume.sdfHiresTexture;
+            }
+            if (SurfaceDistanceFieldLowRes == null) {
+                SurfaceDistanceFieldLowRes = Volume.sdfLowresTexture;
             }
 
             if (HasLightChanged()) {
@@ -93,10 +102,11 @@ namespace Lotec.Lighting {
 
             EnsureInitialized();
             if (!isStable || _continuousGi) {
-                SetGlobalShaderVariables();
                 SetDirectLightParams();
                 DispatchGIUpdate();
                 _irradianceFieldSampleCount++;
+                _isEvenFrame = !_isEvenFrame;
+                SetGlobalShaderVariables();
             }
 
             _prevLightSettings = new LightSettings {
@@ -104,7 +114,10 @@ namespace Lotec.Lighting {
                 sunColor = RenderSettings.sun != null ? (Vector4)RenderSettings.sun.color * RenderSettings.sun.intensity : Vector4.zero,
                 skyColor = RenderSettings.ambientMode == AmbientMode.Flat ? (Vector4)RenderSettings.ambientLight : (Vector4)RenderSettings.ambientSkyColor
             };
-            _isEvenFrame = !_isEvenFrame;
+        }
+
+        void OnDisable() {
+            ReleaseBuffers();
         }
 
         bool HasLightChanged() {
@@ -129,7 +142,9 @@ namespace Lotec.Lighting {
             _radianceTextureResolution = new Vector3(SurfaceDistanceFieldLowRes.width, SurfaceDistanceFieldLowRes.height, SurfaceDistanceFieldLowRes.depth);
 
             _radianceKernel = _giComputeShader.FindKernel("CSComputeRadiance");
-            _irradianceKernel = _giComputeShader.FindKernel("CSComputeIrradiance");
+            _radianceLpvSkySweepKernel = _giComputeShader.FindKernel("CSComputeRadianceLPVSkySweep");
+            _irradiancePathTracingKernel = _giComputeShader.FindKernel("CSComputeIrradiancePathTracing");
+            _irradianceLpvKernel = _giComputeShader.FindKernel("CSComputeIrradianceLPV");
             _blurKernel = _giComputeShader.FindKernel("CSBlurIrradiance");
 
             // Radiance Field: HDR Color (R11G11B10)
@@ -192,13 +207,14 @@ namespace Lotec.Lighting {
 
         void DispatchGIUpdate() {
             // Shared parameters
-            Vector3 resolution = MaterialFieldAlbedoRoughness.GetResolution();
+            Vector3 resolution = MaterialFieldAlbedoIntensity.GetResolution();
             float voxelSize = (float)Volume.Bounds.size.x / resolution.x;
             _giComputeShader.SetVector(s_voxelSize, voxelSize * Vector4.one);
             _giComputeShader.SetInt(s_frameCount, Time.frameCount);
             _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
             _giComputeShader.SetInt(s_raysPerFrame, _raysPerFrame);
             _giComputeShader.SetInt(s_maxSamples, _maxSamples);
+            _giComputeShader.SetFloat(s_lpvDecay, _lpvDecay);
 
             // Dispatch (8x8x8 threads per group)
             int groupsX = Mathf.CeilToInt(_radianceTextureResolution.x / 8.0f);
@@ -209,25 +225,35 @@ namespace Lotec.Lighting {
             _giComputeShader.SetTexture(_radianceKernel, s_radianceFieldWrite, _radianceField);
             _giComputeShader.SetTexture(_radianceKernel, s_irradianceField, IrradianceRead);
             _giComputeShader.SetTexture(_radianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
-            _giComputeShader.SetTexture(_radianceKernel, s_materialAlbedo, MaterialFieldAlbedoRoughness);
-            if (MaterialFieldEmissionMetallic) _giComputeShader.SetTexture(_radianceKernel, s_materialEmission, MaterialFieldEmissionMetallic);
+            _giComputeShader.SetTexture(_radianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
             _giComputeShader.Dispatch(_radianceKernel, groupsX, groupsY, groupsZ);
 
-            // Irradiance pass
-            _giComputeShader.SetTexture(_irradianceKernel, s_radianceField, _radianceField);
-            _giComputeShader.SetTexture(_irradianceKernel, s_irradianceFieldWrite, IrradianceFinal);
-            _giComputeShader.SetTexture(_irradianceKernel, s_irradianceField, IrradianceRead);
-            _giComputeShader.SetTexture(_irradianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
-            _giComputeShader.SetTexture(_irradianceKernel, s_materialAlbedo, MaterialFieldAlbedoRoughness);
-            if (MaterialFieldEmissionMetallic) _giComputeShader.SetTexture(_irradianceKernel, s_materialEmission, MaterialFieldEmissionMetallic);
-            _giComputeShader.SetTexture(_irradianceKernel, s_blueNoiseTex, _blueNoiseTexture);
-            _giComputeShader.Dispatch(_irradianceKernel, groupsX, groupsY, groupsZ);
+            // LPV only: inject a top-down sky sweep into radiance before propagation.
+            if (_lightingMethod == LightingMethod.LPV) {
+                _giComputeShader.SetTexture(_radianceLpvSkySweepKernel, s_radianceFieldWrite, _radianceField);
+                _giComputeShader.SetTexture(_radianceLpvSkySweepKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+                _giComputeShader.Dispatch(_radianceLpvSkySweepKernel, groupsX, groupsZ, 1);
+            }
 
-            // Blur pass
-            _giComputeShader.SetTexture(_blurKernel, s_irradianceFieldInput, IrradianceFinal);
-            _giComputeShader.SetTexture(_blurKernel, s_irradianceFieldFinal, _irradianceFieldFinal);
-            _giComputeShader.SetTexture(_blurKernel, s_distanceField, SurfaceDistanceFieldLowRes);
-            _giComputeShader.Dispatch(_blurKernel, groupsX, groupsY, groupsZ);
+            // Irradiance pass
+            // PathTracing = stochastic raymarch gather.
+            // LPV = iterative neighbor propagation in the voxel grid.
+            int irradianceKernel = (_lightingMethod == LightingMethod.LPV) ? _irradianceLpvKernel : _irradiancePathTracingKernel;
+            _giComputeShader.SetTexture(irradianceKernel, s_radianceField, _radianceField);
+            _giComputeShader.SetTexture(irradianceKernel, s_irradianceFieldWrite, IrradianceFinal);
+            _giComputeShader.SetTexture(irradianceKernel, s_irradianceField, IrradianceRead);
+            _giComputeShader.SetTexture(irradianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+            _giComputeShader.SetTexture(irradianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
+            _giComputeShader.SetTexture(irradianceKernel, s_blueNoiseTex, _blueNoiseTexture);
+            _giComputeShader.Dispatch(irradianceKernel, groupsX, groupsY, groupsZ);
+
+            // Blur pass (skip in LPV mode to avoid cross-wall bleed from generic blur)
+            if (_lightingMethod != LightingMethod.LPV) {
+                _giComputeShader.SetTexture(_blurKernel, s_irradianceFieldInput, IrradianceFinal);
+                _giComputeShader.SetTexture(_blurKernel, s_irradianceFieldFinal, _irradianceFieldFinal);
+                _giComputeShader.SetTexture(_blurKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+                _giComputeShader.Dispatch(_blurKernel, groupsX, groupsY, groupsZ);
+            }
         }
 
         RenderTexture CreateRadianceTexture(RenderTextureFormat format, string name) {
@@ -266,41 +292,14 @@ namespace Lotec.Lighting {
         }
 
         void SetGlobalShaderVariables() {
-            Shader.SetGlobalTexture(s_irradianceFieldFinal, _irradianceFieldFinal);
+            // LPV uses the direct ping-pong output (no blur).
+            // PathTracing uses the separate blurred irradiance texture.
+            Shader.SetGlobalTexture(s_irradianceFieldFinal, _lightingMethod == LightingMethod.LPV ? IrradianceFinal : _irradianceFieldFinal);
 
             // Update these every frame in case the volume moves
-            Vector3 resolution = MaterialFieldAlbedoRoughness.GetResolution();
-            float voxelSize = MaterialFieldAlbedoRoughness.width / resolution.x;
+            Vector3 resolution = MaterialFieldAlbedoIntensity.GetResolution();
+            float voxelSize = MaterialFieldAlbedoIntensity.width / resolution.x;
             Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector4.one);
-        }
-
-        void ApplyAoShaderKeywords() {
-            switch (_aoQuality) {
-                case AoQuality.SDF_AO_OFF:
-                    Shader.EnableKeyword("SDF_AO_OFF");
-                    Shader.DisableKeyword("SDF_AO_LQ");
-                    Shader.DisableKeyword("SDF_AO_HQ");
-                    break;
-                case AoQuality.SDF_AO_LQ:
-                    Shader.DisableKeyword("SDF_AO_OFF");
-                    Shader.EnableKeyword("SDF_AO_LQ");
-                    Shader.DisableKeyword("SDF_AO_HQ");
-                    break;
-                case AoQuality.SDF_AO_HQ:
-                    Shader.DisableKeyword("SDF_AO_OFF");
-                    Shader.DisableKeyword("SDF_AO_LQ");
-                    Shader.EnableKeyword("SDF_AO_HQ");
-                    break;
-            }
-
-            // Backward compatibility cleanup for old AO sample keywords.
-            Shader.DisableKeyword("SDF_AO_SAMPLES_2");
-            Shader.DisableKeyword("SDF_AO_SAMPLES_6");
-        }
-
-        void ApplyAoShaderGlobals() {
-            Shader.SetGlobalFloat(s_aoStep, _aoStep);
-            Shader.SetGlobalFloat(s_aoIntensity, _aoIntensity);
         }
     }
 

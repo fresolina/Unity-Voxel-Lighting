@@ -23,10 +23,8 @@ namespace Lotec.Lighting {
         public Texture3D sdfHiresTexture;
         public Texture3D sdfLowresTexture;
         public Texture3D occlusionBitmaskTexture;
-        [Tooltip("Lower-resolution material property: albedo.rgb + roughness (a)")]
-        public Texture3D materialAlbedoRoughnessTexture;
-        [Tooltip("Lower-resolution material property: emission.rgb + metallic (a)")]
-        public Texture3D materialEmissionMetallicTexture;
+        [Tooltip("Lower-resolution material property: albedo.rgb + emissionIntensity (a)")]
+        public Texture3D materialAlbedoIntensityTexture;
 
         Vector3 _voxelSize;
 
