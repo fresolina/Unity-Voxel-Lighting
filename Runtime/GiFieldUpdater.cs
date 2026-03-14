@@ -75,24 +75,21 @@ namespace Lotec.Lighting {
         public RenderTexture IrradianceBlurred => _irradianceFieldFinal;
         RenderTexture IrradianceRead => _isEvenFrame ? _irradianceFieldB : _irradianceFieldA;
 
-        public LightingVolume Volume { get; set; }
+        LightingVolume _volume;
+        public LightingVolume Volume {
+            get => _volume;
+            set {
+                _volume = value;
+                MaterialFieldAlbedoIntensity = _volume.materialAlbedoIntensityTexture;
+                SurfaceDistanceFieldHighRes = _volume.sdfHiresTexture;
+                SurfaceDistanceFieldLowRes = _volume.sdfLowresTexture;
+            }
+        }
 
         void Update() {
             if (Volume == null || _giComputeShader == null) {
                 Debug.LogWarning("GI Field Updater is missing required references; skipping GI update.");
                 return;
-            }
-
-            if (Volume == null) return;
-
-            if (MaterialFieldAlbedoIntensity == null) {
-                MaterialFieldAlbedoIntensity = Volume.materialAlbedoIntensityTexture;
-            }
-            if (SurfaceDistanceFieldHighRes == null) {
-                SurfaceDistanceFieldHighRes = Volume.sdfHiresTexture;
-            }
-            if (SurfaceDistanceFieldLowRes == null) {
-                SurfaceDistanceFieldLowRes = Volume.sdfLowresTexture;
             }
 
             if (HasLightChanged()) {

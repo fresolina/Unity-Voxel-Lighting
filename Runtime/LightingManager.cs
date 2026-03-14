@@ -47,6 +47,11 @@ namespace Lotec.Lighting {
             if (_giUpdater.Volume == null) {
                 _giUpdater.Volume = Volume;
             }
+#if UNITY_EDITOR
+            if (!Application.isPlaying) {
+                _giUpdater.Volume = Volume;
+            }
+#endif
         }
     }
 }
