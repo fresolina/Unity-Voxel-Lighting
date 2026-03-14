@@ -1,6 +1,8 @@
 #pragma kernel CSMain
 #pragma target 5.0
 
+#include "../Includes/Math.hlsl"
+
 // 3D SDF Bake from triangles
 
 // Inputs
@@ -16,6 +18,39 @@ int3 _Resolution;
 RWStructuredBuffer<uint> _OutSdf; // lower 16 bits contain IEEE-754 half bits
 
 static const float EPS = 1e-7;
+
+bool PointProjectedInsideTriangle(float3 p, float3 a, float3 b, float3 c, float3 triNormal) {
+    float3 edge0 = b - a;
+    float3 edge1 = c - b;
+    float3 edge2 = a - c;
+
+    float side0 = dot(triNormal, cross(edge0, p - a));
+    float side1 = dot(triNormal, cross(edge1, p - b));
+    float side2 = dot(triNormal, cross(edge2, p - c));
+
+    return side0 >= -EPS && side1 >= -EPS && side2 >= -EPS;
+}
+
+bool IsInsideVirtualBackfaceExtrusion(float3 p, float3 a, float3 b, float3 c, float extrusionDistance) {
+    float3 triNormal = cross(b - a, c - a);
+    float normalLenSq = dot(triNormal, triNormal);
+    if (normalLenSq <= EPS)
+        return false;
+
+    float3 normal = triNormal * rsqrt(normalLenSq);
+    float3 closestPoint = ClosestPointOnTriangle(p, a, b, c);
+    float3 closestOffset = p - closestPoint;
+
+    if (dot(closestOffset, closestOffset) > extrusionDistance * extrusionDistance)
+        return false;
+
+    float signedDistance = dot(normal, closestOffset);
+    if (signedDistance > 0.0 || signedDistance < -extrusionDistance)
+        return false;
+
+    float3 projectedPoint = p - signedDistance * normal;
+    return PointProjectedInsideTriangle(projectedPoint, a, b, c, triNormal);
+}
 
 float PointTriangleDistanceSq(float3 p, float3 a, float3 b, float3 c) {
     float3 ab = b - a;
@@ -66,36 +101,6 @@ float PointTriangleDistanceSq(float3 p, float3 a, float3 b, float3 c) {
     return (dist * dist) * invLenSq;
 }
 
-bool RayTriangleIntersect(float3 ro, float3 rd, float3 a, float3 b, float3 c, out float t) {
-    // Moller-Trumbore
-    float3 e1 = b - a;
-    float3 e2 = c - a;
-    float3 p = cross(rd, e2);
-    float det = dot(e1, p);
-    if (abs(det) < 1e-8) {
-        t = 0.0;
-        return false;
-    }
-
-    float invDet = 1.0 / det;
-    float3 s = ro - a;
-    float u = dot(s, p) * invDet;
-    if (u < 0.0 || u > 1.0) {
-        t = 0.0;
-        return false;
-    }
-
-    float3 q = cross(s, e1);
-    float v = dot(rd, q) * invDet;
-    if (v < 0.0 || (u + v) > 1.0) {
-        t = 0.0;
-        return false;
-    }
-
-    t = dot(e2, q) * invDet;
-    return t > 0.0;
-}
-
 [numthreads(4, 4, 4)]
 void CSMain(uint3 id : SV_DispatchThreadID) {
     if (id.x >= (uint)_Resolution.x || id.y >= (uint)_Resolution.y || id.z >= (uint)_Resolution.z)
@@ -108,11 +113,7 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
 
     float minDistSq = 1e30;
     int bestTri = 0;
-
-    // Parity ray cast for sign: cast +X.
-    float3 ro = p + float3(0.0, 1e-4, 2e-4);
-    float3 rd = float3(1.0, 0.0, 0.0);
-    uint hitCount = 0u;
+    float backfaceExtrusionDistance = length(size / max(float3(_Resolution), 1.0));
 
     [loop]
     for (int tri = 0; tri < _TriCount; tri++) {
@@ -126,14 +127,14 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
             minDistSq = d2;
             bestTri = tri;
         }
-
-        float t;
-        if (RayTriangleIntersect(ro, rd, a, b, c, t))
-            hitCount++;
     }
 
     float dist = sqrt(max(minDistSq, 0.0));
-    bool inside = ((hitCount & 1u) == 1u);
+    int bestBase = bestTri * 3;
+    float3 bestA = _TriVerts[bestBase + 0];
+    float3 bestB = _TriVerts[bestBase + 1];
+    float3 bestC = _TriVerts[bestBase + 2];
+    bool inside = IsInsideVirtualBackfaceExtrusion(p, bestA, bestB, bestC, backfaceExtrusionDistance);
     float sdf = inside ? -dist : dist;
 
     int idx = (int)id.x + (int)id.y * _Resolution.x + (int)id.z * _Resolution.x * _Resolution.y;
