@@ -69,6 +69,8 @@ namespace Lotec.Lighting {
                 return;
             }
 
+            volume.RecomputeBoundsAndResolution();
+
             // Bake SDF fields.
             if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution, volume.BakeRoot.name, out Texture3D bakedSdf, out error)) {
                 Debug.LogError("SDF Bake failed: " + error, _lightingManager);

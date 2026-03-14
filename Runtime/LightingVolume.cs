@@ -39,7 +39,7 @@ namespace Lotec.Lighting {
             RecomputeBoundsAndResolution();
         }
 
-        void RecomputeBoundsAndResolution() {
+        public void RecomputeBoundsAndResolution() {
             if (_root == null) return;
 
             ComputeBounds();
@@ -55,6 +55,8 @@ namespace Lotec.Lighting {
             foreach (MeshRenderer mr in meshRenderers) {
                 if (mr == null)
                     continue;
+                if (!IsBakeEligible(mr))
+                    continue;
                 MeshFilter mf = mr.GetComponent<MeshFilter>();
                 if (mf == null || mf.sharedMesh == null)
                     continue;
@@ -69,6 +71,11 @@ namespace Lotec.Lighting {
             if (_paddingWorld > 0f) {
                 Bounds.Expand(_paddingWorld * 2f);
             }
+        }
+
+        static bool IsBakeEligible(Renderer renderer) {
+            GameObject gameObject = renderer.gameObject;
+            return gameObject.activeInHierarchy && gameObject.isStatic;
         }
 
         /// <summary>
