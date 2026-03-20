@@ -6,6 +6,7 @@ namespace Lotec.Lighting {
     [ExecuteInEditMode]
     public class GiFieldUpdater : MonoBehaviour {
         static bool s_loggedUnsupportedRuntimeGi;
+        bool _hasLoggedMissingReferences;
 
         [SerializeField] ComputeShader _giComputeShader;
         [SerializeField] bool _continuousGi;
@@ -89,7 +90,17 @@ namespace Lotec.Lighting {
             }
         }
 
+        void Awake() {
+            RefreshRuntimeGiReferences();
+        }
+
+        void OnEnable() {
+            RefreshRuntimeGiReferences();
+        }
+
         void Update() {
+            RefreshRuntimeGiReferences();
+
             if (!SupportsRuntimeGi(out string unsupportedReason)) {
                 ReleaseBuffers();
 
@@ -102,10 +113,15 @@ namespace Lotec.Lighting {
                 return;
             }
 
-            if (!IsRuntimeGiReady()) {
-                Debug.LogWarning("GI Field Updater is missing required references; skipping GI update.");
+            if (!IsRuntimeGiReady(out string missingReason)) {
+                if (!_hasLoggedMissingReferences) {
+                    _hasLoggedMissingReferences = true;
+                    Debug.LogWarning($"GI Field Updater is missing required references: {missingReason}. Waiting for runtime GI initialization.", this);
+                }
                 return;
             }
+
+            _hasLoggedMissingReferences = false;
 
             if (HasLightChanged()) {
                 _irradianceFieldSampleCount = 0;
@@ -132,11 +148,52 @@ namespace Lotec.Lighting {
             ReleaseBuffers();
         }
 
-        bool IsRuntimeGiReady() {
-            return Volume != null &&
-                   _giComputeShader != null &&
-                   MaterialFieldAlbedoIntensity != null &&
-                   SurfaceDistanceFieldLowRes != null;
+        void RefreshRuntimeGiReferences() {
+            if (Volume == null) {
+                LightingManager lightingManager = GetComponent<LightingManager>();
+                if (lightingManager != null && lightingManager.Volume != null) {
+                    Volume = lightingManager.Volume;
+                }
+            }
+
+            if (Volume != null) {
+                if (MaterialFieldAlbedoIntensity == null) {
+                    MaterialFieldAlbedoIntensity = Volume.materialAlbedoIntensityTexture;
+                }
+
+                if (SurfaceDistanceFieldHighRes == null) {
+                    SurfaceDistanceFieldHighRes = Volume.sdfHiresTexture;
+                }
+
+                if (SurfaceDistanceFieldLowRes == null) {
+                    SurfaceDistanceFieldLowRes = Volume.sdfLowresTexture;
+                }
+            }
+        }
+
+        bool IsRuntimeGiReady(out string reason) {
+            if (Volume == null) {
+                reason = "LightingVolume";
+                return false;
+            }
+
+            if (_giComputeShader == null) {
+                reason = "ComputeShader";
+                return false;
+            }
+
+            if (MaterialFieldAlbedoIntensity == null) {
+                reason = "LightingVolume.materialAlbedoIntensityTexture";
+                return false;
+            }
+
+            if (SurfaceDistanceFieldLowRes == null) {
+                reason = "LightingVolume.sdfLowresTexture";
+                return false;
+            }
+
+            reason = null;
+            return true;
         }
 
         bool SupportsRuntimeGi(out string reason) {

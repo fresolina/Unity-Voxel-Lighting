@@ -26,8 +26,8 @@ on:
     workflow_dispatch:
         inputs:
             git_ref:
-                description: Branch, tag, or commit SHA to build
-                required: true
+                description: Optional branch, tag, or commit SHA to build. Defaults to the branch selected when you run the workflow.
+                required: false
                 type: string
             publish_kind:
                 description: Publish as a preview or a released version
@@ -58,7 +58,7 @@ env:
     PROJECT_PATH: .github/unity-webgl-project
     SITE_PATH: .pages-site
     UNITY_VERSION: 6000.3.11f1
-    GIT_REF: ${{ inputs.git_ref || github.event.inputs.git_ref }}
+    GIT_REF: ${{ inputs.git_ref || github.event.inputs.git_ref || github.ref_name }}
     PUBLISH_KIND: ${{ inputs.publish_kind || github.event.inputs.publish_kind || 'preview' }}
     RELEASE_VERSION: ${{ inputs.release_tag || github.event.inputs.release_tag }}
     PREVIEW_NAME: ${{ inputs.preview_name || github.event.inputs.preview_name }}

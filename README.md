@@ -20,9 +20,9 @@ Use the `webgl-pages` workflow in GitHub Actions when you want a preview build f
 
 1. Open the repository Actions tab and select the `webgl-pages` workflow.
 2. Click `Run workflow`.
-3. Set `git_ref` to the branch name, tag, or commit SHA you want to build.
+3. Optionally set `git_ref` to a branch name, tag, or commit SHA. If you leave it empty, the workflow builds the branch selected in the Actions UI.
 4. Leave `publish_kind` as `preview` unless you are intentionally publishing a release build.
-5. Optionally set `preview_name` to override the URL prefix. If you leave it empty, the workflow uses `git_ref`.
+5. Optionally set `preview_name` to override the URL prefix. If you leave it empty, the workflow uses `git_ref` or the selected branch name.
 
 Preview builds are published under `previews/<preview-name>-<short-sha>/`, so each run gets its own URL instead of overwriting an older preview from the same branch.
 

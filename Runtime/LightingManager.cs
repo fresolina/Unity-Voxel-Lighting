@@ -29,6 +29,14 @@ namespace Lotec.Lighting {
         public LightingVolume Volume => _volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
 
+        void Awake() {
+            EnsureFieldsAssigned();
+        }
+
+        void OnEnable() {
+            EnsureFieldsAssigned();
+        }
+
         // Update is called once per frame
         void Update() {
             EnsureFieldsAssigned();
@@ -37,14 +45,16 @@ namespace Lotec.Lighting {
         void EnsureFieldsAssigned() {
             Instance = this;
             _sdfShaderGlobals = GetComponent<SdfShaderGlobals>();
-            _sdfShaderGlobals.Volume = _volume;
+            if (_sdfShaderGlobals != null) {
+                _sdfShaderGlobals.Volume = _volume;
+            }
 
             if (_giUpdater == null) {
                 _giUpdater = GetComponent<GiFieldUpdater>();
                 if (_giUpdater == null) return;
             }
 
-            if (_giUpdater.Volume == null) {
+            if (_giUpdater.Volume != Volume) {
                 _giUpdater.Volume = Volume;
             }
 #if UNITY_EDITOR
