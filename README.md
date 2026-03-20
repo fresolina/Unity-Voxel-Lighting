@@ -8,6 +8,24 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
   a) Accuracy mode: Ray marching on every pixel.
   b) Performance mode: Occlusion bitmask in the voxel field.
 
+## Platform notes
+
+* Runtime GI in this package depends on compute shaders and 3D textures.
+* Web builds are expected to run with the WebGPU graphics backend. The sample web build script explicitly requests WebGPU for BuildTarget.WebGL.
+* If the player starts on a non-WebGPU web backend, runtime GI now fails fast instead of falling back to a black GI volume.
+
+## Web preview builds
+
+Use the `webgl-pages` workflow in GitHub Actions when you want a preview build from a feature branch or a specific commit.
+
+1. Open the repository Actions tab and select the `webgl-pages` workflow.
+2. Click `Run workflow`.
+3. Set `git_ref` to the branch name, tag, or commit SHA you want to build.
+4. Leave `publish_kind` as `preview` unless you are intentionally publishing a release build.
+5. Optionally set `preview_name` to override the URL prefix. If you leave it empty, the workflow uses `git_ref`.
+
+Preview builds are published under `previews/<preview-name>-<short-sha>/`, so each run gets its own URL instead of overwriting an older preview from the same branch.
+
 ## TODO
 
 * Bake each mesh, cache to file, merge into single SDF field, rebake only when needed. Bake unrotated mesh, support rotating mesh, without rebaking. Eventually support merging dynamic SDFs that moves and rotates into the final SDF field.

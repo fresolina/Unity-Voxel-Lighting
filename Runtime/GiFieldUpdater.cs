@@ -5,6 +5,8 @@ namespace Lotec.Lighting {
     [DisallowMultipleComponent]
     [ExecuteInEditMode]
     public class GiFieldUpdater : MonoBehaviour {
+        static bool s_loggedUnsupportedRuntimeGi;
+
         [SerializeField] ComputeShader _giComputeShader;
         [SerializeField] bool _continuousGi;
         [Tooltip("Consider GI stable after this many samples. Stops GI updates until a lighting change is detected or continuousGI is enabled.")]
@@ -79,15 +81,28 @@ namespace Lotec.Lighting {
         public LightingVolume Volume {
             get => _volume;
             set {
+                if (_volume == value) return;
                 _volume = value;
-                MaterialFieldAlbedoIntensity = _volume.materialAlbedoIntensityTexture;
-                SurfaceDistanceFieldHighRes = _volume.sdfHiresTexture;
-                SurfaceDistanceFieldLowRes = _volume.sdfLowresTexture;
+                MaterialFieldAlbedoIntensity = _volume != null ? _volume.materialAlbedoIntensityTexture : null;
+                SurfaceDistanceFieldHighRes = _volume != null ? _volume.sdfHiresTexture : null;
+                SurfaceDistanceFieldLowRes = _volume != null ? _volume.sdfLowresTexture : null;
             }
         }
 
         void Update() {
-            if (Volume == null || _giComputeShader == null) {
+            if (!SupportsRuntimeGi(out string unsupportedReason)) {
+                ReleaseBuffers();
+
+                if (!s_loggedUnsupportedRuntimeGi) {
+                    s_loggedUnsupportedRuntimeGi = true;
+                    Debug.LogError($"Runtime GI requires WebGPU support: {unsupportedReason}", this);
+                }
+
+                enabled = false;
+                return;
+            }
+
+            if (!IsRuntimeGiReady()) {
                 Debug.LogWarning("GI Field Updater is missing required references; skipping GI update.");
                 return;
             }
@@ -115,6 +130,35 @@ namespace Lotec.Lighting {
 
         void OnDisable() {
             ReleaseBuffers();
+        }
+
+        bool IsRuntimeGiReady() {
+            return Volume != null &&
+                   _giComputeShader != null &&
+                   MaterialFieldAlbedoIntensity != null &&
+                   SurfaceDistanceFieldLowRes != null;
+        }
+
+        bool SupportsRuntimeGi(out string reason) {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            if (SystemInfo.graphicsDeviceType != GraphicsDeviceType.WebGPU) {
+                reason = $"the active graphics backend is '{SystemInfo.graphicsDeviceType}', but this package requires WebGPU on Web builds.";
+                return false;
+            }
+#endif
+
+            if (!SystemInfo.supportsComputeShaders) {
+                reason = "compute shaders are not supported.";
+                return false;
+            }
+
+            if (!SystemInfo.supports3DTextures) {
+                reason = "3D textures are not supported.";
+                return false;
+            }
+
+            reason = null;
+            return true;
         }
 
         bool HasLightChanged() {

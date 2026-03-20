@@ -42,6 +42,10 @@ public static class BuildWebGlSample {
     static void ConfigureWebGlPublishing() {
         PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Brotli;
         PlayerSettings.WebGL.decompressionFallback = true;
+        PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.WebGL, false);
+        PlayerSettings.SetGraphicsAPIs(BuildTarget.WebGL, new[] {
+            GraphicsDeviceType.WebGPU,
+        });
     }
 
     static void EnsureUrpConfigured() {

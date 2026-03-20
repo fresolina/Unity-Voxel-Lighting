@@ -3,21 +3,47 @@ name: webgl-pages
 on:
     workflow_call:
         inputs:
-            release_tag:
+            git_ref:
                 required: true
+                type: string
+            publish_kind:
+                required: false
+                type: string
+                default: preview
+            release_tag:
+                required: false
+                type: string
+            preview_name:
+                required: false
                 type: string
         outputs:
             pages_index_url:
                 description: Published index page URL
                 value: ${{ jobs.publish.outputs.pages_index_url }}
             version_url:
-                description: Published URL for the current release build
+                description: Published URL for the current build
                 value: ${{ jobs.publish.outputs.version_url }}
     workflow_dispatch:
         inputs:
-            release_tag:
-                description: Release tag to build and publish
+            git_ref:
+                description: Branch, tag, or commit SHA to build
                 required: true
+                type: string
+            publish_kind:
+                description: Publish as a preview or a released version
+                required: true
+                default: preview
+                type: choice
+                options:
+                    - preview
+                    - release
+            release_tag:
+                description: Release tag to publish under versions/ (required when publish_kind=release)
+                required: false
+                type: string
+            preview_name:
+                description: Optional preview label prefix (defaults to git_ref)
+                required: false
                 type: string
 
 permissions:
@@ -32,7 +58,10 @@ env:
     PROJECT_PATH: .github/unity-webgl-project
     SITE_PATH: .pages-site
     UNITY_VERSION: 6000.3.11f1
+    GIT_REF: ${{ inputs.git_ref || github.event.inputs.git_ref }}
+    PUBLISH_KIND: ${{ inputs.publish_kind || github.event.inputs.publish_kind || 'preview' }}
     RELEASE_VERSION: ${{ inputs.release_tag || github.event.inputs.release_tag }}
+    PREVIEW_NAME: ${{ inputs.preview_name || github.event.inputs.preview_name }}
 
 jobs:
     publish:
@@ -44,9 +73,45 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v5
               with:
-                  ref: ${{ env.RELEASE_VERSION }}
+                  ref: ${{ env.GIT_REF }}
                   lfs: true
                   fetch-depth: 0
+
+            - name: Resolve publication target
+              id: publish_target
+              shell: bash
+              run: |
+                  set -eu
+
+                  sanitize() {
+                      printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._/-]#-#g; s#/#-#g; s#--*#-#g; s#^-##; s#-$##'
+                  }
+
+                  publish_kind="${PUBLISH_KIND}"
+                  git_ref="${GIT_REF}"
+                  release_version="${RELEASE_VERSION}"
+                  preview_name="${PREVIEW_NAME}"
+                  short_sha="$(git rev-parse --short=8 HEAD)"
+
+                  if [ "$publish_kind" = "release" ]; then
+                      if [ -z "$release_version" ]; then
+                          echo "release_tag is required when publish_kind=release" >&2
+                          exit 1
+                      fi
+                      publish_path="versions/${release_version}"
+                  else
+                      if [ -z "$preview_name" ]; then
+                          preview_name="$git_ref"
+                      fi
+                      preview_slug="$(sanitize "$preview_name")"
+                      if [ -z "$preview_slug" ]; then
+                          echo "preview_name resolved to an empty slug" >&2
+                          exit 1
+                      fi
+                      publish_path="previews/${preview_slug}-${short_sha}"
+                  fi
+
+                  echo "publish_path=${publish_path}" >> "$GITHUB_OUTPUT"
 
             - name: Restore existing site content
               continue-on-error: true
@@ -104,7 +169,7 @@ jobs:
               uses: actions/cache@v4
               with:
                   path: ${{ env.PROJECT_PATH }}/Library
-                  key: Library-WebGL-${{ env.RELEASE_VERSION }}-${{ hashFiles('.github/workflows/webgl-pages.yml', '.github/unity/BuildWebGlSample.cs', 'package.json', 'Runtime/**', 'Editor/**', 'Samples~/**') }}
+                  key: Library-WebGL-${{ env.GIT_REF }}-${{ hashFiles('.github/workflows/webgl-pages.yml', '.github/workflows/webgl-release.yml', '.github/unity/BuildWebGlSample.cs', 'package.json', 'Runtime/**', 'Editor/**', 'Samples~/**') }}
                   restore-keys: |
                       Library-WebGL-
 
@@ -123,18 +188,25 @@ jobs:
 
             - name: Prepare versioned Pages site
               shell: bash
+              env:
+                  PUBLISH_PATH: ${{ steps.publish_target.outputs.publish_path }}
               run: |
                   set -eu
 
                   mkdir -p "$SITE_PATH"
                   rm -rf "$SITE_PATH/.git"
-                  mkdir -p "$SITE_PATH/versions/$RELEASE_VERSION"
+                  mkdir -p "$SITE_PATH/$PUBLISH_PATH"
+                  mkdir -p "$SITE_PATH/versions"
+                  mkdir -p "$SITE_PATH/previews"
 
-                  rsync -a --delete "$PROJECT_PATH/build/WebGL/" "$SITE_PATH/versions/$RELEASE_VERSION/"
-                  rsync -a --delete "$PROJECT_PATH/build/WebGL/" "$SITE_PATH/latest/"
+                  rsync -a --delete "$PROJECT_PATH/build/WebGL/" "$SITE_PATH/$PUBLISH_PATH/"
+                  if [ "$PUBLISH_KIND" = "release" ]; then
+                      rsync -a --delete "$PROJECT_PATH/build/WebGL/" "$SITE_PATH/latest/"
+                  fi
                   touch "$SITE_PATH/.nojekyll"
 
                   mapfile -t versions < <(find "$SITE_PATH/versions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -rV)
+                  mapfile -t previews < <(find "$SITE_PATH/previews" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
 
                   {
                       echo '<!doctype html>'
@@ -159,13 +231,23 @@ jobs:
                       echo '<body>'
                       echo '  <main>'
                       echo '    <h1>Lotec Voxel Lighting</h1>'
-                      echo '    <p>Released WebGL builds for the Playground sample scene. A new version is published only when a GitHub release is created by the release flow.</p>'
-                      echo '    <a class="latest" href="latest/">Open latest build</a>'
+                      echo '    <p>Web builds for the Playground sample scene. Release builds are published from GitHub releases, and preview builds are published manually from a selected branch or commit with the short SHA in the URL.</p>'
+                      if [ -d "$SITE_PATH/latest" ]; then
+                          echo '    <a class="latest" href="latest/">Open latest release build</a>'
+                      fi
                       echo '    <section class="card">'
                       echo '      <h2>Released versions</h2>'
                       echo '      <ul>'
                       for version in "${versions[@]}"; do
                           echo "        <li><a class=\"version-link\" href=\"versions/${version}/\">${version}</a></li>"
+                      done
+                      echo '      </ul>'
+                      echo '    </section>'
+                      echo '    <section class="card">'
+                      echo '      <h2>Preview builds</h2>'
+                      echo '      <ul>'
+                      for preview in "${previews[@]}"; do
+                          echo "        <li><a class=\"version-link\" href=\"previews/${preview}/\">${preview}</a></li>"
                       done
                       echo '      </ul>'
                       echo '    </section>'
@@ -177,12 +259,14 @@ jobs:
             - name: Compute published URLs
               id: urls
               shell: bash
+              env:
+                  PUBLISH_PATH: ${{ steps.publish_target.outputs.publish_path }}
               run: |
                   set -eu
                   repo_name="${GITHUB_REPOSITORY#*/}"
                   base_url="https://${GITHUB_REPOSITORY_OWNER}.github.io/${repo_name}"
                   echo "pages_index_url=${base_url}/" >> "$GITHUB_OUTPUT"
-                  echo "version_url=${base_url}/versions/${RELEASE_VERSION}/" >> "$GITHUB_OUTPUT"
+                  echo "version_url=${base_url}/${PUBLISH_PATH}/" >> "$GITHUB_OUTPUT"
 
             - name: Publish to gh-pages
               uses: peaceiris/actions-gh-pages@v4

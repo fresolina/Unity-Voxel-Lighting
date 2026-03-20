@@ -15,11 +15,6 @@ env:
 jobs:
   release-please:
     runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      html_url: ${{ steps.release.outputs.html_url }}
-      body: ${{ steps.release.outputs.body }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -28,33 +23,3 @@ jobs:
           # this is a built-in strategy in release-please, see "Action Inputs"
           # for more options
           release-type: simple
-
-  publish-webgl-pages:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    uses: ./.github/workflows/webgl-pages.yml
-    with:
-      release_tag: ${{ needs.release-please.outputs.tag_name }}
-    secrets: inherit
-
-  annotate-release:
-    needs:
-      - release-please
-      - publish-webgl-pages
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Update release body with Pages links
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
-          RELEASE_BODY: ${{ needs.release-please.outputs.body }}
-          PAGES_INDEX_URL: ${{ needs.publish-webgl-pages.outputs.pages_index_url }}
-          VERSION_URL: ${{ needs.publish-webgl-pages.outputs.version_url }}
-        shell: bash
-        run: |
-          set -eu
-          notes_file="$(mktemp)"
-          printf '%s\n\nWebGL build:\n- Current release: %s\n- All released builds: %s\n' "$RELEASE_BODY" "$VERSION_URL" "$PAGES_INDEX_URL" > "$notes_file"
-          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --notes-file "$notes_file"

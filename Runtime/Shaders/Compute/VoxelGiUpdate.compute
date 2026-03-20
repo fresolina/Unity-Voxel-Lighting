@@ -167,7 +167,7 @@ void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
 
     float4 history = _IrradianceFieldHistory.Load(int4(id, 0));
     float3 oldColor = history.rgb;
-    float weight = 1.0f / (_MaxSamples * 2);
+    float weight = max(1.0f / (_MaxSamples * 2), 0.01f);
     float3 finalColor = lerp(oldColor, incomingLight, weight);
 
     _IrradianceFieldWrite[id] = float4(finalColor, 1.0);
