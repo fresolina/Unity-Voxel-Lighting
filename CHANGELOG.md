@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.0.0...v1.0.1) (2026-03-20)
+
+
+### Bug Fixes
+
+* todo ([336b193](https://github.com/fresolina/Unity-Voxel-Lighting/commit/336b19377064964dac1be45c1044ea541ada0226))
+
 ## 1.0.0 (2026-03-20)
 
 
