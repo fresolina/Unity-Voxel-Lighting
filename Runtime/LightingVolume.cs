@@ -51,7 +51,7 @@ namespace Lotec.Lighting {
         /// </summary>
         void ComputeBounds() {
             Bounds = new Bounds();
-            MeshRenderer[] meshRenderers = _root.GetComponentsInChildren<MeshRenderer>(true);
+            MeshRenderer[] meshRenderers = _root.GetComponentsInChildren<MeshRenderer>();
             foreach (MeshRenderer mr in meshRenderers) {
                 if (mr == null)
                     continue;

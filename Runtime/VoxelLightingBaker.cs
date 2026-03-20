@@ -62,6 +62,8 @@ namespace Lotec.Lighting {
 #endif
 
         public void Bake() {
+            if (_lightingManager == null)
+                _lightingManager = FindAnyObjectByType<LightingManager>();
             LightingVolume volume = _lightingManager.Volume;
             string error;
             if (volume == null) {
