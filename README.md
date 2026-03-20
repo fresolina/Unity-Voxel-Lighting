@@ -10,6 +10,8 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
 
 ## TODO
 
+* Bake each mesh, cache to file, merge into single SDF field, rebake only when needed. Bake unrotated mesh, support rotating mesh, without rebaking. Eventually support merging dynamic SDFs that moves and rotates into the final SDF field.
+
 * option: Turn off realtime shadow
 * Nåt verkar fel på sdf shadow, den förstör normalmap.
 * Fixa SDF Shadows, i vissa vinklar räcker inte 64 max steps, måste gå upp till 80.
