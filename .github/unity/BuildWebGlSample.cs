@@ -19,6 +19,7 @@ public static class BuildWebGlSample {
         }
 
         EnsureUrpConfigured();
+        ConfigureWebGlPublishing();
 
         EditorBuildSettings.scenes = new[] {
             new EditorBuildSettingsScene(s_scenePath, true)
@@ -36,6 +37,11 @@ public static class BuildWebGlSample {
         if (report.summary.result != BuildResult.Succeeded) {
             throw new Exception($"WebGL build failed with result '{report.summary.result}'.");
         }
+    }
+
+    static void ConfigureWebGlPublishing() {
+        PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Brotli;
+        PlayerSettings.WebGL.decompressionFallback = true;
     }
 
     static void EnsureUrpConfigured() {

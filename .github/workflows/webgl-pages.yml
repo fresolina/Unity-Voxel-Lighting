@@ -28,6 +28,7 @@ concurrency:
     cancel-in-progress: true
 
 env:
+    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     PROJECT_PATH: .github/unity-webgl-project
     SITE_PATH: .pages-site
     UNITY_VERSION: 6000.3.11f1
