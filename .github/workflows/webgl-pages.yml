@@ -1,0 +1,212 @@
+name: webgl-pages
+
+on:
+    workflow_call:
+        inputs:
+            release_tag:
+                required: true
+                type: string
+        outputs:
+            pages_index_url:
+                description: Published index page URL
+                value: ${{ jobs.publish.outputs.pages_index_url }}
+            version_url:
+                description: Published URL for the current release build
+                value: ${{ jobs.publish.outputs.version_url }}
+    workflow_dispatch:
+        inputs:
+            release_tag:
+                description: Release tag to build and publish
+                required: true
+                type: string
+
+permissions:
+    contents: write
+
+concurrency:
+    group: pages
+    cancel-in-progress: true
+
+env:
+    PROJECT_PATH: .github/unity-webgl-project
+    SITE_PATH: .pages-site
+    UNITY_VERSION: 6000.3.11f1
+    RELEASE_VERSION: ${{ inputs.release_tag || github.event.inputs.release_tag }}
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        outputs:
+            pages_index_url: ${{ steps.urls.outputs.pages_index_url }}
+            version_url: ${{ steps.urls.outputs.version_url }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ env.RELEASE_VERSION }}
+                  lfs: true
+                  fetch-depth: 0
+
+            - name: Restore existing site content
+              continue-on-error: true
+              uses: actions/checkout@v4
+              with:
+                  ref: gh-pages
+                  path: ${{ env.SITE_PATH }}
+                  fetch-depth: 1
+
+            - name: Bootstrap temporary Unity project
+              shell: bash
+              run: |
+                  set -eu
+                  repo_root="$(pwd)"
+
+                  mkdir -p "$PROJECT_PATH/Assets/Editor"
+                  mkdir -p "$PROJECT_PATH/Assets/Samples"
+                  mkdir -p "$PROJECT_PATH/Packages"
+                  mkdir -p "$PROJECT_PATH/ProjectSettings"
+
+                  cat > "$PROJECT_PATH/ProjectSettings/ProjectVersion.txt" <<'EOF'
+                  m_EditorVersion: 6000.3.0f1
+                  m_EditorVersionWithRevision: 6000.3.0f1 (d1870ce95baf)
+                  EOF
+
+                  cat > "$PROJECT_PATH/Packages/manifest.json" <<EOF
+                  {
+                    "dependencies": {
+                      "com.lotecsoftware.voxel-lighting": "file:${repo_root}",
+                      "com.unity.render-pipelines.universal": "17.3.0",
+                      "com.unity.textmeshpro": "5.0.0",
+                      "com.unity.ugui": "2.0.0",
+                      "com.unity.modules.accessibility": "1.0.0",
+                      "com.unity.modules.adaptiveperformance": "1.0.0",
+                      "com.unity.modules.ai": "1.0.0",
+                      "com.unity.modules.androidjni": "1.0.0",
+                      "com.unity.modules.animation": "1.0.0",
+                      "com.unity.modules.assetbundle": "1.0.0",
+                      "com.unity.modules.audio": "1.0.0",
+                      "com.unity.modules.cloth": "1.0.0",
+                      "com.unity.modules.director": "1.0.0",
+                      "com.unity.modules.imageconversion": "1.0.0",
+                      "com.unity.modules.imgui": "1.0.0",
+                      "com.unity.modules.jsonserialize": "1.0.0",
+                      "com.unity.modules.particlesystem": "1.0.0",
+                      "com.unity.modules.physics": "1.0.0",
+                      "com.unity.modules.physics2d": "1.0.0",
+                      "com.unity.modules.screencapture": "1.0.0",
+                      "com.unity.modules.terrain": "1.0.0",
+                      "com.unity.modules.terrainphysics": "1.0.0",
+                      "com.unity.modules.tilemap": "1.0.0",
+                      "com.unity.modules.ui": "1.0.0",
+                      "com.unity.modules.uielements": "1.0.0",
+                      "com.unity.modules.umbra": "1.0.0",
+                      "com.unity.modules.unityanalytics": "1.0.0",
+                      "com.unity.modules.unitywebrequest": "1.0.0",
+                      "com.unity.modules.unitywebrequestassetbundle": "1.0.0",
+                      "com.unity.modules.unitywebrequestaudio": "1.0.0",
+                      "com.unity.modules.unitywebrequesttexture": "1.0.0",
+                      "com.unity.modules.unitywebrequestwww": "1.0.0",
+                      "com.unity.modules.vectorgraphics": "1.0.0",
+                      "com.unity.modules.vehicles": "1.0.0",
+                      "com.unity.modules.video": "1.0.0",
+                      "com.unity.modules.vr": "1.0.0",
+                      "com.unity.modules.wind": "1.0.0",
+                      "com.unity.modules.xr": "1.0.0"
+                    }
+                  }
+                  EOF
+
+                  rsync -a "Samples~/Usage samples/" "$PROJECT_PATH/Assets/Samples/Usage samples/"
+                  cp ".github/unity/BuildWebGlSample.cs" "$PROJECT_PATH/Assets/Editor/BuildWebGlSample.cs"
+
+            - name: Cache Library
+              uses: actions/cache@v4
+              with:
+                  path: ${{ env.PROJECT_PATH }}/Library
+                  key: Library-WebGL-${{ env.RELEASE_VERSION }}-${{ hashFiles('.github/workflows/webgl-pages.yml', '.github/unity/BuildWebGlSample.cs', 'package.json', 'Runtime/**', 'Editor/**', 'Samples~/**') }}
+                  restore-keys: |
+                      Library-WebGL-
+
+            - name: Build WebGL sample
+              uses: game-ci/unity-builder@v4
+              env:
+                  UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+                  UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+                  UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+              with:
+                  projectPath: ${{ env.PROJECT_PATH }}
+                  targetPlatform: WebGL
+                  unityVersion: ${{ env.UNITY_VERSION }}
+                  buildMethod: BuildWebGlSample.Build
+                  allowDirtyBuild: true
+
+            - name: Prepare versioned Pages site
+              shell: bash
+              run: |
+                  set -eu
+
+                  mkdir -p "$SITE_PATH"
+                  rm -rf "$SITE_PATH/.git"
+                  mkdir -p "$SITE_PATH/versions/$RELEASE_VERSION"
+
+                  rsync -a --delete "$PROJECT_PATH/build/WebGL/" "$SITE_PATH/versions/$RELEASE_VERSION/"
+                  rsync -a --delete "$PROJECT_PATH/build/WebGL/" "$SITE_PATH/latest/"
+                  touch "$SITE_PATH/.nojekyll"
+
+                  mapfile -t versions < <(find "$SITE_PATH/versions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -rV)
+
+                  {
+                      echo '<!doctype html>'
+                      echo '<html lang="en">'
+                      echo '<head>'
+                      echo '  <meta charset="utf-8">'
+                      echo '  <meta name="viewport" content="width=device-width, initial-scale=1">'
+                      echo '  <title>Lotec Voxel Lighting WebGL Builds</title>'
+                      echo '  <style>'
+                      echo '    :root { color-scheme: light; }'
+                      echo '    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: linear-gradient(180deg, #f6f1e8 0%, #e7eef5 100%); color: #1e2430; }'
+                      echo '    main { max-width: 760px; margin: 0 auto; padding: 48px 24px 80px; }'
+                      echo '    h1 { font-size: 2.5rem; margin: 0 0 12px; }'
+                      echo '    p { font-size: 1.05rem; line-height: 1.6; max-width: 60ch; }'
+                      echo '    .card { margin-top: 28px; padding: 24px; border-radius: 18px; background: rgba(255,255,255,0.72); box-shadow: 0 16px 40px rgba(39, 55, 77, 0.14); backdrop-filter: blur(10px); }'
+                      echo '    .latest { display: inline-block; margin: 8px 0 24px; padding: 12px 18px; border-radius: 999px; background: #1e2430; color: #fff; text-decoration: none; }'
+                      echo '    ul { list-style: none; padding: 0; margin: 0; }'
+                      echo '    li + li { margin-top: 12px; }'
+                      echo '    a.version-link { color: #0b5fff; text-decoration: none; font-weight: 700; }'
+                      echo '  </style>'
+                      echo '</head>'
+                      echo '<body>'
+                      echo '  <main>'
+                      echo '    <h1>Lotec Voxel Lighting</h1>'
+                      echo '    <p>Released WebGL builds for the Playground sample scene. A new version is published only when a GitHub release is created by the release flow.</p>'
+                      echo '    <a class="latest" href="latest/">Open latest build</a>'
+                      echo '    <section class="card">'
+                      echo '      <h2>Released versions</h2>'
+                      echo '      <ul>'
+                      for version in "${versions[@]}"; do
+                          echo "        <li><a class=\"version-link\" href=\"versions/${version}/\">${version}</a></li>"
+                      done
+                      echo '      </ul>'
+                      echo '    </section>'
+                      echo '  </main>'
+                      echo '</body>'
+                      echo '</html>'
+                  } > "$SITE_PATH/index.html"
+
+            - name: Compute published URLs
+              id: urls
+              shell: bash
+              run: |
+                  set -eu
+                  repo_name="${GITHUB_REPOSITORY#*/}"
+                  base_url="https://${GITHUB_REPOSITORY_OWNER}.github.io/${repo_name}"
+                  echo "pages_index_url=${base_url}/" >> "$GITHUB_OUTPUT"
+                  echo "version_url=${base_url}/versions/${RELEASE_VERSION}/" >> "$GITHUB_OUTPUT"
+
+            - name: Publish to gh-pages
+              uses: peaceiris/actions-gh-pages@v4
+              with:
+                  github_token: ${{ secrets.GITHUB_TOKEN }}
+                  publish_branch: gh-pages
+                  publish_dir: ${{ env.SITE_PATH }}
+                  force_orphan: false
