@@ -64,16 +64,16 @@ jobs:
                   mkdir -p "$PROJECT_PATH/Assets/Samples"
                   mkdir -p "$PROJECT_PATH/Packages"
                   mkdir -p "$PROJECT_PATH/ProjectSettings"
+                  mkdir -p "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting"
 
                   cat > "$PROJECT_PATH/ProjectSettings/ProjectVersion.txt" <<EOF
                   m_EditorVersion: ${UNITY_VERSION}
                   EOF
 
-                  # Keep only the built-in modules used by the sample content and editor code.
+                  # Keep only the registry packages and built-in modules required by the bootstrap project.
                   cat > "$PROJECT_PATH/Packages/manifest.json" <<EOF
                   {
                     "dependencies": {
-                      "com.lotecsoftware.voxel-lighting": "file:../../../",
                       "com.unity.render-pipelines.universal": "17.3.0",
                       "com.unity.modules.audio": "1.0.0",
                       "com.unity.modules.physics": "1.0.0",
@@ -81,6 +81,20 @@ jobs:
                     }
                   }
                   EOF
+
+                  cp "package.json" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/package.json"
+                  cp "package.json.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/package.json.meta"
+                  cp "README.md" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/README.md"
+                  cp "README.md.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/README.md.meta"
+                  cp "CHANGELOG.md" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/CHANGELOG.md"
+                  cp "CHANGELOG.md.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/CHANGELOG.md.meta"
+                  cp "LICENSE" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/LICENSE"
+                  cp "LICENSE.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/LICENSE.meta"
+                  cp "Editor.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/Editor.meta"
+                  cp "Runtime.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/Runtime.meta"
+                  rsync -a "Editor/" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/Editor/"
+                  rsync -a "Runtime/" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/Runtime/"
+                  rsync -a "Samples~/" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/Samples~/"
 
                   rsync -a "Samples~/Usage samples/" "$PROJECT_PATH/Assets/Samples/Usage samples/"
                   cp ".github/unity/BuildWebGlSample.cs" "$PROJECT_PATH/Assets/Editor/BuildWebGlSample.cs"
