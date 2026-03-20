@@ -47,6 +47,7 @@ jobs:
       - name: Update release body with Pages links
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
           RELEASE_BODY: ${{ needs.release-please.outputs.body }}
           PAGES_INDEX_URL: ${{ needs.publish-webgl-pages.outputs.pages_index_url }}
@@ -56,4 +57,4 @@ jobs:
           set -eu
           notes_file="$(mktemp)"
           printf '%s\n\nWebGL build:\n- Current release: %s\n- All released builds: %s\n' "$RELEASE_BODY" "$VERSION_URL" "$PAGES_INDEX_URL" > "$notes_file"
-          gh release edit "$RELEASE_TAG" --notes-file "$notes_file"
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --notes-file "$notes_file"
