@@ -15,8 +15,6 @@ namespace Lotec.Lighting {
         [SerializeField] SdfBaker _sdfBaker = new SdfBaker();
         [SerializeField] OcclusionBitmaskBaker _occlusionBitmaskBaker = new OcclusionBitmaskBaker();
         [SerializeField] MaterialBaker _materialBaker = new MaterialBaker();
-        [Tooltip("Where to save the baked Texture3D asset(s) (must be under Assets/).")]
-        public string assetPath = "Assets/VoxelLighting";
         public LightingVolume targetSdfVolume => _lightingManager.Volume;
 
         LightingManager _lightingManager;

@@ -2528,7 +2528,6 @@ MonoBehaviour:
     fibonacciDirectionCount: 64
   _materialBaker:
     MaterialBakeCompute: {fileID: 7200000, guid: 7f32bd09c6a495746a7840c188a184c4, type: 3}
-  assetPath: Assets/VoxelLighting/Playground
 --- !u!114 &1437948845
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2567,10 +2566,10 @@ MonoBehaviour:
   Bounds:
     m_Center: {x: 1.99, y: 1.6140002, z: -0.26000023}
     m_Extent: {x: 3.25, y: 3.0140002, z: 5.25}
-  sdfHiresTexture: {fileID: 11700000, guid: b9e72e152a410954c82e5c31b7cd7cdb, type: 2}
-  sdfLowresTexture: {fileID: 11700000, guid: c1f30d794f0959a43add81e2c07cdcbe, type: 2}
-  occlusionBitmaskTexture: {fileID: 11700000, guid: 835b8e5d69afa634ca82721e0bcb67dd, type: 2}
-  materialAlbedoIntensityTexture: {fileID: 11700000, guid: 59b5982846abf024481015e147e6db4f, type: 2}
+  sdfHiresTexture: {fileID: 11700000, guid: 8cc4ba3ba0ebdda4ca1d869df998b15a, type: 2}
+  sdfLowresTexture: {fileID: 11700000, guid: 80ccdea2531973e4e84ca75953324dc8, type: 2}
+  occlusionBitmaskTexture: {fileID: 11700000, guid: afe60146ad9ffe24fb04b4a164e35a51, type: 2}
+  materialAlbedoIntensityTexture: {fileID: 11700000, guid: 4129b6f5d9e7e39478b74818dfe80db6, type: 2}
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0
