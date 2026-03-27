@@ -2,6 +2,7 @@
 #pragma kernel CSComputeIrradiancePathTracing
 #pragma kernel CSComputeIrradianceLPV
 #pragma kernel CSBlurIrradiance
+#pragma kernel CSClearVolume
 
 // --- CONSTANTS ---
 // LPV neighbor propagation factor
@@ -22,6 +23,7 @@ Texture3D<float4> _IrradianceFieldHistory; // Previous Frame Irradiance (read in
 RWTexture3D<float4> _IrradianceFieldWrite; // Current Frame Irradiance (write in irradiance pass)
 Texture3D<float4> _IrradianceFieldInput;   // Temporal irradiance (read in blur pass)
 RWTexture3D<float4> _IrradianceFieldFinal; // Final blurred irradiance
+RWTexture3D<float4> _ClearVolumeTarget;
 
 // Blue noise for stochastic sampling
 Texture2D<float> _BlueNoiseTex;
@@ -47,6 +49,13 @@ bool HasOpenSky(uint3 id)
     }
 
     return true;
+}
+
+[numthreads(8, 8, 8)]
+void CSClearVolume(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
+    _ClearVolumeTarget[id] = 0;
 }
 
 // ----------------------------------------------------------

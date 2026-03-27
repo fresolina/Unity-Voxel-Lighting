@@ -8,6 +8,10 @@ namespace Lotec.Lighting {
     public class GiFieldUpdater : MonoBehaviour {
         static bool s_loggedUnsupportedRuntimeGi;
         static bool s_loggedGiTextureFormatSelection;
+        static readonly GraphicsFormat[] s_webGpuGiTextureFormatCandidates = {
+            // WebGPU storage textures require strict format matching with RWTexture3D<float4>.
+            GraphicsFormat.R32G32B32A32_SFloat,
+        };
         static readonly GraphicsFormat[] s_giTextureFormatCandidates = {
             // rg11b10 is ideal for HDR GI, but not yet supported in some browser WebGPU backends.
             GraphicsFormat.B10G11R11_UFloatPack32,
@@ -56,6 +60,7 @@ namespace Lotec.Lighting {
         int _irradiancePathTracingKernel;
         int _irradianceLpvKernel;
         int _blurKernel;
+        int _clearVolumeKernel;
         Vector3 _radianceTextureResolution;
         int _irradianceFieldSampleCount;
         GraphicsFormat _giTextureFormat;
@@ -71,6 +76,7 @@ namespace Lotec.Lighting {
         static readonly int s_irradianceFieldInput = Shader.PropertyToID("_IrradianceFieldInput");
         static readonly int s_irradianceFieldFinal = Shader.PropertyToID("_IrradianceFieldFinal");
         static readonly int s_irradianceField = Shader.PropertyToID("_IrradianceFieldHistory");
+        static readonly int s_clearVolumeTarget = Shader.PropertyToID("_ClearVolumeTarget");
         static readonly int s_radianceTextureSize = Shader.PropertyToID("_RadianceTextureSize");
         static readonly int s_materialAlbedoIntensity = Shader.PropertyToID("_MaterialAlbedoIntensity");
         static readonly int s_distanceField = Shader.PropertyToID("_DistanceField");
@@ -271,6 +277,7 @@ namespace Lotec.Lighting {
             _irradiancePathTracingKernel = _giComputeShader.FindKernel("CSComputeIrradiancePathTracing");
             _irradianceLpvKernel = _giComputeShader.FindKernel("CSComputeIrradianceLPV");
             _blurKernel = _giComputeShader.FindKernel("CSBlurIrradiance");
+            _clearVolumeKernel = _giComputeShader.FindKernel("CSClearVolume");
 
             // Prefer packed HDR when the backend supports UAV writes, otherwise fall back to a wider float format.
             _radianceField = CreateRadianceTexture(_giTextureFormat, "GI_Radiance_A");
@@ -278,8 +285,10 @@ namespace Lotec.Lighting {
             _irradianceFieldA = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_A");
             _irradianceFieldB = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_B");
             _irradianceFieldFinal = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_Final");
+            ClearVolume(_radianceField);
             ClearVolume(_irradianceFieldA);
             ClearVolume(_irradianceFieldB);
+            ClearVolume(_irradianceFieldFinal);
 
             // TODO: Control Field: Direction & Stability (ARGB32)
             // Standard 8-bit per channel is enough for direction packing.
@@ -367,8 +376,12 @@ namespace Lotec.Lighting {
         }
 
         static bool TryGetSupportedGiTextureFormat(out GraphicsFormat format, out string reason) {
-            for (int i = 0; i < s_giTextureFormatCandidates.Length; i++) {
-                GraphicsFormat candidate = s_giTextureFormatCandidates[i];
+            GraphicsFormat[] candidates = SystemInfo.graphicsDeviceType == GraphicsDeviceType.WebGPU
+                ? s_webGpuGiTextureFormatCandidates
+                : s_giTextureFormatCandidates;
+
+            for (int i = 0; i < candidates.Length; i++) {
+                GraphicsFormat candidate = candidates[i];
                 if (!SystemInfo.IsFormatSupported(candidate, GraphicsFormatUsage.Sample)) {
                     continue;
                 }
@@ -388,23 +401,22 @@ namespace Lotec.Lighting {
             }
 
             format = GraphicsFormat.None;
-            reason = "no supported 3D graphics format was found for both sampled reads and compute load/store writes.";
+            reason = SystemInfo.graphicsDeviceType == GraphicsDeviceType.WebGPU
+                ? "no supported WebGPU 3D storage format was found for RWTexture3D<float4> GI volumes. R32G32B32A32_SFloat is required for the current shader declarations."
+                : "no supported 3D graphics format was found for both sampled reads and compute load/store writes.";
             return false;
         }
 
-        static void ClearVolume(RenderTexture rt) {
+        void ClearVolume(RenderTexture rt) {
             if (rt == null) return;
             if (!rt.IsCreated()) rt.Create();
 
-            RenderTexture previous = RenderTexture.active;
-            try {
-                for (int slice = 0; slice < rt.volumeDepth; slice++) {
-                    Graphics.SetRenderTarget(rt, 0, CubemapFace.Unknown, slice);
-                    GL.Clear(false, true, Color.clear);
-                }
-            } finally {
-                RenderTexture.active = previous;
-            }
+            int groupsX = Mathf.CeilToInt(_radianceTextureResolution.x / 8.0f);
+            int groupsY = Mathf.CeilToInt(_radianceTextureResolution.y / 8.0f);
+            int groupsZ = Mathf.CeilToInt(_radianceTextureResolution.z / 8.0f);
+            _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
+            _giComputeShader.SetTexture(_clearVolumeKernel, s_clearVolumeTarget, rt);
+            _giComputeShader.Dispatch(_clearVolumeKernel, groupsX, groupsY, groupsZ);
         }
 
         void SetDirectLightParams() {
