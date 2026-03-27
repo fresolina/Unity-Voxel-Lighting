@@ -2567,10 +2567,10 @@ MonoBehaviour:
   Bounds:
     m_Center: {x: 1.99, y: 1.6140002, z: -0.26000023}
     m_Extent: {x: 3.25, y: 3.0140002, z: 5.25}
-  sdfHiresTexture: {fileID: 11700000, guid: 6e3361234c2158741b145929af00343d, type: 2}
-  sdfLowresTexture: {fileID: 11700000, guid: 286810e30bd98d2498000fd1581d40ad, type: 2}
-  occlusionBitmaskTexture: {fileID: 11700000, guid: de1d9e5fceb08754687012604c6d31b0, type: 2}
-  materialAlbedoIntensityTexture: {fileID: 11700000, guid: d34bd1b8d43df3c4b9585ba9cc9021f2, type: 2}
+  sdfHiresTexture: {fileID: 11700000, guid: b9e72e152a410954c82e5c31b7cd7cdb, type: 2}
+  sdfLowresTexture: {fileID: 11700000, guid: c1f30d794f0959a43add81e2c07cdcbe, type: 2}
+  occlusionBitmaskTexture: {fileID: 11700000, guid: 835b8e5d69afa634ca82721e0bcb67dd, type: 2}
+  materialAlbedoIntensityTexture: {fileID: 11700000, guid: 59b5982846abf024481015e147e6db4f, type: 2}
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0

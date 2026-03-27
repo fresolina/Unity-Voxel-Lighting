@@ -41,7 +41,6 @@ namespace Lotec.Lighting {
         RenderTexture _irradianceFieldFinal; // Blurred final
         bool _isEvenFrame = true;
         int _radianceKernel;
-        int _radianceLpvSkySweepKernel;
         int _irradiancePathTracingKernel;
         int _irradianceLpvKernel;
         int _blurKernel;
@@ -68,6 +67,7 @@ namespace Lotec.Lighting {
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
         static readonly int s_skyColor = Shader.PropertyToID("_SkyColor");
         static readonly int s_blueNoiseTex = Shader.PropertyToID("_BlueNoiseTex");
+        static readonly int s_injectLpvSky = Shader.PropertyToID("_InjectLpvSky");
         static readonly int s_lpvDecay = Shader.PropertyToID("_LpvDecay");
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
@@ -239,7 +239,6 @@ namespace Lotec.Lighting {
             _radianceTextureResolution = new Vector3(SurfaceDistanceFieldLowRes.width, SurfaceDistanceFieldLowRes.height, SurfaceDistanceFieldLowRes.depth);
 
             _radianceKernel = _giComputeShader.FindKernel("CSComputeRadiance");
-            _radianceLpvSkySweepKernel = _giComputeShader.FindKernel("CSComputeRadianceLPVSkySweep");
             _irradiancePathTracingKernel = _giComputeShader.FindKernel("CSComputeIrradiancePathTracing");
             _irradianceLpvKernel = _giComputeShader.FindKernel("CSComputeIrradianceLPV");
             _blurKernel = _giComputeShader.FindKernel("CSBlurIrradiance");
@@ -284,6 +283,7 @@ namespace Lotec.Lighting {
             _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
             _giComputeShader.SetInt(s_raysPerFrame, _raysPerFrame);
             _giComputeShader.SetInt(s_maxSamples, _maxSamples);
+            _giComputeShader.SetInt(s_injectLpvSky, _lightingMethod == LightingMethod.LPV ? 1 : 0);
             _giComputeShader.SetFloat(s_lpvDecay, _lpvDecay);
 
             // Dispatch (8x8x8 threads per group)
@@ -297,13 +297,6 @@ namespace Lotec.Lighting {
             _giComputeShader.SetTexture(_radianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
             _giComputeShader.SetTexture(_radianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
             _giComputeShader.Dispatch(_radianceKernel, groupsX, groupsY, groupsZ);
-
-            // LPV only: inject a top-down sky sweep into radiance before propagation.
-            if (_lightingMethod == LightingMethod.LPV) {
-                _giComputeShader.SetTexture(_radianceLpvSkySweepKernel, s_radianceFieldWrite, _radianceField);
-                _giComputeShader.SetTexture(_radianceLpvSkySweepKernel, s_distanceField, SurfaceDistanceFieldLowRes);
-                _giComputeShader.Dispatch(_radianceLpvSkySweepKernel, groupsX, groupsZ, 1);
-            }
 
             // Irradiance pass
             // PathTracing = stochastic raymarch gather.
