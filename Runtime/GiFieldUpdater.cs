@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
@@ -6,6 +7,17 @@ namespace Lotec.Lighting {
     [ExecuteInEditMode]
     public class GiFieldUpdater : MonoBehaviour {
         static bool s_loggedUnsupportedRuntimeGi;
+        static bool s_loggedGiTextureFormatSelection;
+        static readonly GraphicsFormat[] s_giTextureFormatCandidates = {
+            // rg11b10 is ideal for HDR GI, but not yet supported in some browser WebGPU backends.
+            GraphicsFormat.B10G11R11_UFloatPack32,
+            // rgba16float is the preferred WebGPU storage fallback for HDR lighting data.
+            GraphicsFormat.R16G16B16A16_SFloat,
+            // rgba8unorm is widely supported for storage textures in browsers, but clamps GI to LDR.
+            GraphicsFormat.R8G8B8A8_UNorm,
+            // Keep full float as a last resort because the 3D volume memory cost is high.
+            GraphicsFormat.R32G32B32A32_SFloat,
+        };
         bool _hasLoggedMissingReferences;
 
         [SerializeField] ComputeShader _giComputeShader;
@@ -46,6 +58,7 @@ namespace Lotec.Lighting {
         int _blurKernel;
         Vector3 _radianceTextureResolution;
         int _irradianceFieldSampleCount;
+        GraphicsFormat _giTextureFormat;
         LightSettings _prevLightSettings;
 
         #region Shader Property IDs
@@ -191,6 +204,11 @@ namespace Lotec.Lighting {
                 return false;
             }
 
+            if (_lightingMethod == LightingMethod.PathTracing && _blueNoiseTexture == null) {
+                reason = "BlueNoiseTexture";
+                return false;
+            }
+
             reason = null;
             return true;
         }
@@ -210,6 +228,11 @@ namespace Lotec.Lighting {
 
             if (!SystemInfo.supports3DTextures) {
                 reason = "3D textures are not supported.";
+                return false;
+            }
+
+            if (!TryGetSupportedGiTextureFormat(out _, out string formatReason)) {
+                reason = formatReason;
                 return false;
             }
 
@@ -238,19 +261,23 @@ namespace Lotec.Lighting {
             _irradianceFieldSampleCount = 0;
             _radianceTextureResolution = new Vector3(SurfaceDistanceFieldLowRes.width, SurfaceDistanceFieldLowRes.height, SurfaceDistanceFieldLowRes.depth);
 
+            if (!TryGetSupportedGiTextureFormat(out _giTextureFormat, out string formatReason)) {
+                Debug.LogError($"Failed to initialize GI field textures: {formatReason}", this);
+                enabled = false;
+                return;
+            }
+
             _radianceKernel = _giComputeShader.FindKernel("CSComputeRadiance");
             _irradiancePathTracingKernel = _giComputeShader.FindKernel("CSComputeIrradiancePathTracing");
             _irradianceLpvKernel = _giComputeShader.FindKernel("CSComputeIrradianceLPV");
             _blurKernel = _giComputeShader.FindKernel("CSBlurIrradiance");
 
-            // Radiance Field: HDR Color (R11G11B10)
-            _radianceField = CreateRadianceTexture(RenderTextureFormat.RGB111110Float, "GI_Radiance_A");
+            // Prefer packed HDR when the backend supports UAV writes, otherwise fall back to a wider float format.
+            _radianceField = CreateRadianceTexture(_giTextureFormat, "GI_Radiance_A");
 
-            // Irradiance Field: HDR Color (R11G11B10)
-            RenderTextureFormat irradianceFormat = RenderTextureFormat.RGB111110Float;
-            _irradianceFieldA = CreateRadianceTexture(irradianceFormat, "GI_Irradiance_A");
-            _irradianceFieldB = CreateRadianceTexture(irradianceFormat, "GI_Irradiance_B");
-            _irradianceFieldFinal = CreateRadianceTexture(irradianceFormat, "GI_Irradiance_Final");
+            _irradianceFieldA = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_A");
+            _irradianceFieldB = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_B");
+            _irradianceFieldFinal = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_Final");
             ClearVolume(_irradianceFieldA);
             ClearVolume(_irradianceFieldB);
 
@@ -307,7 +334,9 @@ namespace Lotec.Lighting {
             _giComputeShader.SetTexture(irradianceKernel, s_irradianceField, IrradianceRead);
             _giComputeShader.SetTexture(irradianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
             _giComputeShader.SetTexture(irradianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
-            _giComputeShader.SetTexture(irradianceKernel, s_blueNoiseTex, _blueNoiseTexture);
+            if (_lightingMethod == LightingMethod.PathTracing) {
+                _giComputeShader.SetTexture(_irradiancePathTracingKernel, s_blueNoiseTex, _blueNoiseTexture);
+            }
             _giComputeShader.Dispatch(irradianceKernel, groupsX, groupsY, groupsZ);
 
             // Blur pass (skip in LPV mode to avoid cross-wall bleed from generic blur)
@@ -319,8 +348,9 @@ namespace Lotec.Lighting {
             }
         }
 
-        RenderTexture CreateRadianceTexture(RenderTextureFormat format, string name) {
-            RenderTextureDescriptor desc = new RenderTextureDescriptor((int)_radianceTextureResolution.x, (int)_radianceTextureResolution.y, format, 0) {
+        RenderTexture CreateRadianceTexture(GraphicsFormat format, string name) {
+            RenderTextureDescriptor desc = new RenderTextureDescriptor((int)_radianceTextureResolution.x, (int)_radianceTextureResolution.y) {
+                graphicsFormat = format,
                 dimension = TextureDimension.Tex3D,
                 volumeDepth = (int)_radianceTextureResolution.z,
                 enableRandomWrite = true,
@@ -334,6 +364,32 @@ namespace Lotec.Lighting {
             };
             rt.Create();
             return rt;
+        }
+
+        static bool TryGetSupportedGiTextureFormat(out GraphicsFormat format, out string reason) {
+            for (int i = 0; i < s_giTextureFormatCandidates.Length; i++) {
+                GraphicsFormat candidate = s_giTextureFormatCandidates[i];
+                if (!SystemInfo.IsFormatSupported(candidate, GraphicsFormatUsage.Sample)) {
+                    continue;
+                }
+
+                if (!SystemInfo.IsFormatSupported(candidate, GraphicsFormatUsage.LoadStore)) {
+                    continue;
+                }
+
+                format = candidate;
+                if (!s_loggedGiTextureFormatSelection) {
+                    s_loggedGiTextureFormatSelection = true;
+                    Debug.Log($"GI field textures using graphics format {candidate}.");
+                }
+
+                reason = null;
+                return true;
+            }
+
+            format = GraphicsFormat.None;
+            reason = "no supported 3D graphics format was found for both sampled reads and compute load/store writes.";
+            return false;
         }
 
         static void ClearVolume(RenderTexture rt) {
