@@ -45,7 +45,6 @@ namespace Lotec.Lighting {
         int _irradiancePathTracingKernel;
         int _irradianceLpvKernel;
         int _blurKernel;
-        int _clearKernel = -1;
         Vector3 _radianceTextureResolution;
         int _irradianceFieldSampleCount;
         LightSettings _prevLightSettings;
@@ -253,6 +252,8 @@ namespace Lotec.Lighting {
             _irradianceFieldA = CreateRadianceTexture(irradianceFormat, "GI_Irradiance_A");
             _irradianceFieldB = CreateRadianceTexture(irradianceFormat, "GI_Irradiance_B");
             _irradianceFieldFinal = CreateRadianceTexture(irradianceFormat, "GI_Irradiance_Final");
+            ClearVolume(_irradianceFieldA);
+            ClearVolume(_irradianceFieldB);
 
             // TODO: Control Field: Direction & Stability (ARGB32)
             // Standard 8-bit per channel is enough for direction packing.
@@ -260,7 +261,6 @@ namespace Lotec.Lighting {
         }
 
         public void ReleaseBuffers() {
-            ClearRadianceField();
             if (_radianceField != null)
                 _radianceField.Release();
             if (_irradianceFieldB != null)
@@ -273,34 +273,6 @@ namespace Lotec.Lighting {
             _irradianceFieldB = null;
             _irradianceFieldA = null;
             _irradianceFieldFinal = null;
-        }
-        void ClearRadianceField() {
-            if (_giComputeShader == null) {
-                Debug.LogWarning("GI compute shader is null; cannot clear volumes.");
-                return;
-            }
-
-            if (_clearKernel < 0) _clearKernel = _giComputeShader.FindKernel("CSClearVolume");
-
-            if (_radianceField != null) ClearVolumeWithCompute(_radianceField);
-            if (_irradianceFieldB != null) ClearVolumeWithCompute(_irradianceFieldB);
-            if (_irradianceFieldA != null) ClearVolumeWithCompute(_irradianceFieldA);
-            if (_irradianceFieldFinal != null) ClearVolumeWithCompute(_irradianceFieldFinal);
-        }
-
-        void ClearVolumeWithCompute(RenderTexture rt) {
-            if (rt == null) return;
-            if (!rt.IsCreated()) rt.Create();
-
-            _giComputeShader.SetTexture(_clearKernel, "_ClearTarget", rt);
-            int groupsX = Mathf.CeilToInt(rt.width / 8.0f);
-            int groupsY = Mathf.CeilToInt(rt.height / 8.0f);
-            int groupsZ = Mathf.CeilToInt(rt.volumeDepth / 8.0f);
-
-            _giComputeShader.Dispatch(_clearKernel, groupsX, groupsY, groupsZ);
-
-            // Unbind for cleanliness (Unity throws exception if we do this)
-            // giComputeShader.SetTexture(_clearKernelIndex, "_ClearTarget", null);
         }
 
         void DispatchGIUpdate() {
@@ -369,6 +341,21 @@ namespace Lotec.Lighting {
             };
             rt.Create();
             return rt;
+        }
+
+        static void ClearVolume(RenderTexture rt) {
+            if (rt == null) return;
+            if (!rt.IsCreated()) rt.Create();
+
+            RenderTexture previous = RenderTexture.active;
+            try {
+                for (int slice = 0; slice < rt.volumeDepth; slice++) {
+                    Graphics.SetRenderTarget(rt, 0, CubemapFace.Unknown, slice);
+                    GL.Clear(false, true, Color.clear);
+                }
+            } finally {
+                RenderTexture.active = previous;
+            }
         }
 
         void SetDirectLightParams() {

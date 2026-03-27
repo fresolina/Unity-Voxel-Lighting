@@ -3,7 +3,6 @@
 #pragma kernel CSComputeIrradiancePathTracing
 #pragma kernel CSComputeIrradianceLPV
 #pragma kernel CSBlurIrradiance
-#pragma kernel CSClearVolume
 
 // --- CONSTANTS ---
 // LPV neighbor propagation factor
@@ -37,16 +36,6 @@ float3 _DirectLightDir;
 float4 _DirectLightColor;
 float3 _SkyColor;
 float _LpvDecay;
-
-// --- DEBUG: Clear Kernel ---
-RWTexture3D<float4> _ClearTarget;
-[numthreads(8,8,8)]
-void CSClearVolume(uint3 id : SV_DispatchThreadID)
-{
-    if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
-
-    _ClearTarget[id] = float4(0.0, 0.0, 0.0, 0.0);
-}
 
 // ----------------------------------------------------------
 // RADIANCE PASS
