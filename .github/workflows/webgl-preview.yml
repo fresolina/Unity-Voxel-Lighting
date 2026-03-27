@@ -1,0 +1,24 @@
+name: webgl-preview
+
+on:
+    push:
+        branches-ignore:
+            - gh-pages
+            - main
+        tags-ignore:
+            - "**"
+
+permissions:
+    contents: write
+
+env:
+    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+    publish-webgl-preview:
+        uses: ./.github/workflows/webgl-pages.yml
+        with:
+            git_ref: ${{ github.sha }}
+            publish_kind: preview
+            preview_name: ${{ github.ref_name }}
+        secrets: inherit

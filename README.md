@@ -16,7 +16,12 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
 
 ## Web preview builds
 
-Use the `webgl-pages` workflow in GitHub Actions when you want a preview build from a feature branch or a specific commit.
+Pushes to non-`main` branches publishes a preview WebGL build automatically.
+
+* Each branch keeps a stable preview URL under `previews/<branch-name>/`.
+* The GitHub Pages index updates that link in place, and the link text shows the latest short SHA for the published branch build.
+
+Use the `webgl-pages` workflow in GitHub Actions when you want a manual preview build from a feature branch or a specific commit.
 
 1. Open the repository Actions tab and select the `webgl-pages` workflow.
 2. Click `Run workflow`.
@@ -24,7 +29,7 @@ Use the `webgl-pages` workflow in GitHub Actions when you want a preview build f
 4. Leave `publish_kind` as `preview` unless you are intentionally publishing a release build.
 5. Optionally set `preview_name` to override the URL prefix. If you leave it empty, the workflow uses `git_ref` or the selected branch name.
 
-Preview builds are published under `previews/<preview-name>-<short-sha>/`, so each run gets its own URL instead of overwriting an older preview from the same branch.
+Automatic branch previews and manual previews now publish under `previews/<preview-name>/`, so the URL always points at the latest build for that preview name.
 
 ## TODO
 
