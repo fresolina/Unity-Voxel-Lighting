@@ -1,3 +1,6 @@
 {
-	"name": "Lotec.Lighting"
+	"name": "Lotec.Lighting",
+	"references": [
+		"Unity.InputSystem"
+	]
 }
