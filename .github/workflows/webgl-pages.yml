@@ -158,6 +158,7 @@ jobs:
           cat > "$PROJECT_PATH/Packages/manifest.json" <<EOF
           {
             "dependencies": {
+              "com.unity.inputsystem": "1.16.0",
               "com.unity.render-pipelines.universal": "17.3.0",
               "com.unity.modules.audio": "1.0.0",
               "com.unity.modules.physics": "1.0.0",
