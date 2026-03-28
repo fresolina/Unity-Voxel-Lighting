@@ -182,9 +182,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PROJECT_PATH }}/Library
-          key: Library-WebGL-${{ env.GIT_REF }}-${{ hashFiles('.github/workflows/webgl-pages.yml', '.github/workflows/webgl-release.yml', '.github/unity/BuildWebGlSample.cs', 'package.json', 'Runtime/**', 'Editor/**', 'Samples~/**') }}
-          restore-keys: |
-            Library-WebGL-
+          key: Library-WebGL-${{ env.UNITY_VERSION }}-${{ hashFiles(
+            format('{0}/Packages/manifest.json', env.PROJECT_PATH),
+            '.github/unity/BuildWebGlSample.cs',
+            './package.json'
+            ) }}
 
       - name: Build WebGL sample
         uses: game-ci/unity-builder@v4
