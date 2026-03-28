@@ -17,6 +17,7 @@ namespace Lotec.Lighting.Samples {
             Vector3 eulerAngles = transform.rotation.eulerAngles;
             _yaw = eulerAngles.y;
             _pitch = NormalizePitch(eulerAngles.x);
+            Debug.Log($"SampleFlyCamera: initial camera rotation: yaw={_yaw}, pitch={_pitch}");
         }
 
         void OnDisable() {
