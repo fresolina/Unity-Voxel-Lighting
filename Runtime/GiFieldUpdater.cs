@@ -133,7 +133,7 @@ namespace Lotec.Lighting {
 
             if (!IsRuntimeGiReady(out string missingReason)) {
                 if (!_hasLoggedMissingReferences) {
-                    _hasLoggedMissingReferences = true;
+                    // _hasLoggedMissingReferences = true;
                     Debug.LogWarning($"GI Field Updater is missing required references: {missingReason}. Waiting for runtime GI initialization.", this);
                 }
                 return;
