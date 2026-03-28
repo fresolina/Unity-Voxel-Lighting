@@ -1,10 +1,29 @@
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
     [DisallowMultipleComponent]
     [ExecuteInEditMode]
     public class GiFieldUpdater : MonoBehaviour {
+        static bool s_loggedUnsupportedRuntimeGi;
+        static bool s_loggedGiTextureFormatSelection;
+        static readonly GraphicsFormat[] s_webGpuGiTextureFormatCandidates = {
+            // WebGPU storage textures require strict format matching with RWTexture3D<float4>.
+            GraphicsFormat.R32G32B32A32_SFloat,
+        };
+        static readonly GraphicsFormat[] s_giTextureFormatCandidates = {
+            // rg11b10 is ideal for HDR GI, but not yet supported in some browser WebGPU backends.
+            GraphicsFormat.B10G11R11_UFloatPack32,
+            // rgba16float is the preferred WebGPU storage fallback for HDR lighting data.
+            GraphicsFormat.R16G16B16A16_SFloat,
+            // rgba8unorm is widely supported for storage textures in browsers, but clamps GI to LDR.
+            GraphicsFormat.R8G8B8A8_UNorm,
+            // Keep full float as a last resort because the 3D volume memory cost is high.
+            GraphicsFormat.R32G32B32A32_SFloat,
+        };
+        bool _hasLoggedMissingReferences;
+
         [SerializeField] ComputeShader _giComputeShader;
         [SerializeField] bool _continuousGi;
         [Tooltip("Consider GI stable after this many samples. Stops GI updates until a lighting change is detected or continuousGI is enabled.")]
@@ -38,13 +57,13 @@ namespace Lotec.Lighting {
         RenderTexture _irradianceFieldFinal; // Blurred final
         bool _isEvenFrame = true;
         int _radianceKernel;
-        int _radianceLpvSkySweepKernel;
         int _irradiancePathTracingKernel;
         int _irradianceLpvKernel;
         int _blurKernel;
-        int _clearKernel = -1;
+        int _clearVolumeKernel;
         Vector3 _radianceTextureResolution;
         int _irradianceFieldSampleCount;
+        GraphicsFormat _giTextureFormat;
         LightSettings _prevLightSettings;
 
         #region Shader Property IDs
@@ -57,6 +76,7 @@ namespace Lotec.Lighting {
         static readonly int s_irradianceFieldInput = Shader.PropertyToID("_IrradianceFieldInput");
         static readonly int s_irradianceFieldFinal = Shader.PropertyToID("_IrradianceFieldFinal");
         static readonly int s_irradianceField = Shader.PropertyToID("_IrradianceFieldHistory");
+        static readonly int s_clearVolumeTarget = Shader.PropertyToID("_ClearVolumeTarget");
         static readonly int s_radianceTextureSize = Shader.PropertyToID("_RadianceTextureSize");
         static readonly int s_materialAlbedoIntensity = Shader.PropertyToID("_MaterialAlbedoIntensity");
         static readonly int s_distanceField = Shader.PropertyToID("_DistanceField");
@@ -66,6 +86,7 @@ namespace Lotec.Lighting {
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
         static readonly int s_skyColor = Shader.PropertyToID("_SkyColor");
         static readonly int s_blueNoiseTex = Shader.PropertyToID("_BlueNoiseTex");
+        static readonly int s_injectLpvSky = Shader.PropertyToID("_InjectLpvSky");
         static readonly int s_lpvDecay = Shader.PropertyToID("_LpvDecay");
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
@@ -79,18 +100,46 @@ namespace Lotec.Lighting {
         public LightingVolume Volume {
             get => _volume;
             set {
+                if (_volume == value) return;
                 _volume = value;
-                MaterialFieldAlbedoIntensity = _volume.materialAlbedoIntensityTexture;
-                SurfaceDistanceFieldHighRes = _volume.sdfHiresTexture;
-                SurfaceDistanceFieldLowRes = _volume.sdfLowresTexture;
+                MaterialFieldAlbedoIntensity = _volume != null ? _volume.materialAlbedoIntensityTexture : null;
+                SurfaceDistanceFieldHighRes = _volume != null ? _volume.sdfHiresTexture : null;
+                SurfaceDistanceFieldLowRes = _volume != null ? _volume.sdfLowresTexture : null;
             }
         }
 
+        void Awake() {
+            RefreshRuntimeGiReferences();
+        }
+
+        void OnEnable() {
+            RefreshRuntimeGiReferences();
+        }
+
         void Update() {
-            if (Volume == null || _giComputeShader == null) {
-                Debug.LogWarning("GI Field Updater is missing required references; skipping GI update.");
+            RefreshRuntimeGiReferences();
+
+            if (!SupportsRuntimeGi(out string unsupportedReason)) {
+                ReleaseBuffers();
+
+                if (!s_loggedUnsupportedRuntimeGi) {
+                    s_loggedUnsupportedRuntimeGi = true;
+                    Debug.LogError($"Runtime GI requires WebGPU support: {unsupportedReason}", this);
+                }
+
+                enabled = false;
                 return;
             }
+
+            if (!IsRuntimeGiReady(out string missingReason)) {
+                if (!_hasLoggedMissingReferences) {
+                    _hasLoggedMissingReferences = true;
+                    Debug.LogWarning($"GI Field Updater is missing required references: {missingReason}. Waiting for runtime GI initialization.", this);
+                }
+                return;
+            }
+
+            _hasLoggedMissingReferences = false;
 
             if (HasLightChanged()) {
                 _irradianceFieldSampleCount = 0;
@@ -117,6 +166,86 @@ namespace Lotec.Lighting {
             ReleaseBuffers();
         }
 
+        void RefreshRuntimeGiReferences() {
+            if (Volume == null) {
+                LightingManager lightingManager = GetComponent<LightingManager>();
+                if (lightingManager != null && lightingManager.Volume != null) {
+                    Volume = lightingManager.Volume;
+                }
+            }
+
+            if (Volume != null) {
+                if (MaterialFieldAlbedoIntensity == null) {
+                    MaterialFieldAlbedoIntensity = Volume.materialAlbedoIntensityTexture;
+                }
+
+                if (SurfaceDistanceFieldHighRes == null) {
+                    SurfaceDistanceFieldHighRes = Volume.sdfHiresTexture;
+                }
+
+                if (SurfaceDistanceFieldLowRes == null) {
+                    SurfaceDistanceFieldLowRes = Volume.sdfLowresTexture;
+                }
+            }
+        }
+
+        bool IsRuntimeGiReady(out string reason) {
+            if (Volume == null) {
+                reason = "LightingVolume";
+                return false;
+            }
+
+            if (_giComputeShader == null) {
+                reason = "ComputeShader";
+                return false;
+            }
+
+            if (MaterialFieldAlbedoIntensity == null) {
+                reason = "LightingVolume.materialAlbedoIntensityTexture";
+                return false;
+            }
+
+            if (SurfaceDistanceFieldLowRes == null) {
+                reason = "LightingVolume.sdfLowresTexture";
+                return false;
+            }
+
+            if (_lightingMethod == LightingMethod.PathTracing && _blueNoiseTexture == null) {
+                reason = "BlueNoiseTexture";
+                return false;
+            }
+
+            reason = null;
+            return true;
+        }
+
+        bool SupportsRuntimeGi(out string reason) {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            if (SystemInfo.graphicsDeviceType != GraphicsDeviceType.WebGPU) {
+                reason = $"the active graphics backend is '{SystemInfo.graphicsDeviceType}', but this package requires WebGPU on Web builds.";
+                return false;
+            }
+#endif
+
+            if (!SystemInfo.supportsComputeShaders) {
+                reason = "compute shaders are not supported.";
+                return false;
+            }
+
+            if (!SystemInfo.supports3DTextures) {
+                reason = "3D textures are not supported.";
+                return false;
+            }
+
+            if (!TryGetSupportedGiTextureFormat(out _, out string formatReason)) {
+                reason = formatReason;
+                return false;
+            }
+
+            reason = null;
+            return true;
+        }
+
         bool HasLightChanged() {
             Vector3 sunDir = RenderSettings.sun != null ? -RenderSettings.sun.transform.forward : Vector3.down;
             Vector4 sunCol = RenderSettings.sun != null ? (Vector4)RenderSettings.sun.color * RenderSettings.sun.intensity : Vector4.zero;
@@ -138,20 +267,28 @@ namespace Lotec.Lighting {
             _irradianceFieldSampleCount = 0;
             _radianceTextureResolution = new Vector3(SurfaceDistanceFieldLowRes.width, SurfaceDistanceFieldLowRes.height, SurfaceDistanceFieldLowRes.depth);
 
+            if (!TryGetSupportedGiTextureFormat(out _giTextureFormat, out string formatReason)) {
+                Debug.LogError($"Failed to initialize GI field textures: {formatReason}", this);
+                enabled = false;
+                return;
+            }
+
             _radianceKernel = _giComputeShader.FindKernel("CSComputeRadiance");
-            _radianceLpvSkySweepKernel = _giComputeShader.FindKernel("CSComputeRadianceLPVSkySweep");
             _irradiancePathTracingKernel = _giComputeShader.FindKernel("CSComputeIrradiancePathTracing");
             _irradianceLpvKernel = _giComputeShader.FindKernel("CSComputeIrradianceLPV");
             _blurKernel = _giComputeShader.FindKernel("CSBlurIrradiance");
+            _clearVolumeKernel = _giComputeShader.FindKernel("CSClearVolume");
 
-            // Radiance Field: HDR Color (R11G11B10)
-            _radianceField = CreateRadianceTexture(RenderTextureFormat.RGB111110Float, "GI_Radiance_A");
+            // Prefer packed HDR when the backend supports UAV writes, otherwise fall back to a wider float format.
+            _radianceField = CreateRadianceTexture(_giTextureFormat, "GI_Radiance_A");
 
-            // Irradiance Field: HDR Color (R11G11B10)
-            RenderTextureFormat irradianceFormat = RenderTextureFormat.RGB111110Float;
-            _irradianceFieldA = CreateRadianceTexture(irradianceFormat, "GI_Irradiance_A");
-            _irradianceFieldB = CreateRadianceTexture(irradianceFormat, "GI_Irradiance_B");
-            _irradianceFieldFinal = CreateRadianceTexture(irradianceFormat, "GI_Irradiance_Final");
+            _irradianceFieldA = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_A");
+            _irradianceFieldB = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_B");
+            _irradianceFieldFinal = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_Final");
+            ClearVolume(_radianceField);
+            ClearVolume(_irradianceFieldA);
+            ClearVolume(_irradianceFieldB);
+            ClearVolume(_irradianceFieldFinal);
 
             // TODO: Control Field: Direction & Stability (ARGB32)
             // Standard 8-bit per channel is enough for direction packing.
@@ -159,7 +296,6 @@ namespace Lotec.Lighting {
         }
 
         public void ReleaseBuffers() {
-            ClearRadianceField();
             if (_radianceField != null)
                 _radianceField.Release();
             if (_irradianceFieldB != null)
@@ -173,34 +309,6 @@ namespace Lotec.Lighting {
             _irradianceFieldA = null;
             _irradianceFieldFinal = null;
         }
-        void ClearRadianceField() {
-            if (_giComputeShader == null) {
-                Debug.LogWarning("GI compute shader is null; cannot clear volumes.");
-                return;
-            }
-
-            if (_clearKernel < 0) _clearKernel = _giComputeShader.FindKernel("CSClearVolume");
-
-            if (_radianceField != null) ClearVolumeWithCompute(_radianceField);
-            if (_irradianceFieldB != null) ClearVolumeWithCompute(_irradianceFieldB);
-            if (_irradianceFieldA != null) ClearVolumeWithCompute(_irradianceFieldA);
-            if (_irradianceFieldFinal != null) ClearVolumeWithCompute(_irradianceFieldFinal);
-        }
-
-        void ClearVolumeWithCompute(RenderTexture rt) {
-            if (rt == null) return;
-            if (!rt.IsCreated()) rt.Create();
-
-            _giComputeShader.SetTexture(_clearKernel, "_ClearTarget", rt);
-            int groupsX = Mathf.CeilToInt(rt.width / 8.0f);
-            int groupsY = Mathf.CeilToInt(rt.height / 8.0f);
-            int groupsZ = Mathf.CeilToInt(rt.volumeDepth / 8.0f);
-
-            _giComputeShader.Dispatch(_clearKernel, groupsX, groupsY, groupsZ);
-
-            // Unbind for cleanliness (Unity throws exception if we do this)
-            // giComputeShader.SetTexture(_clearKernelIndex, "_ClearTarget", null);
-        }
 
         void DispatchGIUpdate() {
             // Shared parameters
@@ -211,6 +319,7 @@ namespace Lotec.Lighting {
             _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
             _giComputeShader.SetInt(s_raysPerFrame, _raysPerFrame);
             _giComputeShader.SetInt(s_maxSamples, _maxSamples);
+            _giComputeShader.SetInt(s_injectLpvSky, _lightingMethod == LightingMethod.LPV ? 1 : 0);
             _giComputeShader.SetFloat(s_lpvDecay, _lpvDecay);
 
             // Dispatch (8x8x8 threads per group)
@@ -225,13 +334,6 @@ namespace Lotec.Lighting {
             _giComputeShader.SetTexture(_radianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
             _giComputeShader.Dispatch(_radianceKernel, groupsX, groupsY, groupsZ);
 
-            // LPV only: inject a top-down sky sweep into radiance before propagation.
-            if (_lightingMethod == LightingMethod.LPV) {
-                _giComputeShader.SetTexture(_radianceLpvSkySweepKernel, s_radianceFieldWrite, _radianceField);
-                _giComputeShader.SetTexture(_radianceLpvSkySweepKernel, s_distanceField, SurfaceDistanceFieldLowRes);
-                _giComputeShader.Dispatch(_radianceLpvSkySweepKernel, groupsX, groupsZ, 1);
-            }
-
             // Irradiance pass
             // PathTracing = stochastic raymarch gather.
             // LPV = iterative neighbor propagation in the voxel grid.
@@ -241,7 +343,9 @@ namespace Lotec.Lighting {
             _giComputeShader.SetTexture(irradianceKernel, s_irradianceField, IrradianceRead);
             _giComputeShader.SetTexture(irradianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
             _giComputeShader.SetTexture(irradianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
-            _giComputeShader.SetTexture(irradianceKernel, s_blueNoiseTex, _blueNoiseTexture);
+            if (_lightingMethod == LightingMethod.PathTracing) {
+                _giComputeShader.SetTexture(_irradiancePathTracingKernel, s_blueNoiseTex, _blueNoiseTexture);
+            }
             _giComputeShader.Dispatch(irradianceKernel, groupsX, groupsY, groupsZ);
 
             // Blur pass (skip in LPV mode to avoid cross-wall bleed from generic blur)
@@ -253,8 +357,9 @@ namespace Lotec.Lighting {
             }
         }
 
-        RenderTexture CreateRadianceTexture(RenderTextureFormat format, string name) {
-            RenderTextureDescriptor desc = new RenderTextureDescriptor((int)_radianceTextureResolution.x, (int)_radianceTextureResolution.y, format, 0) {
+        RenderTexture CreateRadianceTexture(GraphicsFormat format, string name) {
+            RenderTextureDescriptor desc = new RenderTextureDescriptor((int)_radianceTextureResolution.x, (int)_radianceTextureResolution.y) {
+                graphicsFormat = format,
                 dimension = TextureDimension.Tex3D,
                 volumeDepth = (int)_radianceTextureResolution.z,
                 enableRandomWrite = true,
@@ -268,6 +373,50 @@ namespace Lotec.Lighting {
             };
             rt.Create();
             return rt;
+        }
+
+        static bool TryGetSupportedGiTextureFormat(out GraphicsFormat format, out string reason) {
+            GraphicsFormat[] candidates = SystemInfo.graphicsDeviceType == GraphicsDeviceType.WebGPU
+                ? s_webGpuGiTextureFormatCandidates
+                : s_giTextureFormatCandidates;
+
+            for (int i = 0; i < candidates.Length; i++) {
+                GraphicsFormat candidate = candidates[i];
+                if (!SystemInfo.IsFormatSupported(candidate, GraphicsFormatUsage.Sample)) {
+                    continue;
+                }
+
+                if (!SystemInfo.IsFormatSupported(candidate, GraphicsFormatUsage.LoadStore)) {
+                    continue;
+                }
+
+                format = candidate;
+                if (!s_loggedGiTextureFormatSelection) {
+                    s_loggedGiTextureFormatSelection = true;
+                    Debug.Log($"GI field textures using graphics format {candidate}.");
+                }
+
+                reason = null;
+                return true;
+            }
+
+            format = GraphicsFormat.None;
+            reason = SystemInfo.graphicsDeviceType == GraphicsDeviceType.WebGPU
+                ? "no supported WebGPU 3D storage format was found for RWTexture3D<float4> GI volumes. R32G32B32A32_SFloat is required for the current shader declarations."
+                : "no supported 3D graphics format was found for both sampled reads and compute load/store writes.";
+            return false;
+        }
+
+        void ClearVolume(RenderTexture rt) {
+            if (rt == null) return;
+            if (!rt.IsCreated()) rt.Create();
+
+            int groupsX = Mathf.CeilToInt(_radianceTextureResolution.x / 8.0f);
+            int groupsY = Mathf.CeilToInt(_radianceTextureResolution.y / 8.0f);
+            int groupsZ = Mathf.CeilToInt(_radianceTextureResolution.z / 8.0f);
+            _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
+            _giComputeShader.SetTexture(_clearVolumeKernel, s_clearVolumeTarget, rt);
+            _giComputeShader.Dispatch(_clearVolumeKernel, groupsX, groupsY, groupsZ);
         }
 
         void SetDirectLightParams() {

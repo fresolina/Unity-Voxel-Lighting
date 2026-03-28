@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -40,8 +41,13 @@ public static class BuildWebGlSample {
     }
 
     static void ConfigureWebGlPublishing() {
-        PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Brotli;
-        PlayerSettings.WebGL.decompressionFallback = true;
+        PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Disabled;
+        PlayerSettings.WebGL.decompressionFallback = false;
+        PlayerSettings.SetIl2CppCodeGeneration(NamedBuildTarget.WebGL, Il2CppCodeGeneration.OptimizeSize);
+        PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.WebGL, false);
+        PlayerSettings.SetGraphicsAPIs(BuildTarget.WebGL, new[] {
+            GraphicsDeviceType.WebGPU,
+        });
     }
 
     static void EnsureUrpConfigured() {

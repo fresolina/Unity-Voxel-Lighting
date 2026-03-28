@@ -1,0 +1,40 @@
+name: webgl-release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  publish-webgl-pages:
+    uses: ./.github/workflows/webgl-pages.yml
+    with:
+      git_ref: ${{ github.event.release.tag_name }}
+      publish_kind: release
+      release_tag: ${{ github.event.release.tag_name }}
+    secrets: inherit
+
+  annotate-release:
+    needs: publish-webgl-pages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update release body with Pages links
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+          PAGES_INDEX_URL: ${{ needs.publish-webgl-pages.outputs.pages_index_url }}
+          VERSION_URL: ${{ needs.publish-webgl-pages.outputs.version_url }}
+        shell: bash
+        run: |
+          set -eu
+          notes_file="$(mktemp)"
+          printf '%s\n\nWebGL build:\n- Current release: %s\n- All released builds: %s\n' "$RELEASE_BODY" "$VERSION_URL" "$PAGES_INDEX_URL" > "$notes_file"
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --notes-file "$notes_file"

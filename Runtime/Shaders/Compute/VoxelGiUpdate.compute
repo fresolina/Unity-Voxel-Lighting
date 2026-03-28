@@ -1,5 +1,4 @@
 #pragma kernel CSComputeRadiance
-#pragma kernel CSComputeRadianceLPVSkySweep
 #pragma kernel CSComputeIrradiancePathTracing
 #pragma kernel CSComputeIrradianceLPV
 #pragma kernel CSBlurIrradiance
@@ -24,6 +23,7 @@ Texture3D<float4> _IrradianceFieldHistory; // Previous Frame Irradiance (read in
 RWTexture3D<float4> _IrradianceFieldWrite; // Current Frame Irradiance (write in irradiance pass)
 Texture3D<float4> _IrradianceFieldInput;   // Temporal irradiance (read in blur pass)
 RWTexture3D<float4> _IrradianceFieldFinal; // Final blurred irradiance
+RWTexture3D<float4> _ClearVolumeTarget;
 
 // Blue noise for stochastic sampling
 Texture2D<float> _BlueNoiseTex;
@@ -36,16 +36,26 @@ uint _RaysPerFrame;
 float3 _DirectLightDir;
 float4 _DirectLightColor;
 float3 _SkyColor;
+int _InjectLpvSky;
 float _LpvDecay;
 
-// --- DEBUG: Clear Kernel ---
-RWTexture3D<float4> _ClearTarget;
-[numthreads(8,8,8)]
+bool HasOpenSky(uint3 id)
+{
+    [loop]
+    for (uint y = id.y + 1; y < (uint)_RadianceTextureSize.y; y++) {
+        if (_DistanceField.Load(int4((int)id.x, (int)y, (int)id.z, 0)).r < 0.0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+[numthreads(8, 8, 8)]
 void CSClearVolume(uint3 id : SV_DispatchThreadID)
 {
     if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
-
-    _ClearTarget[id] = float4(0.0, 0.0, 0.0, 0.0);
+    _ClearVolumeTarget[id] = 0;
 }
 
 // ----------------------------------------------------------
@@ -60,11 +70,14 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
     float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
     float3 uvw = WorldToVoxelUV(voxelCenter);
     float dist = _DistanceField.SampleLevel(pointClampSampler, uvw, 0).r;
+    bool isAir = dist >= 0;
+    bool shouldInjectSky = _InjectLpvSky != 0 && isAir && HasOpenSky(id);
+    float3 outgoingLight = shouldInjectSky ? _SkyColor : 0.0;
 
     // Only near-surface voxels radiate.
     bool shouldRadiate = dist > 0 && dist <= _VoxelSize.x;
     if (!shouldRadiate) {
-        _RadianceFieldWrite[id] = 0;
+        _RadianceFieldWrite[id] = float4(outgoingLight, 1.0);
         return;
     }
 
@@ -84,38 +97,8 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
     // Radiate reflected incoming light plus emissive contribution.
     // float3 safeAlbedo = min(albedoIntensity.rgb, float3(0.9f, 0.9f, 0.9f));
     float3 safeAlbedo = albedoIntensity.rgb;
-    float3 outgoingLight = ((surfaceIrradiance + sunLight) * safeAlbedo.rgb) + emissiveLight;
+    outgoingLight += ((surfaceIrradiance + sunLight) * safeAlbedo.rgb) + emissiveLight;
     _RadianceFieldWrite[id] = float4(outgoingLight, 1.0);
-}
-
-// ----------------------------------------------------------
-// LPV SKY SWEEP RADIANCE PASS
-// Inject top-down sky visibility directly into radiance field.
-// ----------------------------------------------------------
-[numthreads(8, 8, 1)]
-void CSComputeRadianceLPVSkySweep(uint3 id : SV_DispatchThreadID)
-{
-    if (id.x >= (uint)_RadianceTextureSize.x || id.y >= (uint)_RadianceTextureSize.z) return;
-
-    int maxY = (int)_RadianceTextureSize.y;
-    bool blocked = false;
-
-    // Sweep from top to bottom in this (x,z) column. (Unity world up = +Y)
-    for (int y = maxY - 1; y >= 0; --y) {
-        int3 cell = int3((int)id.x, y, (int)id.y);
-        float dist = _DistanceField.Load(int4(cell, 0)).r;
-
-        // A solid voxel blocks sky for everything below.
-        if (dist < 0.0) {
-            blocked = true;
-            continue;
-        }
-
-        if (!blocked) {
-            float3 currentRadiance = _RadianceFieldWrite[cell].rgb;
-            _RadianceFieldWrite[cell] = float4(currentRadiance + _SkyColor, 1.0);
-        }
-    }
 }
 
 // ----------------------------------------------------------
@@ -167,7 +150,7 @@ void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
 
     float4 history = _IrradianceFieldHistory.Load(int4(id, 0));
     float3 oldColor = history.rgb;
-    float weight = 1.0f / (_MaxSamples * 2);
+    float weight = max(1.0f / (_MaxSamples * 2), 0.01f);
     float3 finalColor = lerp(oldColor, incomingLight, weight);
 
     _IrradianceFieldWrite[id] = float4(finalColor, 1.0);

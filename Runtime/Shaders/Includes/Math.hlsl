@@ -143,7 +143,7 @@ float3 CosineSampleHemisphere(float3 normal, float2 u) {
 }
 
 /// Compute luminance of a color via Rec. 709 luminance coefficients.
-float Luminance(float3 color) {
+float GetRec709Luminance(float3 color) {
     return dot(color, float3(0.2126, 0.7152, 0.0722));
 }
 

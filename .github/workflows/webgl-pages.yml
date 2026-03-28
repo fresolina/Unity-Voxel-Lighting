@@ -1,193 +1,244 @@
 name: webgl-pages
 
 on:
-    workflow_call:
-        inputs:
-            release_tag:
-                required: true
-                type: string
-        outputs:
-            pages_index_url:
-                description: Published index page URL
-                value: ${{ jobs.publish.outputs.pages_index_url }}
-            version_url:
-                description: Published URL for the current release build
-                value: ${{ jobs.publish.outputs.version_url }}
-    workflow_dispatch:
-        inputs:
-            release_tag:
-                description: Release tag to build and publish
-                required: true
-                type: string
+  workflow_call:
+    inputs:
+      git_ref:
+        required: true
+        type: string
+      publish_kind:
+        required: false
+        type: string
+        default: preview
+      release_tag:
+        required: false
+        type: string
+      preview_name:
+        required: false
+        type: string
+    outputs:
+      pages_index_url:
+        description: Published index page URL
+        value: ${{ jobs.publish.outputs.pages_index_url }}
+      version_url:
+        description: Published URL for the current build
+        value: ${{ jobs.publish.outputs.version_url }}
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: Optional branch, tag, or commit SHA to build. Defaults to the branch selected when you run the workflow.
+        required: false
+        type: string
+      publish_kind:
+        description: Publish as a preview or a released version
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - release
+      release_tag:
+        description: Release tag to publish under versions/ (required when publish_kind=release)
+        required: false
+        type: string
+      preview_name:
+        description: Optional preview label prefix (defaults to git_ref)
+        required: false
+        type: string
 
 permissions:
-    contents: write
+  contents: write
 
 concurrency:
-    group: pages
-    cancel-in-progress: true
+  group: pages
+  cancel-in-progress: true
 
 env:
-    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    PROJECT_PATH: .github/unity-webgl-project
-    SITE_PATH: .pages-site
-    UNITY_VERSION: 6000.3.11f1
-    RELEASE_VERSION: ${{ inputs.release_tag || github.event.inputs.release_tag }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PROJECT_PATH: .github/unity-webgl-project
+  SITE_PATH: .pages-site
+  UNITY_VERSION: 6000.3.11f1
+  GIT_REF: ${{ inputs.git_ref || github.event.inputs.git_ref || github.ref_name }}
+  PUBLISH_KIND: ${{ inputs.publish_kind || github.event.inputs.publish_kind || 'preview' }}
+  RELEASE_VERSION: ${{ inputs.release_tag || github.event.inputs.release_tag }}
+  PREVIEW_NAME: ${{ inputs.preview_name || github.event.inputs.preview_name }}
 
 jobs:
-    publish:
-        runs-on: ubuntu-latest
-        outputs:
-            pages_index_url: ${{ steps.urls.outputs.pages_index_url }}
-            version_url: ${{ steps.urls.outputs.version_url }}
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v5
-              with:
-                  ref: ${{ env.RELEASE_VERSION }}
-                  lfs: true
-                  fetch-depth: 0
+  publish:
+    runs-on: ubuntu-latest
+    outputs:
+      pages_index_url: ${{ steps.urls.outputs.pages_index_url }}
+      version_url: ${{ steps.urls.outputs.version_url }}
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: false
+          android: true
+          haskell: true
+          dotnet: false
+          large-packages: false
+          docker-images: false
+          swap-storage: false
 
-            - name: Restore existing site content
-              continue-on-error: true
-              uses: actions/checkout@v5
-              with:
-                  ref: gh-pages
-                  path: ${{ env.SITE_PATH }}
-                  fetch-depth: 1
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.GIT_REF }}
+          lfs: true
+          fetch-depth: 0
 
-            - name: Bootstrap temporary Unity project
-              shell: bash
-              run: |
-                  set -eu
+      - name: Resolve publication target
+        id: publish_target
+        shell: bash
+        run: |
+          set -eu
 
-                  mkdir -p "$PROJECT_PATH/Assets/Editor"
-                  mkdir -p "$PROJECT_PATH/Assets/Samples"
-                  mkdir -p "$PROJECT_PATH/Packages"
-                  mkdir -p "$PROJECT_PATH/ProjectSettings"
-                  mkdir -p "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting"
+          sanitize() {
+              printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._/-]#-#g; s#/#-#g; s#--*#-#g; s#^-##; s#-$##'
+          }
 
-                  cat > "$PROJECT_PATH/ProjectSettings/ProjectVersion.txt" <<EOF
-                  m_EditorVersion: ${UNITY_VERSION}
-                  EOF
+          publish_kind="${PUBLISH_KIND}"
+          git_ref="${GIT_REF}"
+          release_version="${RELEASE_VERSION}"
+          preview_name="${PREVIEW_NAME}"
+          short_sha="$(git rev-parse --short=8 HEAD)"
+          preview_label=""
+          preview_slug=""
 
-                  # Keep only the registry packages and built-in modules required by the bootstrap project.
-                  cat > "$PROJECT_PATH/Packages/manifest.json" <<EOF
-                  {
-                    "dependencies": {
-                      "com.unity.render-pipelines.universal": "17.3.0",
-                      "com.unity.modules.audio": "1.0.0",
-                      "com.unity.modules.physics": "1.0.0",
-                      "com.unity.modules.uielements": "1.0.0"
-                    }
-                  }
-                  EOF
+          if [ "$publish_kind" = "release" ]; then
+              if [ -z "$release_version" ]; then
+                  echo "release_tag is required when publish_kind=release" >&2
+                  exit 1
+              fi
+              publish_path="versions/${release_version}"
+          else
+              if [ -z "$preview_name" ]; then
+                  preview_name="$git_ref"
+              fi
+              preview_slug="$(sanitize "$preview_name")"
+              if [ -z "$preview_slug" ]; then
+                  echo "preview_name resolved to an empty slug" >&2
+                  exit 1
+              fi
+              publish_path="previews/${preview_slug}"
+              preview_label="${preview_name} (${short_sha})"
+          fi
 
-                  cp "package.json" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/package.json"
-                  cp "package.json.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/package.json.meta"
-                  cp "README.md" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/README.md"
-                  cp "README.md.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/README.md.meta"
-                  cp "CHANGELOG.md" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/CHANGELOG.md"
-                  cp "CHANGELOG.md.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/CHANGELOG.md.meta"
-                  cp "LICENSE" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/LICENSE"
-                  cp "LICENSE.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/LICENSE.meta"
-                  cp "Editor.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/Editor.meta"
-                  cp "Runtime.meta" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/Runtime.meta"
-                  rsync -a "Editor/" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/Editor/"
-                  rsync -a "Runtime/" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/Runtime/"
-                  rsync -a "Samples~/" "$PROJECT_PATH/Packages/com.lotecsoftware.voxel-lighting/Samples~/"
+          echo "publish_path=${publish_path}" >> "$GITHUB_OUTPUT"
+          echo "preview_label=${preview_label}" >> "$GITHUB_OUTPUT"
+          echo "preview_slug=${preview_slug}" >> "$GITHUB_OUTPUT"
 
-                  rsync -a "Samples~/Usage samples/" "$PROJECT_PATH/Assets/Samples/Usage samples/"
-                  cp ".github/unity/BuildWebGlSample.cs" "$PROJECT_PATH/Assets/Editor/BuildWebGlSample.cs"
+      - name: Restore existing site content
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          ref: gh-pages
+          path: ${{ env.SITE_PATH }}
+          fetch-depth: 1
 
-            - name: Cache Library
-              uses: actions/cache@v4
-              with:
-                  path: ${{ env.PROJECT_PATH }}/Library
-                  key: Library-WebGL-${{ env.RELEASE_VERSION }}-${{ hashFiles('.github/workflows/webgl-pages.yml', '.github/unity/BuildWebGlSample.cs', 'package.json', 'Runtime/**', 'Editor/**', 'Samples~/**') }}
-                  restore-keys: |
-                      Library-WebGL-
+      - name: Resolve package metadata
+        id: package_metadata
+        shell: bash
+        run: |
+          set -eu
+          package_name="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).name")"
+          echo "package_name=${package_name}" >> "$GITHUB_OUTPUT"
 
-            - name: Build WebGL sample
-              uses: game-ci/unity-builder@v4
-              env:
-                  UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-                  UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
-                  UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-              with:
-                  projectPath: ${{ env.PROJECT_PATH }}
-                  targetPlatform: WebGL
-                  unityVersion: ${{ env.UNITY_VERSION }}
-                  buildMethod: BuildWebGlSample.Build
-                  allowDirtyBuild: true
+      - name: Bootstrap temporary Unity project
+        shell: bash
+        env:
+          PACKAGE_NAME: ${{ steps.package_metadata.outputs.package_name }}
+        run: |
+          set -eu
 
-            - name: Prepare versioned Pages site
-              shell: bash
-              run: |
-                  set -eu
+          mkdir -p "$PROJECT_PATH/Assets/Editor"
+          mkdir -p "$PROJECT_PATH/Assets/Samples"
+          mkdir -p "$PROJECT_PATH/Packages"
+          mkdir -p "$PROJECT_PATH/ProjectSettings"
+          mkdir -p "$PROJECT_PATH/Packages/$PACKAGE_NAME"
 
-                  mkdir -p "$SITE_PATH"
-                  rm -rf "$SITE_PATH/.git"
-                  mkdir -p "$SITE_PATH/versions/$RELEASE_VERSION"
+          cat > "$PROJECT_PATH/ProjectSettings/ProjectVersion.txt" <<EOF
+          m_EditorVersion: ${UNITY_VERSION}
+          EOF
 
-                  rsync -a --delete "$PROJECT_PATH/build/WebGL/" "$SITE_PATH/versions/$RELEASE_VERSION/"
-                  rsync -a --delete "$PROJECT_PATH/build/WebGL/" "$SITE_PATH/latest/"
-                  touch "$SITE_PATH/.nojekyll"
+          # Keep only the registry packages and built-in modules required by the bootstrap project.
+          cat > "$PROJECT_PATH/Packages/manifest.json" <<EOF
+          {
+            "dependencies": {
+              "com.unity.inputsystem": "1.16.0",
+              "com.unity.render-pipelines.universal": "17.3.0"
+            }
+          }
+          EOF
 
-                  mapfile -t versions < <(find "$SITE_PATH/versions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -rV)
+          rsync -a --exclude ".git/" --exclude ".github/" ./ "$PROJECT_PATH/Packages/$PACKAGE_NAME/"
+          rsync -a "Samples~/Usage samples/" "$PROJECT_PATH/Assets/Samples/Usage samples/"
+          cp ".github/unity/BuildWebGlSample.cs" "$PROJECT_PATH/Assets/Editor/BuildWebGlSample.cs"
 
-                  {
-                      echo '<!doctype html>'
-                      echo '<html lang="en">'
-                      echo '<head>'
-                      echo '  <meta charset="utf-8">'
-                      echo '  <meta name="viewport" content="width=device-width, initial-scale=1">'
-                      echo '  <title>Lotec Voxel Lighting WebGL Builds</title>'
-                      echo '  <style>'
-                      echo '    :root { color-scheme: light; }'
-                      echo '    body { margin: 0; font-family: Georgia, "Times New Roman", serif; background: linear-gradient(180deg, #f6f1e8 0%, #e7eef5 100%); color: #1e2430; }'
-                      echo '    main { max-width: 760px; margin: 0 auto; padding: 48px 24px 80px; }'
-                      echo '    h1 { font-size: 2.5rem; margin: 0 0 12px; }'
-                      echo '    p { font-size: 1.05rem; line-height: 1.6; max-width: 60ch; }'
-                      echo '    .card { margin-top: 28px; padding: 24px; border-radius: 18px; background: rgba(255,255,255,0.72); box-shadow: 0 16px 40px rgba(39, 55, 77, 0.14); backdrop-filter: blur(10px); }'
-                      echo '    .latest { display: inline-block; margin: 8px 0 24px; padding: 12px 18px; border-radius: 999px; background: #1e2430; color: #fff; text-decoration: none; }'
-                      echo '    ul { list-style: none; padding: 0; margin: 0; }'
-                      echo '    li + li { margin-top: 12px; }'
-                      echo '    a.version-link { color: #0b5fff; text-decoration: none; font-weight: 700; }'
-                      echo '  </style>'
-                      echo '</head>'
-                      echo '<body>'
-                      echo '  <main>'
-                      echo '    <h1>Lotec Voxel Lighting</h1>'
-                      echo '    <p>Released WebGL builds for the Playground sample scene. A new version is published only when a GitHub release is created by the release flow.</p>'
-                      echo '    <a class="latest" href="latest/">Open latest build</a>'
-                      echo '    <section class="card">'
-                      echo '      <h2>Released versions</h2>'
-                      echo '      <ul>'
-                      for version in "${versions[@]}"; do
-                          echo "        <li><a class=\"version-link\" href=\"versions/${version}/\">${version}</a></li>"
-                      done
-                      echo '      </ul>'
-                      echo '    </section>'
-                      echo '  </main>'
-                      echo '</body>'
-                      echo '</html>'
-                  } > "$SITE_PATH/index.html"
+      - name: Cache Library
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PROJECT_PATH }}/Library
+          key: Library-WebGL-${{ env.UNITY_VERSION }}-${{ hashFiles(
+            format('{0}/Packages/manifest.json', env.PROJECT_PATH),
+            '.github/unity/BuildWebGlSample.cs'
+            ) }}
 
-            - name: Compute published URLs
-              id: urls
-              shell: bash
-              run: |
-                  set -eu
-                  repo_name="${GITHUB_REPOSITORY#*/}"
-                  base_url="https://${GITHUB_REPOSITORY_OWNER}.github.io/${repo_name}"
-                  echo "pages_index_url=${base_url}/" >> "$GITHUB_OUTPUT"
-                  echo "version_url=${base_url}/versions/${RELEASE_VERSION}/" >> "$GITHUB_OUTPUT"
+      - name: Build WebGL sample
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: ${{ env.PROJECT_PATH }}
+          targetPlatform: WebGL
+          unityVersion: ${{ env.UNITY_VERSION }}
+          buildMethod: BuildWebGlSample.Build
+          allowDirtyBuild: true
 
-            - name: Publish to gh-pages
-              uses: peaceiris/actions-gh-pages@v4
-              with:
-                  github_token: ${{ secrets.GITHUB_TOKEN }}
-                  publish_branch: gh-pages
-                  publish_dir: ${{ env.SITE_PATH }}
-                  force_orphan: false
+      - name: Prepare versioned Pages site
+        shell: bash
+        env:
+          PUBLISH_PATH: ${{ steps.publish_target.outputs.publish_path }}
+          PREVIEW_LABEL: ${{ steps.publish_target.outputs.preview_label }}
+          PREVIEW_SLUG: ${{ steps.publish_target.outputs.preview_slug }}
+        run: |
+          bash .github/scripts/prepare-pages-site.sh
+
+      - name: Compute published URLs
+        id: urls
+        shell: bash
+        env:
+          PUBLISH_PATH: ${{ steps.publish_target.outputs.publish_path }}
+        run: |
+          set -eu
+          repo_name="${GITHUB_REPOSITORY#*/}"
+          base_url="https://${GITHUB_REPOSITORY_OWNER}.github.io/${repo_name}"
+          echo "pages_index_url=${base_url}/" >> "$GITHUB_OUTPUT"
+          echo "version_url=${base_url}/${PUBLISH_PATH}/" >> "$GITHUB_OUTPUT"
+
+      - name: Write workflow summary
+        shell: bash
+        env:
+          PAGES_INDEX_URL: ${{ steps.urls.outputs.pages_index_url }}
+          VERSION_URL: ${{ steps.urls.outputs.version_url }}
+          PUBLISH_KIND_VALUE: ${{ env.PUBLISH_KIND }}
+          PREVIEW_LABEL: ${{ steps.publish_target.outputs.preview_label }}
+        run: |
+          set -eu
+          printf '## WebGL Pages\n\n- Pages index: %s\n- Published build: %s\n' "$PAGES_INDEX_URL" "$VERSION_URL" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$PUBLISH_KIND_VALUE" = "preview" ] && [ -n "$PREVIEW_LABEL" ]; then
+              printf -- '- Preview label: %s\n' "$PREVIEW_LABEL" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ${{ env.SITE_PATH }}
+          force_orphan: false
