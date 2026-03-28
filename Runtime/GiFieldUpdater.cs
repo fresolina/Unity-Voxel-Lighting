@@ -43,9 +43,9 @@ namespace Lotec.Lighting {
             LPV = 1,
         }
 
-        public Texture3D MaterialFieldAlbedoIntensity { get; set; }
-        public Texture3D SurfaceDistanceFieldHighRes { get; set; }
-        public Texture3D SurfaceDistanceFieldLowRes { get; set; }
+        public Texture3D MaterialFieldAlbedoIntensity => Volume.materialAlbedoIntensityTexture;
+        public Texture3D SurfaceDistanceFieldHighRes => Volume.sdfHiresTexture;
+        public Texture3D SurfaceDistanceFieldLowRes => Volume.sdfLowresTexture;
         public ComputeShader GiComputeShader { get => _giComputeShader; set => _giComputeShader = value; }
         public Texture2D BlueNoiseTexture { get => _blueNoiseTexture; set => _blueNoiseTexture = value; }
         public LightingMethod GiLightingMethod { get => _lightingMethod; set => _lightingMethod = value; }
@@ -96,29 +96,14 @@ namespace Lotec.Lighting {
         public RenderTexture IrradianceBlurred => _irradianceFieldFinal;
         RenderTexture IrradianceRead => _isEvenFrame ? _irradianceFieldB : _irradianceFieldA;
 
-        LightingVolume _volume;
-        public LightingVolume Volume {
-            get => _volume;
-            set {
-                if (_volume == value) return;
-                _volume = value;
-                MaterialFieldAlbedoIntensity = _volume != null ? _volume.materialAlbedoIntensityTexture : null;
-                SurfaceDistanceFieldHighRes = _volume != null ? _volume.sdfHiresTexture : null;
-                SurfaceDistanceFieldLowRes = _volume != null ? _volume.sdfLowresTexture : null;
-            }
-        }
+        public LightingVolume Volume { get; set; }
 
-        void Awake() {
-            RefreshRuntimeGiReferences();
-        }
-
-        void OnEnable() {
-            RefreshRuntimeGiReferences();
+        void Start() {
+            if (Volume == null)
+                Volume = LightingManager.Instance.Volume;
         }
 
         void Update() {
-            RefreshRuntimeGiReferences();
-
             if (!SupportsRuntimeGi(out string unsupportedReason)) {
                 ReleaseBuffers();
 
@@ -164,29 +149,6 @@ namespace Lotec.Lighting {
 
         void OnDisable() {
             ReleaseBuffers();
-        }
-
-        void RefreshRuntimeGiReferences() {
-            if (Volume == null) {
-                LightingManager lightingManager = GetComponent<LightingManager>();
-                if (lightingManager != null && lightingManager.Volume != null) {
-                    Volume = lightingManager.Volume;
-                }
-            }
-
-            if (Volume != null) {
-                if (MaterialFieldAlbedoIntensity == null) {
-                    MaterialFieldAlbedoIntensity = Volume.materialAlbedoIntensityTexture;
-                }
-
-                if (SurfaceDistanceFieldHighRes == null) {
-                    SurfaceDistanceFieldHighRes = Volume.sdfHiresTexture;
-                }
-
-                if (SurfaceDistanceFieldLowRes == null) {
-                    SurfaceDistanceFieldLowRes = Volume.sdfLowresTexture;
-                }
-            }
         }
 
         bool IsRuntimeGiReady(out string reason) {
