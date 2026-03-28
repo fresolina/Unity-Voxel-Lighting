@@ -184,8 +184,7 @@ jobs:
           path: ${{ env.PROJECT_PATH }}/Library
           key: Library-WebGL-${{ env.UNITY_VERSION }}-${{ hashFiles(
             format('{0}/Packages/manifest.json', env.PROJECT_PATH),
-            '.github/unity/BuildWebGlSample.cs',
-            './package.json'
+            '.github/unity/BuildWebGlSample.cs'
             ) }}
 
       - name: Build WebGL sample
