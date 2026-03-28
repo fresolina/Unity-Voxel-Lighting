@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.0.1...v1.1.0) (2026-03-28)
+
+
+### Features
+
+* Web support via WebGPU ([435995e](https://github.com/fresolina/Unity-Voxel-Lighting/commit/435995eba60e24b60502f6687c75b67d20d0eeb4))
+
 ## [1.0.1](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.0.0...v1.0.1) (2026-03-20)
 
 
