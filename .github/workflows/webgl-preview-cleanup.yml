@@ -1,0 +1,103 @@
+name: webgl-preview-cleanup
+
+on:
+  delete:
+  workflow_dispatch:
+    inputs:
+      preview_name:
+        description: Branch or preview name to remove from gh-pages
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  SITE_PATH: .pages-site
+
+jobs:
+  cleanup-preview:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.ref_type == 'branch' &&
+       github.event.ref != 'main' &&
+       github.event.ref != 'gh-pages' &&
+       !startsWith(github.event.ref, 'release-please--branches--'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Resolve preview target
+        id: preview_target
+        shell: bash
+        env:
+          EVENT_REF: ${{ github.event.ref }}
+          INPUT_PREVIEW_NAME: ${{ inputs.preview_name || github.event.inputs.preview_name }}
+        run: |
+          set -eu
+
+          sanitize() {
+              printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's#[^a-z0-9._/-]#-#g; s#/#-#g; s#--*#-#g; s#^-##; s#-$##'
+          }
+
+          preview_name="$INPUT_PREVIEW_NAME"
+          if [ -z "$preview_name" ]; then
+              preview_name="$EVENT_REF"
+          fi
+
+          if [ -z "$preview_name" ]; then
+              echo "No preview name could be resolved for cleanup" >&2
+              exit 1
+          fi
+
+          preview_slug="$(sanitize "$preview_name")"
+          if [ -z "$preview_slug" ]; then
+              echo "preview_name resolved to an empty slug" >&2
+              exit 1
+          fi
+
+          echo "preview_name=${preview_name}" >> "$GITHUB_OUTPUT"
+          echo "preview_slug=${preview_slug}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore existing site content
+        id: restore_site
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          ref: gh-pages
+          path: ${{ env.SITE_PATH }}
+          fetch-depth: 1
+
+      - name: Check site availability
+        id: site_state
+        shell: bash
+        run: |
+          set -eu
+          if [ -d "$SITE_PATH" ]; then
+              echo "site_available=true" >> "$GITHUB_OUTPUT"
+          else
+              echo "site_available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Remove preview and rebuild index
+        if: steps.site_state.outputs.site_available == 'true'
+        shell: bash
+        env:
+          PREVIEW_SLUG: ${{ steps.preview_target.outputs.preview_slug }}
+        run: |
+          set -eu
+          rm -rf "$SITE_PATH/previews/$PREVIEW_SLUG"
+          bash .github/scripts/render-pages-index.sh
+
+      - name: Publish to gh-pages
+        if: steps.site_state.outputs.site_available == 'true'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ${{ env.SITE_PATH }}
+          force_orphan: false
