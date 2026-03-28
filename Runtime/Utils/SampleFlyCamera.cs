@@ -3,18 +3,28 @@ using UnityEngine.InputSystem;
 
 namespace Lotec.Lighting.Samples {
     public class SampleFlyCamera : MonoBehaviour {
+        [SerializeField] Transform _targetTransform;
         [SerializeField] float _moveSpeed = 5f;
         [SerializeField] float _sprintMultiplier = 3f;
         [SerializeField] float _lookSensitivity = 2f;
         [SerializeField] float _pitchLimit = 85f;
         [SerializeField] bool _lookWhileRightMouseHeld = true;
 
-
         float _yaw;
         float _pitch;
 
+        void OnValidate() {
+            if (_targetTransform == null && Camera.main != null) {
+                _targetTransform = Camera.main.transform;
+            }
+        }
+
         void OnEnable() {
-            Vector3 eulerAngles = transform.rotation.eulerAngles;
+            if (_targetTransform == null) {
+                _targetTransform = transform;
+            }
+
+            Vector3 eulerAngles = _targetTransform.rotation.eulerAngles;
             _yaw = eulerAngles.y;
             _pitch = NormalizePitch(eulerAngles.x);
             Debug.Log($"SampleFlyCamera: initial camera rotation: yaw={_yaw}, pitch={_pitch}");
@@ -43,7 +53,7 @@ namespace Lotec.Lighting.Samples {
                 _yaw += mouseX;
                 _pitch = Mathf.Clamp(_pitch - mouseY, -_pitchLimit, _pitchLimit);
 
-                transform.rotation = Quaternion.Euler(_pitch, _yaw, 0f);
+                _targetTransform.rotation = Quaternion.Euler(_pitch, _yaw, 0f);
             }
 
             Vector3 input = new Vector3(
@@ -60,7 +70,7 @@ namespace Lotec.Lighting.Samples {
                 speed *= _sprintMultiplier;
             }
 
-            transform.position += transform.TransformDirection(input) * (speed * Time.deltaTime);
+            _targetTransform.position += _targetTransform.TransformDirection(input) * (speed * Time.deltaTime);
         }
 
         bool IsLookHeld() {
