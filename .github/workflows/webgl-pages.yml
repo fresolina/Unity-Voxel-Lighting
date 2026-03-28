@@ -38,7 +38,7 @@ on:
           - preview
           - release
       release_tag:
-        description: Release tag to publish under versions/ (required when publish_kind=release)
+        description: Release tag to publish under versions/ (defaults to the latest CHANGELOG.md version when publish_kind=release)
         required: false
         type: string
       preview_name:
@@ -110,8 +110,11 @@ jobs:
 
           if [ "$publish_kind" = "release" ]; then
               if [ -z "$release_version" ]; then
-                  echo "release_tag is required when publish_kind=release" >&2
+                release_version="$(sed -nE 's/^## \[?([0-9]+\.[0-9]+\.[0-9]+)\]?.*/v\1/p' CHANGELOG.md | head -n 1)"
+                if [ -z "$release_version" ]; then
+                  echo "release_tag was not provided and no release version could be inferred from CHANGELOG.md" >&2
                   exit 1
+                fi
               fi
               publish_path="versions/${release_version}"
           else

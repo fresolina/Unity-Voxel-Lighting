@@ -5,6 +5,7 @@ on:
     branches-ignore:
       - gh-pages
       - main
+      - release-please--branches--*
     tags-ignore:
       - "**"
 
