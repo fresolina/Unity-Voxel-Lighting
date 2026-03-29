@@ -8,31 +8,51 @@ using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 
 public static class BuildWebGlSample {
-    const string s_scenePath = "Packages/com.lotecsoftware.voxel-lighting/Samples~/Usage samples/Scenes/Playground.unity";
+    const string s_assetsScenePath = "Assets/Samples/Usage samples/Scenes/Playground.unity";
+    const string s_packageScenePath = "Packages/com.lotecsoftware.voxel-lighting/Samples~/Usage samples/Scenes/Playground.unity";
     const string s_outputPath = "build/WebGL";
     const string s_settingsFolder = "Assets/Settings";
     const string s_rendererDataPath = s_settingsFolder + "/CiUniversalRenderer.asset";
     const string s_pipelineAssetPath = s_settingsFolder + "/CiUniversalRenderPipeline.asset";
 
-    public static void Build() {
-        if (!File.Exists(s_scenePath)) {
-            throw new FileNotFoundException($"Sample scene not found at '{s_scenePath}'.");
+    static string ResolveScenePath() {
+        // Prefer an Assets copy (stable import) but fall back to the package path.
+        if (File.Exists(s_assetsScenePath)) return s_assetsScenePath;
+        if (File.Exists(s_packageScenePath)) return s_packageScenePath;
+
+        // As a last resort, search the asset database for a scene named Playground.unity.
+        string[] guids = AssetDatabase.FindAssets("Playground t:Scene");
+        foreach (var g in guids) {
+            string path = AssetDatabase.GUIDToAssetPath(g);
+            if (path.EndsWith("Playground.unity", StringComparison.OrdinalIgnoreCase))
+                return path;
         }
+
+        return null;
+    }
+
+    public static void Build() {
+        string scenePath = ResolveScenePath();
+        if (string.IsNullOrEmpty(scenePath) || !File.Exists(scenePath)) {
+            throw new FileNotFoundException($"Sample scene not found at '{s_assetsScenePath}' or '{s_packageScenePath}'.");
+        }
+
+        Debug.Log($"Building WebGL sample using scene: {scenePath}");
 
         EnsureUrpConfigured();
         ConfigureWebGlPublishing();
 
         EditorBuildSettings.scenes = new[] {
-            new EditorBuildSettingsScene(s_scenePath, true)
+            new EditorBuildSettingsScene(scenePath, true)
         };
 
         Directory.CreateDirectory(s_outputPath);
 
         BuildReport report = BuildPipeline.BuildPlayer(new BuildPlayerOptions {
-            scenes = new[] { s_scenePath },
+            scenes = new[] { scenePath },
             locationPathName = s_outputPath,
             target = BuildTarget.WebGL,
-            options = BuildOptions.None
+            options = BuildOptions.Development
         });
 
         if (report.summary.result != BuildResult.Succeeded) {
