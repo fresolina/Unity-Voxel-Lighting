@@ -31,6 +31,7 @@ namespace Lotec.Lighting {
 
         void Awake() {
             Instance = this;
+            Debug.Log($"LightingManager Awake: Instance set. Volume assigned? {_volume != null} ({_volume?.gameObject?.name ?? "null"})", this);
             EnsureFieldsAssigned();
         }
 
@@ -62,6 +63,8 @@ namespace Lotec.Lighting {
                 _giUpdater.Volume = Volume;
             }
 #endif
+
+            Debug.Log($"LightingManager.EnsureFieldsAssigned: VolumeAssigned={_volume != null}, VolumeName={_volume?.gameObject?.name ?? "null"}, materialAlbedoIntensityTexture={_volume?.materialAlbedoIntensityTexture?.name ?? "null"}, GiUpdaterPresent={_giUpdater != null}, GiUpdater.VolumeName={_giUpdater?.Volume?.gameObject?.name ?? "null"}", this);
         }
     }
 }
