@@ -55,7 +55,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  PROJECT_PATH: .github/unity-webgl-project
+  PROJECT_PATH: BootstrapProject~
   SITE_PATH: .pages-site
   UNITY_VERSION: 6000.3.1f1
   GIT_REF: ${{ inputs.git_ref || github.event.inputs.git_ref || github.ref_name }}
@@ -157,28 +157,11 @@ jobs:
         run: |
           set -eu
 
-          mkdir -p "$PROJECT_PATH/Assets/Editor"
-          mkdir -p "$PROJECT_PATH/Packages"
-          mkdir -p "$PROJECT_PATH/ProjectSettings"
-          mkdir -p "$PROJECT_PATH/Packages/$PACKAGE_NAME"
-
           cat > "$PROJECT_PATH/ProjectSettings/ProjectVersion.txt" <<EOF
           m_EditorVersion: ${UNITY_VERSION}
           EOF
 
-          # Keep only the registry packages and built-in modules required by the bootstrap project.
-          cat > "$PROJECT_PATH/Packages/manifest.json" <<EOF
-          {
-            "dependencies": {
-              "com.unity.inputsystem": "1.16.0",
-              "com.unity.render-pipelines.universal": "17.3.0"
-            }
-          }
-          EOF
-
-          rsync -a --exclude ".git/" --exclude ".github/" ./ "$PROJECT_PATH/Packages/$PACKAGE_NAME/"
-          mv "$PROJECT_PATH/Packages/$PACKAGE_NAME/Samples~" "$PROJECT_PATH/Packages/$PACKAGE_NAME/Samples"
-          cp ".github/unity/BuildWebGlSample.cs" "$PROJECT_PATH/Assets/Editor/BuildWebGlSample.cs"
+          mv "Samples~" "Samples"
 
       - name: Cache Library
         uses: actions/cache@v4
@@ -186,7 +169,7 @@ jobs:
           path: ${{ env.PROJECT_PATH }}/Library
           key: Library-WebGL-${{ env.UNITY_VERSION }}-${{ hashFiles(
             format('{0}/Packages/manifest.json', env.PROJECT_PATH),
-            '.github/unity/BuildWebGlSample.cs'
+            format('{0}/Assets/Editor/BuildWebGlSample.cs', env.PROJECT_PATH)
             ) }}
 
       - name: Build WebGL sample

@@ -23,7 +23,7 @@ public static class BuildWebGlSample {
         Debug.Log($"Building WebGL sample using scene: {scenePath}");
 
         EnsureUrpConfigured();
-        ConfigureWebGlPublishing();
+        // ConfigureWebGlPublishing();
 
         EditorBuildSettings.scenes = new[] {
             new EditorBuildSettingsScene(scenePath, true)
