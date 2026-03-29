@@ -12,6 +12,10 @@ namespace Lotec.Lighting.Samples {
 
         float _yaw;
         float _pitch;
+        bool _loggedMousePresence;
+        bool _loggedKeyboardPresence;
+        float _lastDebugTime;
+        const float DEBUG_INTERVAL = 5f;
 
         void OnValidate() {
             if (_targetTransform == null && Camera.main != null) {
@@ -28,6 +32,9 @@ namespace Lotec.Lighting.Samples {
             _yaw = eulerAngles.y;
             _pitch = NormalizePitch(eulerAngles.x);
             Debug.Log($"SampleFlyCamera: initial camera rotation: yaw={_yaw}, pitch={_pitch}");
+            _loggedMousePresence = false;
+            _loggedKeyboardPresence = false;
+            _lastDebugTime = Time.time - DEBUG_INTERVAL;
         }
 
         void OnDisable() {
@@ -35,6 +42,29 @@ namespace Lotec.Lighting.Samples {
         }
 
         void Update() {
+            // One-time presence logs
+            if (!_loggedMousePresence) {
+                Debug.Log($"SampleFlyCamera: Mouse.current != null: {Mouse.current != null}");
+                _loggedMousePresence = true;
+            }
+            if (!_loggedKeyboardPresence) {
+                Debug.Log($"SampleFlyCamera: Keyboard.current != null: {Keyboard.current != null}");
+                _loggedKeyboardPresence = true;
+            }
+
+            // Periodic runtime debug to capture input state in CI/dev builds
+            if (Time.time - _lastDebugTime > DEBUG_INTERVAL) {
+                _lastDebugTime = Time.time;
+                Vector2 md = ReadMouseDelta();
+                bool rightPressed = Mouse.current != null && Mouse.current.rightButton.isPressed;
+                bool w = Keyboard.current != null && Keyboard.current.wKey.isPressed;
+                bool a = Keyboard.current != null && Keyboard.current.aKey.isPressed;
+                bool s = Keyboard.current != null && Keyboard.current.sKey.isPressed;
+                bool d = Keyboard.current != null && Keyboard.current.dKey.isPressed;
+                Debug.Log($"SampleFlyCamera Debug: Mouse.present={(Mouse.current != null)}, delta={md}, rightPressed={rightPressed}");
+                Debug.Log($"SampleFlyCamera Debug: Keyboard.present={(Keyboard.current != null)}, W={w}, A={a}, S={s}, D={d}");
+                Debug.Log($"SampleFlyCamera Debug: Cursor.lockState={Cursor.lockState}, Cursor.visible={Cursor.visible}");
+            }
             bool isLooking = !_lookWhileRightMouseHeld || IsLookHeld();
 
             if (_lookWhileRightMouseHeld) {

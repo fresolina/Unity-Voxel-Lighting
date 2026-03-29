@@ -102,18 +102,37 @@ public static class BuildWebGlSample {
 
     static void EnsureUrpConfigured() {
         Directory.CreateDirectory(s_settingsFolder);
-
         UniversalRendererData rendererData = AssetDatabase.LoadAssetAtPath<UniversalRendererData>(s_rendererDataPath);
         if (rendererData == null) {
+            Debug.Log($"URP: rendererData not found at '{s_rendererDataPath}', creating.");
             rendererData = ScriptableObject.CreateInstance<UniversalRendererData>();
             AssetDatabase.CreateAsset(rendererData, s_rendererDataPath);
+            AssetDatabase.ImportAsset(s_rendererDataPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            rendererData = AssetDatabase.LoadAssetAtPath<UniversalRendererData>(s_rendererDataPath);
+            Debug.Log($"URP: rendererData created -> {(rendererData != null ? rendererData.name : "null")} (path={s_rendererDataPath})");
+        } else {
+            Debug.Log($"URP: rendererData loaded -> {rendererData.name} (path={s_rendererDataPath})");
         }
+        try {
+            string rdGuid = AssetDatabase.AssetPathToGUID(s_rendererDataPath);
+            Debug.Log($"URP: rendererData GUID: {rdGuid}");
+        } catch (Exception) { }
 
         UniversalRenderPipelineAsset pipelineAsset = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(s_pipelineAssetPath);
         if (pipelineAsset == null) {
+            Debug.Log($"URP: pipeline asset not found at '{s_pipelineAssetPath}', creating.");
             pipelineAsset = ScriptableObject.CreateInstance<UniversalRenderPipelineAsset>();
             AssetDatabase.CreateAsset(pipelineAsset, s_pipelineAssetPath);
+            AssetDatabase.ImportAsset(s_pipelineAssetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            pipelineAsset = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(s_pipelineAssetPath);
+            Debug.Log($"URP: pipeline asset created -> {(pipelineAsset != null ? pipelineAsset.name : "null")} (path={s_pipelineAssetPath})");
+        } else {
+            Debug.Log($"URP: pipeline asset loaded -> {pipelineAsset.name} (path={s_pipelineAssetPath})");
         }
+        try {
+            string paGuid = AssetDatabase.AssetPathToGUID(s_pipelineAssetPath);
+            Debug.Log($"URP: pipeline asset GUID: {paGuid}");
+        } catch (Exception) { }
 
         SerializedObject serializedPipeline = new SerializedObject(pipelineAsset);
         SerializedProperty rendererDataList = serializedPipeline.FindProperty("m_RendererDataList");
