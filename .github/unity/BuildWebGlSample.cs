@@ -9,7 +9,7 @@ using UnityEngine.Rendering.Universal;
 
 public static class BuildWebGlSample {
     const string s_assetsScenePath = "Assets/Samples/Usage samples/Scenes/Playground.unity";
-    const string s_packageScenePath = "Packages/com.lotecsoftware.voxel-lighting/Samples~/Usage samples/Scenes/Playground.unity";
+    const string s_packageScenePath = "Packages/com.lotecsoftware.voxel-lighting/Samples/Usage samples/Scenes/Playground.unity";
     const string s_outputPath = "build/WebGL";
     const string s_settingsFolder = "Assets/Settings";
     const string s_rendererDataPath = s_settingsFolder + "/CiUniversalRenderer.asset";
