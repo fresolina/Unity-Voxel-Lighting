@@ -39,6 +39,36 @@ public static class BuildWebGlSample {
 
         Debug.Log($"Building WebGL sample using scene: {scenePath}");
 
+        // Debug: list scene dependencies and Texture3D assets so CI logs show whether baked textures
+        // (e.g. RoomVolume_AlbedoIntensity.asset) are included before building.
+        try {
+            string[] deps = AssetDatabase.GetDependencies(scenePath, true);
+            Debug.Log($"Scene dependencies ({deps.Length}):");
+            bool foundAlbedo = false;
+            foreach (var d in deps) {
+                string guid = AssetDatabase.AssetPathToGUID(d);
+                Type mainType = AssetDatabase.GetMainAssetTypeAtPath(d);
+                Debug.Log($" - {d} (guid={guid}, type={(mainType != null ? mainType.Name : "null")})");
+                if (d.IndexOf("RoomVolume_AlbedoIntensity", StringComparison.OrdinalIgnoreCase) >= 0) foundAlbedo = true;
+                // Try to load Texture3D to ensure it's a valid asset
+                try {
+                    var tex3 = AssetDatabase.LoadAssetAtPath<Texture3D>(d);
+                    if (tex3 != null) Debug.Log($"   -> Loaded Texture3D: {tex3.name}");
+                } catch (Exception) { }
+            }
+
+            string[] allTex3Guids = AssetDatabase.FindAssets("t:Texture3D");
+            Debug.Log($"All Texture3D assets found ({allTex3Guids.Length}):");
+            foreach (var g in allTex3Guids) {
+                string p = AssetDatabase.GUIDToAssetPath(g);
+                Debug.Log($" - {p} (guid={g})");
+            }
+
+            Debug.Log($"RoomVolume_AlbedoIntensity present in scene dependencies: {foundAlbedo}");
+        } catch (Exception e) {
+            Debug.LogWarning($"Failed to enumerate scene dependencies: {e}");
+        }
+
         EnsureUrpConfigured();
         ConfigureWebGlPublishing();
 
