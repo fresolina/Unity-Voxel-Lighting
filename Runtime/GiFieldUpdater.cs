@@ -119,7 +119,7 @@ namespace Lotec.Lighting {
 
             if (!IsRuntimeGiReady(out string missingReason)) {
                 if (!_hasLoggedMissingReferences) {
-                    // _hasLoggedMissingReferences = true;
+                    _hasLoggedMissingReferences = true;
                     string volName = Volume != null ? Volume.gameObject.name : "null";
                     string matName = Volume != null && Volume.materialAlbedoIntensityTexture != null ? Volume.materialAlbedoIntensityTexture.name : "null";
                     string sdfHires = Volume != null && Volume.sdfHiresTexture != null ? Volume.sdfHiresTexture.name : "null";
@@ -169,7 +169,7 @@ namespace Lotec.Lighting {
             }
 
             if (MaterialFieldAlbedoIntensity == null) {
-                reason = $"LightingVolume.materialAlbedoIntensityTexture (Volume={Volume.name}, {Volume.materialAlbedoIntensityTexture})";
+                reason = $"LightingVolume.materialAlbedoIntensityTexture";
                 return false;
             }
 
@@ -246,6 +246,22 @@ namespace Lotec.Lighting {
             _irradianceLpvKernel = _giComputeShader.FindKernel("CSComputeIrradianceLPV");
             _blurKernel = _giComputeShader.FindKernel("CSBlurIrradiance");
             _clearVolumeKernel = _giComputeShader.FindKernel("CSClearVolume");
+
+            // Verify kernel validity on this platform/build. Some backends may fail to compile
+            // or expose kernels differently, which causes Dispatch to throw "Kernel at index is invalid".
+            try {
+                uint gx, gy, gz;
+                _giComputeShader.GetKernelThreadGroupSizes(_radianceKernel, out gx, out gy, out gz);
+                _giComputeShader.GetKernelThreadGroupSizes(_irradiancePathTracingKernel, out gx, out gy, out gz);
+                _giComputeShader.GetKernelThreadGroupSizes(_irradianceLpvKernel, out gx, out gy, out gz);
+                _giComputeShader.GetKernelThreadGroupSizes(_blurKernel, out gx, out gy, out gz);
+                _giComputeShader.GetKernelThreadGroupSizes(_clearVolumeKernel, out gx, out gy, out gz);
+            } catch (System.Exception ex) {
+                Debug.LogError($"GI compute shader kernels failed verification: {ex.Message}. Disabling runtime GI.", this);
+                enabled = false;
+                ReleaseBuffers();
+                return;
+            }
 
             // Prefer packed HDR when the backend supports UAV writes, otherwise fall back to a wider float format.
             _radianceField = CreateRadianceTexture(_giTextureFormat, "GI_Radiance_A");

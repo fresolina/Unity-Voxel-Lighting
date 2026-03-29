@@ -8,66 +8,19 @@ using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 
 public static class BuildWebGlSample {
-    const string s_assetsScenePath = "Assets/Samples/Usage samples/Scenes/Playground.unity";
-    const string s_packageScenePath = "Packages/com.lotecsoftware.voxel-lighting/Samples/Usage samples/Scenes/Playground.unity";
+    const string s_scenePath = "Packages/com.lotecsoftware.voxel-lighting/Samples/Usage samples/Scenes/Playground.unity";
     const string s_outputPath = "build/WebGL";
     const string s_settingsFolder = "Assets/Settings";
     const string s_rendererDataPath = s_settingsFolder + "/CiUniversalRenderer.asset";
     const string s_pipelineAssetPath = s_settingsFolder + "/CiUniversalRenderPipeline.asset";
 
-    static string ResolveScenePath() {
-        // Prefer an Assets copy (stable import) but fall back to the package path.
-        if (File.Exists(s_assetsScenePath)) return s_assetsScenePath;
-        if (File.Exists(s_packageScenePath)) return s_packageScenePath;
-
-        // As a last resort, search the asset database for a scene named Playground.unity.
-        string[] guids = AssetDatabase.FindAssets("Playground t:Scene");
-        foreach (var g in guids) {
-            string path = AssetDatabase.GUIDToAssetPath(g);
-            if (path.EndsWith("Playground.unity", StringComparison.OrdinalIgnoreCase))
-                return path;
-        }
-
-        return null;
-    }
-
     public static void Build() {
-        string scenePath = ResolveScenePath();
+        string scenePath = s_scenePath;
         if (string.IsNullOrEmpty(scenePath) || !File.Exists(scenePath)) {
-            throw new FileNotFoundException($"Sample scene not found at '{s_assetsScenePath}' or '{s_packageScenePath}'.");
+            throw new FileNotFoundException($"Sample scene not found at '{s_scenePath}'.");
         }
 
         Debug.Log($"Building WebGL sample using scene: {scenePath}");
-
-        // Debug: list scene dependencies and Texture3D assets so CI logs show whether baked textures
-        // (e.g. RoomVolume_AlbedoIntensity.asset) are included before building.
-        try {
-            string[] deps = AssetDatabase.GetDependencies(scenePath, true);
-            Debug.Log($"Scene dependencies ({deps.Length}):");
-            bool foundAlbedo = false;
-            foreach (var d in deps) {
-                string guid = AssetDatabase.AssetPathToGUID(d);
-                Type mainType = AssetDatabase.GetMainAssetTypeAtPath(d);
-                Debug.Log($" - {d} (guid={guid}, type={(mainType != null ? mainType.Name : "null")})");
-                if (d.IndexOf("RoomVolume_AlbedoIntensity", StringComparison.OrdinalIgnoreCase) >= 0) foundAlbedo = true;
-                // Try to load Texture3D to ensure it's a valid asset
-                try {
-                    var tex3 = AssetDatabase.LoadAssetAtPath<Texture3D>(d);
-                    if (tex3 != null) Debug.Log($"   -> Loaded Texture3D: {tex3.name}");
-                } catch (Exception) { }
-            }
-
-            string[] allTex3Guids = AssetDatabase.FindAssets("t:Texture3D");
-            Debug.Log($"All Texture3D assets found ({allTex3Guids.Length}):");
-            foreach (var g in allTex3Guids) {
-                string p = AssetDatabase.GUIDToAssetPath(g);
-                Debug.Log($" - {p} (guid={g})");
-            }
-
-            Debug.Log($"RoomVolume_AlbedoIntensity present in scene dependencies: {foundAlbedo}");
-        } catch (Exception e) {
-            Debug.LogWarning($"Failed to enumerate scene dependencies: {e}");
-        }
 
         EnsureUrpConfigured();
         ConfigureWebGlPublishing();
