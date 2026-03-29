@@ -163,7 +163,7 @@ namespace Lotec.Lighting {
             }
 
             if (MaterialFieldAlbedoIntensity == null) {
-                reason = "LightingVolume.materialAlbedoIntensityTexture";
+                reason = $"LightingVolume.materialAlbedoIntensityTexture (Volume={Volume.name}, {Volume.materialAlbedoIntensityTexture})";
                 return false;
             }
 

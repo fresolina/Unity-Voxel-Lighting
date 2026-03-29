@@ -158,7 +158,6 @@ jobs:
           set -eu
 
           mkdir -p "$PROJECT_PATH/Assets/Editor"
-          mkdir -p "$PROJECT_PATH/Assets/Samples"
           mkdir -p "$PROJECT_PATH/Packages"
           mkdir -p "$PROJECT_PATH/ProjectSettings"
           mkdir -p "$PROJECT_PATH/Packages/$PACKAGE_NAME"
@@ -178,7 +177,6 @@ jobs:
           EOF
 
           rsync -a --exclude ".git/" --exclude ".github/" ./ "$PROJECT_PATH/Packages/$PACKAGE_NAME/"
-          rsync -a "Samples~/Usage samples/" "$PROJECT_PATH/Assets/Samples/Usage samples/"
           cp ".github/unity/BuildWebGlSample.cs" "$PROJECT_PATH/Assets/Editor/BuildWebGlSample.cs"
 
       - name: Cache Library

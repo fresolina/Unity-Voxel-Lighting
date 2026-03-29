@@ -8,7 +8,7 @@ using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 
 public static class BuildWebGlSample {
-    const string s_scenePath = "Assets/Samples/Usage samples/Scenes/Playground.unity";
+    const string s_scenePath = "Packages/com.lotecsoftware.voxel-lighting/Samples~/Usage samples/Scenes/Playground.unity";
     const string s_outputPath = "build/WebGL";
     const string s_settingsFolder = "Assets/Settings";
     const string s_rendererDataPath = s_settingsFolder + "/CiUniversalRenderer.asset";
