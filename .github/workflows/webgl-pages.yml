@@ -176,7 +176,7 @@ jobs:
           }
           EOF
 
-          rsync -a --exclude ".git/" --exclude ".github/" --exclude ./ "$PROJECT_PATH/Packages/$PACKAGE_NAME/"
+          rsync -a --exclude ".git/" --exclude ".github/" ./ "$PROJECT_PATH/Packages/$PACKAGE_NAME/"
           mv "$PROJECT_PATH/Packages/$PACKAGE_NAME/Samples~" "$PROJECT_PATH/Packages/$PACKAGE_NAME/Samples"
           cp ".github/unity/BuildWebGlSample.cs" "$PROJECT_PATH/Assets/Editor/BuildWebGlSample.cs"
 
