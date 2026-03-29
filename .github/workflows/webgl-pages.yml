@@ -181,6 +181,14 @@ jobs:
           rsync -a "Samples~/Usage samples" "$PROJECT_PATH/Assets/Samples/"
           cp ".github/unity/BuildWebGlSample.cs" "$PROJECT_PATH/Assets/Editor/BuildWebGlSample.cs"
 
+          # Debug: list copied sample and package files for CI troubleshooting
+          echo "Listing package sample root: $PROJECT_PATH/Packages/$PACKAGE_NAME/Samples~/"
+          ls -la "$PROJECT_PATH/Packages/$PACKAGE_NAME/Samples~/" || true
+          echo "Listing package Usage samples Scenes folder: $PROJECT_PATH/Packages/$PACKAGE_NAME/Samples~/Usage samples/Scenes/"
+          ls -la "$PROJECT_PATH/Packages/$PACKAGE_NAME/Samples~/Usage samples/Scenes/" || true
+          echo "Listing copied Assets Samples Scenes folder: $PROJECT_PATH/Assets/Samples/Usage samples/Scenes/"
+          ls -la "$PROJECT_PATH/Assets/Samples/Usage samples/Scenes/" || true
+
       - name: Cache Library
         uses: actions/cache@v4
         with:
