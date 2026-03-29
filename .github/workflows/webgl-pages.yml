@@ -57,7 +57,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   PROJECT_PATH: .github/unity-webgl-project
   SITE_PATH: .pages-site
-  UNITY_VERSION: 6000.3.12f1
+  UNITY_VERSION: 6000.3.1f1
   GIT_REF: ${{ inputs.git_ref || github.event.inputs.git_ref || github.ref_name }}
   PUBLISH_KIND: ${{ inputs.publish_kind || github.event.inputs.publish_kind || 'preview' }}
   RELEASE_VERSION: ${{ inputs.release_tag || github.event.inputs.release_tag }}
