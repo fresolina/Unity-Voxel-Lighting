@@ -249,15 +249,56 @@ namespace Lotec.Lighting {
 
             // Verify kernel validity on this platform/build. Some backends may fail to compile
             // or expose kernels differently, which causes Dispatch to throw "Kernel at index is invalid".
+            Debug.Log($"GI compute shader: {_giComputeShader.name} kernel indices: Radiance={_radianceKernel}, IrradiancePathTracing={_irradiancePathTracingKernel}, IrradianceLPV={_irradianceLpvKernel}, Blur={_blurKernel}, Clear={_clearVolumeKernel}", this);
+            bool kernelVerificationFailed = false;
             try {
                 uint gx, gy, gz;
-                _giComputeShader.GetKernelThreadGroupSizes(_radianceKernel, out gx, out gy, out gz);
-                _giComputeShader.GetKernelThreadGroupSizes(_irradiancePathTracingKernel, out gx, out gy, out gz);
-                _giComputeShader.GetKernelThreadGroupSizes(_irradianceLpvKernel, out gx, out gy, out gz);
-                _giComputeShader.GetKernelThreadGroupSizes(_blurKernel, out gx, out gy, out gz);
-                _giComputeShader.GetKernelThreadGroupSizes(_clearVolumeKernel, out gx, out gy, out gz);
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_radianceKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSComputeRadiance threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSComputeRadiance verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
+
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_irradiancePathTracingKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSComputeIrradiancePathTracing threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSComputeIrradiancePathTracing verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
+
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_irradianceLpvKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSComputeIrradianceLPV threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSComputeIrradianceLPV verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
+
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_blurKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSBlurIrradiance threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSBlurIrradiance verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
+
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_clearVolumeKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSClearVolume threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSClearVolume verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
             } catch (System.Exception ex) {
-                Debug.LogError($"GI compute shader kernels failed verification: {ex.Message}. Disabling runtime GI.", this);
+                Debug.LogError($"GI compute shader kernels failed verification (outer): {ex.Message}.", this);
+                kernelVerificationFailed = true;
+            }
+
+            if (kernelVerificationFailed) {
+                Debug.LogError("One or more GI compute shader kernels failed verification. Disabling runtime GI.", this);
                 enabled = false;
                 ReleaseBuffers();
                 return;

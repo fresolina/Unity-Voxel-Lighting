@@ -22,6 +22,59 @@ public static class BuildWebGlSample {
 
         Debug.Log($"Building WebGL sample using scene: {scenePath}");
 
+        // Build-time diagnostics: log Unity/editor/system info and inspect compute shaders.
+        try {
+            Debug.Log($"Unity Editor version: {Application.unityVersion}");
+            Debug.Log($"SystemInfo.graphicsDeviceType: {SystemInfo.graphicsDeviceType}, version: {SystemInfo.graphicsDeviceVersion}");
+            Debug.Log($"SystemInfo.supportsComputeShaders: {SystemInfo.supportsComputeShaders}, supports3DTextures: {SystemInfo.supports3DTextures}");
+            var apis = PlayerSettings.GetGraphicsAPIs(BuildTarget.WebGL);
+            Debug.Log($"PlayerSettings WebGL Graphics APIs: {string.Join(", ", Array.ConvertAll(apis, a => a.ToString()))}");
+
+            string manifestPath = "Packages/manifest.json";
+            if (File.Exists(manifestPath)) {
+                string manifest = File.ReadAllText(manifestPath);
+                Debug.Log($"Found Packages/manifest.json ({manifest.Length} bytes)");
+                if (manifest.IndexOf("com.unity.inputsystem", StringComparison.OrdinalIgnoreCase) >= 0) Debug.Log("Input System package present in manifest.json");
+                else Debug.Log("Input System package NOT found in manifest.json");
+            } else {
+                Debug.LogWarning("Packages/manifest.json not found in temp project.");
+            }
+
+            string[] csGuids = AssetDatabase.FindAssets("t:ComputeShader");
+            Debug.Log($"ComputeShaders found ({csGuids.Length}):");
+            foreach (var g in csGuids) {
+                string p = AssetDatabase.GUIDToAssetPath(g);
+                try {
+                    var cs = AssetDatabase.LoadAssetAtPath<ComputeShader>(p);
+                    if (cs == null) {
+                        Debug.LogWarning($" - {p} (failed to load)");
+                        continue;
+                    }
+                    Debug.Log($" - {p} (name={cs.name})");
+                    string[] kernelsToCheck = new[] { "CSComputeRadiance", "CSComputeIrradiancePathTracing", "CSComputeIrradianceLPV", "CSBlurIrradiance", "CSClearVolume" };
+                    foreach (var kn in kernelsToCheck) {
+                        try {
+                            int idx = cs.FindKernel(kn);
+                            Debug.Log($"    Kernel {kn} => index {idx}");
+                            try {
+                                uint gx, gy, gz;
+                                cs.GetKernelThreadGroupSizes(idx, out gx, out gy, out gz);
+                                Debug.Log($"    ThreadGroupSizes = {gx},{gy},{gz}");
+                            } catch (Exception exKg) {
+                                Debug.LogError($"    GetKernelThreadGroupSizes failed for kernel {kn} (index={idx}): {exKg.Message}");
+                            }
+                        } catch (Exception exK) {
+                            Debug.LogError($"    FindKernel('{kn}') failed on {p}: {exK.Message}");
+                        }
+                    }
+                } catch (Exception ex) {
+                    Debug.LogWarning($"Error inspecting compute shader at {p}: {ex}");
+                }
+            }
+        } catch (Exception e) {
+            Debug.LogWarning($"Build diagnostics failed: {e}");
+        }
+
         EnsureUrpConfigured();
         ConfigureWebGlPublishing();
 
