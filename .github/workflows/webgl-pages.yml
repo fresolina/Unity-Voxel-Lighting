@@ -154,10 +154,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PROJECT_PATH }}/Library
-          key: Library-WebGL-${{ env.UNITY_VERSION }}-${{ hashFiles(
-            format('{0}/Packages/manifest.json', env.PROJECT_PATH),
-            'package/package.json'
-            ) }}
+          key: Library-WebGL-${{ env.UNITY_VERSION }}
 
       - name: Build WebGL sample
         uses: game-ci/unity-builder@v4
