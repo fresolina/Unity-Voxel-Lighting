@@ -83,3 +83,5 @@ Packages/packages-lock.json
 !/ProjectSettings/
 !/ProjectSettings/ProjectSettings.asset
 !/ProjectSettings/QualitySettings.asset
+!/ProjectSettings/EditorBuildSettings.asset
+!/ProjectSettings/GraphicsSettings.asset
