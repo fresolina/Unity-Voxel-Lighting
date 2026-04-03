@@ -4,6 +4,7 @@ set -eu
 
 resolve_build_output_path() {
     local candidate
+    local nested_candidate
 
     for candidate in \
         "${BUILD_OUTPUT_PATH:-}" \
@@ -11,13 +12,21 @@ resolve_build_output_path() {
         "build/WebGL"
     do
         if [ -n "$candidate" ] && [ -d "$candidate" ]; then
-            printf '%s\n' "$candidate"
-            return 0
+            if [ -f "$candidate/index.html" ]; then
+                printf '%s\n' "$candidate"
+                return 0
+            fi
+
+            nested_candidate="$candidate/WebGL"
+            if [ -f "$nested_candidate/index.html" ]; then
+                printf '%s\n' "$nested_candidate"
+                return 0
+            fi
         fi
     done
 
     echo "Could not find a WebGL build output directory." >&2
-    echo "Checked: '$PROJECT_PATH/build/WebGL' and 'build/WebGL'." >&2
+    echo "Checked: '$PROJECT_PATH/build/WebGL', '$PROJECT_PATH/build/WebGL/WebGL', 'build/WebGL', and 'build/WebGL/WebGL'." >&2
     return 1
 }
 
