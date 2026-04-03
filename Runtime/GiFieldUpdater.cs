@@ -43,9 +43,9 @@ namespace Lotec.Lighting {
             LPV = 1,
         }
 
-        public Texture3D MaterialFieldAlbedoIntensity { get; set; }
-        public Texture3D SurfaceDistanceFieldHighRes { get; set; }
-        public Texture3D SurfaceDistanceFieldLowRes { get; set; }
+        public Texture3D MaterialFieldAlbedoIntensity => Volume.materialAlbedoIntensityTexture;
+        public Texture3D SurfaceDistanceFieldHighRes => Volume.sdfHiresTexture;
+        public Texture3D SurfaceDistanceFieldLowRes => Volume.sdfLowresTexture;
         public ComputeShader GiComputeShader { get => _giComputeShader; set => _giComputeShader = value; }
         public Texture2D BlueNoiseTexture { get => _blueNoiseTexture; set => _blueNoiseTexture = value; }
         public LightingMethod GiLightingMethod { get => _lightingMethod; set => _lightingMethod = value; }
@@ -96,29 +96,15 @@ namespace Lotec.Lighting {
         public RenderTexture IrradianceBlurred => _irradianceFieldFinal;
         RenderTexture IrradianceRead => _isEvenFrame ? _irradianceFieldB : _irradianceFieldA;
 
-        LightingVolume _volume;
-        public LightingVolume Volume {
-            get => _volume;
-            set {
-                if (_volume == value) return;
-                _volume = value;
-                MaterialFieldAlbedoIntensity = _volume != null ? _volume.materialAlbedoIntensityTexture : null;
-                SurfaceDistanceFieldHighRes = _volume != null ? _volume.sdfHiresTexture : null;
-                SurfaceDistanceFieldLowRes = _volume != null ? _volume.sdfLowresTexture : null;
-            }
-        }
+        public LightingVolume Volume { get; set; }
 
-        void Awake() {
-            RefreshRuntimeGiReferences();
-        }
-
-        void OnEnable() {
-            RefreshRuntimeGiReferences();
+        void Start() {
+            if (Volume == null)
+                Volume = LightingManager.Instance.Volume;
+            Debug.Log($"GiFieldUpdater.Start: Volume={(Volume != null ? Volume.gameObject.name : "null")}", this);
         }
 
         void Update() {
-            RefreshRuntimeGiReferences();
-
             if (!SupportsRuntimeGi(out string unsupportedReason)) {
                 ReleaseBuffers();
 
@@ -134,7 +120,12 @@ namespace Lotec.Lighting {
             if (!IsRuntimeGiReady(out string missingReason)) {
                 if (!_hasLoggedMissingReferences) {
                     _hasLoggedMissingReferences = true;
-                    Debug.LogWarning($"GI Field Updater is missing required references: {missingReason}. Waiting for runtime GI initialization.", this);
+                    string volName = Volume != null ? Volume.gameObject.name : "null";
+                    string matName = Volume != null && Volume.materialAlbedoIntensityTexture != null ? Volume.materialAlbedoIntensityTexture.name : "null";
+                    string sdfHires = Volume != null && Volume.sdfHiresTexture != null ? Volume.sdfHiresTexture.name : "null";
+                    string sdfLow = Volume != null && Volume.sdfLowresTexture != null ? Volume.sdfLowresTexture.name : "null";
+                    string occlName = Volume != null && Volume.occlusionBitmaskTexture != null ? Volume.occlusionBitmaskTexture.name : "null";
+                    Debug.LogWarning($"GI Field Updater is missing required references: {missingReason}. Volume={volName}, materialAlbedoIntensityTexture={matName}, sdfHiresTexture={sdfHires}, sdfLowresTexture={sdfLow}, occlusionBitmaskTexture={occlName}. Waiting for runtime GI initialization.", this);
                 }
                 return;
             }
@@ -166,29 +157,6 @@ namespace Lotec.Lighting {
             ReleaseBuffers();
         }
 
-        void RefreshRuntimeGiReferences() {
-            if (Volume == null) {
-                LightingManager lightingManager = GetComponent<LightingManager>();
-                if (lightingManager != null && lightingManager.Volume != null) {
-                    Volume = lightingManager.Volume;
-                }
-            }
-
-            if (Volume != null) {
-                if (MaterialFieldAlbedoIntensity == null) {
-                    MaterialFieldAlbedoIntensity = Volume.materialAlbedoIntensityTexture;
-                }
-
-                if (SurfaceDistanceFieldHighRes == null) {
-                    SurfaceDistanceFieldHighRes = Volume.sdfHiresTexture;
-                }
-
-                if (SurfaceDistanceFieldLowRes == null) {
-                    SurfaceDistanceFieldLowRes = Volume.sdfLowresTexture;
-                }
-            }
-        }
-
         bool IsRuntimeGiReady(out string reason) {
             if (Volume == null) {
                 reason = "LightingVolume";
@@ -201,7 +169,7 @@ namespace Lotec.Lighting {
             }
 
             if (MaterialFieldAlbedoIntensity == null) {
-                reason = "LightingVolume.materialAlbedoIntensityTexture";
+                reason = $"LightingVolume.materialAlbedoIntensityTexture";
                 return false;
             }
 
@@ -278,6 +246,63 @@ namespace Lotec.Lighting {
             _irradianceLpvKernel = _giComputeShader.FindKernel("CSComputeIrradianceLPV");
             _blurKernel = _giComputeShader.FindKernel("CSBlurIrradiance");
             _clearVolumeKernel = _giComputeShader.FindKernel("CSClearVolume");
+
+            // Verify kernel validity on this platform/build. Some backends may fail to compile
+            // or expose kernels differently, which causes Dispatch to throw "Kernel at index is invalid".
+            Debug.Log($"GI compute shader: {_giComputeShader.name} kernel indices: Radiance={_radianceKernel}, IrradiancePathTracing={_irradiancePathTracingKernel}, IrradianceLPV={_irradianceLpvKernel}, Blur={_blurKernel}, Clear={_clearVolumeKernel}", this);
+            bool kernelVerificationFailed = false;
+            try {
+                uint gx, gy, gz;
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_radianceKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSComputeRadiance threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSComputeRadiance verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
+
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_irradiancePathTracingKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSComputeIrradiancePathTracing threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSComputeIrradiancePathTracing verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
+
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_irradianceLpvKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSComputeIrradianceLPV threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSComputeIrradianceLPV verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
+
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_blurKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSBlurIrradiance threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSBlurIrradiance verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
+
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_clearVolumeKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSClearVolume threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSClearVolume verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
+            } catch (System.Exception ex) {
+                Debug.LogError($"GI compute shader kernels failed verification (outer): {ex.Message}.", this);
+                kernelVerificationFailed = true;
+            }
+
+            if (kernelVerificationFailed) {
+                Debug.LogError("One or more GI compute shader kernels failed verification. Disabling runtime GI.", this);
+                enabled = false;
+                ReleaseBuffers();
+                return;
+            }
 
             // Prefer packed HDR when the backend supports UAV writes, otherwise fall back to a wider float format.
             _radianceField = CreateRadianceTexture(_giTextureFormat, "GI_Radiance_A");

@@ -1,6 +1,11 @@
 name: webgl-release
 
 on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
   release:
     types:
       - published
@@ -13,15 +18,18 @@ env:
 
 jobs:
   publish-webgl-pages:
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release-please--branches--')
     uses: ./.github/workflows/webgl-pages.yml
     with:
-      git_ref: ${{ github.event.release.tag_name }}
+      git_ref: ${{ github.event.pull_request.merge_commit_sha }}
       publish_kind: release
-      release_tag: ${{ github.event.release.tag_name }}
     secrets: inherit
 
   annotate-release:
-    needs: publish-webgl-pages
+    if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
     steps:
       - name: Update release body with Pages links
@@ -30,11 +38,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           RELEASE_BODY: ${{ github.event.release.body }}
-          PAGES_INDEX_URL: ${{ needs.publish-webgl-pages.outputs.pages_index_url }}
-          VERSION_URL: ${{ needs.publish-webgl-pages.outputs.version_url }}
         shell: bash
         run: |
           set -eu
+          repo_name="${GITHUB_REPOSITORY#*/}"
+          pages_index_url="https://${GITHUB_REPOSITORY_OWNER}.github.io/${repo_name}/"
+          version_url="${pages_index_url}versions/${RELEASE_TAG}/"
           notes_file="$(mktemp)"
-          printf '%s\n\nWebGL build:\n- Current release: %s\n- All released builds: %s\n' "$RELEASE_BODY" "$VERSION_URL" "$PAGES_INDEX_URL" > "$notes_file"
+          printf '%s\n\nWebGL build:\n- Current release: %s\n- All released builds: %s\n' "$RELEASE_BODY" "$version_url" "$pages_index_url" > "$notes_file"
           gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --notes-file "$notes_file"

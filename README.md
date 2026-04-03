@@ -1,5 +1,11 @@
 # Voxel Lighting for Unity
 
+Måste bygga om git-repot, så UnityProject är i en mapp och Package är i en annan. Basically gör ett miniproject av "Developpackages
+
+* LotecVoxelLighting
+  * Package/
+  * Project/
+
 A voxel-based lighting system playground for Unity. Goal is a performant lighting system with no dependency on Unity lightmaps or shadowmaps.
 
 ## Features
@@ -16,10 +22,11 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
 
 ## Web preview builds
 
-Pushes to non-`main` branches publishes a preview WebGL build automatically.
+Pushes to non-`main`, non-`release-please` branches publish a preview WebGL build automatically.
 
 * Each branch keeps a stable preview URL under `previews/<branch-name>/`.
 * The GitHub Pages index updates that link in place, and the link text shows the latest short SHA for the published branch build.
+* Deleting a preview branch removes its entry from GitHub Pages automatically.
 
 Use the `webgl-pages` workflow in GitHub Actions when you want a manual preview build from a feature branch or a specific commit.
 
@@ -30,6 +37,9 @@ Use the `webgl-pages` workflow in GitHub Actions when you want a manual preview 
 5. Optionally set `preview_name` to override the URL prefix. If you leave it empty, the workflow uses `git_ref` or the selected branch name.
 
 Automatic branch previews and manual previews now publish under `previews/<preview-name>/`, so the URL always points at the latest build for that preview name.
+If you need to remove a manual preview without deleting a branch, run the `webgl-preview-cleanup` workflow and pass the preview name.
+
+Release Pages builds publish under `versions/<tag>/` when a `release-please` PR is merged into `main`. `release-please` also updates `package.json` to the same version recorded in `CHANGELOG.md` and the GitHub release tag. When the GitHub release is published, the release workflow updates the release notes with the Pages links.
 
 ## TODO
 

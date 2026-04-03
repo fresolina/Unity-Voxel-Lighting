@@ -30,6 +30,8 @@ namespace Lotec.Lighting {
         public GiFieldUpdater GiUpdater => _giUpdater;
 
         void Awake() {
+            Instance = this;
+            Debug.Log($"LightingManager Awake: Instance set. Volume assigned? {_volume != null} ({_volume?.gameObject?.name ?? "null"})", this);
             EnsureFieldsAssigned();
         }
 
@@ -43,7 +45,6 @@ namespace Lotec.Lighting {
         }
 
         void EnsureFieldsAssigned() {
-            Instance = this;
             _sdfShaderGlobals = GetComponent<SdfShaderGlobals>();
             if (_sdfShaderGlobals != null) {
                 _sdfShaderGlobals.Volume = _volume;

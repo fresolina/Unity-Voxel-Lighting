@@ -39,6 +39,14 @@ namespace Lotec.Lighting {
             RecomputeBoundsAndResolution();
         }
 
+        void OnEnable() {
+            if (materialAlbedoIntensityTexture == null) {
+                Debug.LogWarning("LightingVolume: materialAlbedoIntensityTexture is null at runtime (scene reference may be unresolved).", this);
+            } else {
+                Debug.Log($"LightingVolume: materialAlbedoIntensityTexture loaded: {materialAlbedoIntensityTexture.name}", this);
+            }
+        }
+
         public void RecomputeBoundsAndResolution() {
             if (_root == null) return;
 
