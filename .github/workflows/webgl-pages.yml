@@ -55,9 +55,9 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  PROJECT_PATH: BootstrapProject~
+  PROJECT_PATH: project-demo
   SITE_PATH: .pages-site
-  UNITY_VERSION: 6000.3.1f1
+  UNITY_VERSION: 6000.3.12f1
   GIT_REF: ${{ inputs.git_ref || github.event.inputs.git_ref || github.ref_name }}
   PUBLISH_KIND: ${{ inputs.publish_kind || github.event.inputs.publish_kind || 'preview' }}
   RELEASE_VERSION: ${{ inputs.release_tag || github.event.inputs.release_tag }}
@@ -142,26 +142,13 @@ jobs:
           path: ${{ env.SITE_PATH }}
           fetch-depth: 1
 
-      - name: Resolve package metadata
-        id: package_metadata
+      - name: Validate demo project
         shell: bash
         run: |
           set -eu
-          package_name="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).name")"
-          echo "package_name=${package_name}" >> "$GITHUB_OUTPUT"
-
-      - name: Bootstrap temporary Unity project
-        shell: bash
-        env:
-          PACKAGE_NAME: ${{ steps.package_metadata.outputs.package_name }}
-        run: |
-          set -eu
-
           cat > "$PROJECT_PATH/ProjectSettings/ProjectVersion.txt" <<EOF
           m_EditorVersion: ${UNITY_VERSION}
           EOF
-
-          mv "Samples~" "Samples"
 
       - name: Cache Library
         uses: actions/cache@v4
@@ -169,7 +156,7 @@ jobs:
           path: ${{ env.PROJECT_PATH }}/Library
           key: Library-WebGL-${{ env.UNITY_VERSION }}-${{ hashFiles(
             format('{0}/Packages/manifest.json', env.PROJECT_PATH),
-            format('{0}/Assets/Editor/BuildWebGlSample.cs', env.PROJECT_PATH)
+            'package/package.json',
             ) }}
 
       - name: Build WebGL sample
@@ -182,7 +169,6 @@ jobs:
           projectPath: ${{ env.PROJECT_PATH }}
           targetPlatform: WebGL
           unityVersion: ${{ env.UNITY_VERSION }}
-          buildMethod: BuildWebGlSample.Build
           allowDirtyBuild: true
 
       - name: Prepare versioned Pages site
