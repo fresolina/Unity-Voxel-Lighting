@@ -1,5 +1,11 @@
 # Voxel Lighting for Unity
 
+Måste bygga om git-repot, så UnityProject är i en mapp och Package är i en annan. Basically gör ett miniproject av "Developpackages
+
+* LotecVoxelLighting
+  * Package/
+  * Project/
+
 A voxel-based lighting system playground for Unity. Goal is a performant lighting system with no dependency on Unity lightmaps or shadowmaps.
 
 ## Features
