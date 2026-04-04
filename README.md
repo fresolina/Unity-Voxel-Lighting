@@ -5,7 +5,16 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
 ## Repository layout
 
 * `package/` contains the Unity Package Manager package content (`package.json`, `Editor/`, `Runtime/`, `Samples~/`).
+* `project-demo/` contains the Unity project used for local validation and WebGL builds.
 * The repository root contains docs, changelog, and CI/release configuration.
+
+## Demo samples setup
+
+If you want the demo project to use the in-repo package samples directly, or you want to modify the package samples in place from Windows, run `scripts\setup-samples-link.cmd` manually. The script creates this link:
+
+* `project-demo/Assets/_Samples` -> `../../package/Samples~`
+
+`mklink` requires Windows symlink permission. If the script fails, enable Windows Developer Mode or run the shell as Administrator and try again.
 
 ## Features
 
