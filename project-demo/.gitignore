@@ -85,3 +85,4 @@ Packages/packages-lock.json
 !/ProjectSettings/QualitySettings.asset
 !/ProjectSettings/EditorBuildSettings.asset
 !/ProjectSettings/GraphicsSettings.asset
+!/ProjectSettings/ProjectVersion.txt
