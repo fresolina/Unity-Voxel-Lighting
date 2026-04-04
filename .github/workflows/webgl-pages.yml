@@ -89,6 +89,10 @@ jobs:
           lfs: true
           fetch-depth: 0
 
+      - name: Import demo samples
+        shell: bash
+        run: rsync -a --delete package/Samples~/ project-demo/Assets/_Samples/
+
       - name: Resolve publication target
         id: publish_target
         shell: bash

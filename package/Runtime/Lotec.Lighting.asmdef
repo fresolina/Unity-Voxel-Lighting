@@ -1,6 +1,14 @@
 {
-	"name": "Lotec.Lighting",
-	"references": [
-		"Unity.InputSystem"
-	]
+    "name": "Lotec.Lighting",
+    "rootNamespace": "Lotec.Lighting",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }
