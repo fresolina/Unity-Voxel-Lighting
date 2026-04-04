@@ -57,7 +57,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   PROJECT_PATH: project-demo
   SITE_PATH: .pages-site
-  UNITY_VERSION: 6000.3.12f1
   GIT_REF: ${{ inputs.git_ref || github.event.inputs.git_ref || github.ref_name }}
   PUBLISH_KIND: ${{ inputs.publish_kind || github.event.inputs.publish_kind || 'preview' }}
   RELEASE_VERSION: ${{ inputs.release_tag || github.event.inputs.release_tag }}
@@ -142,19 +141,31 @@ jobs:
           path: ${{ env.SITE_PATH }}
           fetch-depth: 1
 
-      - name: Validate demo project
+      - name: Resolve Unity version
+        id: unity_version
         shell: bash
         run: |
           set -eu
-          cat > "$PROJECT_PATH/ProjectSettings/ProjectVersion.txt" <<EOF
-          m_EditorVersion: ${UNITY_VERSION}
-          EOF
+          project_version_file="$PROJECT_PATH/ProjectSettings/ProjectVersion.txt"
+
+          if [ ! -f "$project_version_file" ]; then
+            echo "Missing $project_version_file" >&2
+            exit 1
+          fi
+
+          unity_version="$(sed -nE 's/^m_EditorVersion:[[:space:]]*(.+)$/\1/p' "$project_version_file" | head -n 1)"
+          if [ -z "$unity_version" ]; then
+            echo "Failed to resolve m_EditorVersion from $project_version_file" >&2
+            exit 1
+          fi
+
+          echo "unity_version=$unity_version" >> "$GITHUB_OUTPUT"
 
       - name: Cache Library
         uses: actions/cache@v4
         with:
           path: ${{ env.PROJECT_PATH }}/Library
-          key: Library-WebGL-${{ env.UNITY_VERSION }}
+          key: Library-WebGL-${{ steps.unity_version.outputs.unity_version }}
 
       - name: Build WebGL sample
         uses: game-ci/unity-builder@v4
@@ -165,7 +176,7 @@ jobs:
         with:
           projectPath: ${{ env.PROJECT_PATH }}
           targetPlatform: WebGL
-          unityVersion: ${{ env.UNITY_VERSION }}
+          unityVersion: ${{ steps.unity_version.outputs.unity_version }}
           allowDirtyBuild: true
 
       - name: Prepare versioned Pages site

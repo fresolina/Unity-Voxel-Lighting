@@ -76,8 +76,9 @@ crashlytics-build.properties
 .vscode
 Resources*
 Packages/packages-lock.json
+Samples*
 
-# Ignore all ProjectSettings entries except ProjectSettings.asset
+# Include only some files from ProjectSettings
 /# Ignore everything in the ProjectSettings folder
 /ProjectSettings/*
 !/ProjectSettings/
