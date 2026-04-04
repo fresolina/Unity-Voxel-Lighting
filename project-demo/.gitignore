@@ -35,6 +35,7 @@ ExportedObj/
 *.csproj
 *.unityproj
 *.sln
+*.slnx
 *.suo
 *.tmp
 *.user
@@ -70,3 +71,20 @@ crashlytics-build.properties
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*
+
+# Other stuff not needed for bootstrap project
+.vscode
+Resources*
+Packages/packages-lock.json
+Assets/Samples*
+Assets/_Samples*
+
+# Include only some files from ProjectSettings
+/# Ignore everything in the ProjectSettings folder
+/ProjectSettings/*
+!/ProjectSettings/
+!/ProjectSettings/ProjectSettings.asset
+!/ProjectSettings/QualitySettings.asset
+!/ProjectSettings/EditorBuildSettings.asset
+!/ProjectSettings/GraphicsSettings.asset
+!/ProjectSettings/ProjectVersion.txt

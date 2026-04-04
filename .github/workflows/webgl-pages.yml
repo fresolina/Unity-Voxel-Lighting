@@ -55,9 +55,8 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  PROJECT_PATH: BootstrapProject~
+  PROJECT_PATH: project-demo
   SITE_PATH: .pages-site
-  UNITY_VERSION: 6000.3.1f1
   GIT_REF: ${{ inputs.git_ref || github.event.inputs.git_ref || github.ref_name }}
   PUBLISH_KIND: ${{ inputs.publish_kind || github.event.inputs.publish_kind || 'preview' }}
   RELEASE_VERSION: ${{ inputs.release_tag || github.event.inputs.release_tag }}
@@ -142,35 +141,33 @@ jobs:
           path: ${{ env.SITE_PATH }}
           fetch-depth: 1
 
-      - name: Resolve package metadata
-        id: package_metadata
+      - name: Resolve Unity version
+        id: unity_version
         shell: bash
         run: |
           set -eu
-          package_name="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).name")"
-          echo "package_name=${package_name}" >> "$GITHUB_OUTPUT"
+          project_version_file="$PROJECT_PATH/ProjectSettings/ProjectVersion.txt"
 
-      - name: Bootstrap temporary Unity project
-        shell: bash
-        env:
-          PACKAGE_NAME: ${{ steps.package_metadata.outputs.package_name }}
-        run: |
-          set -eu
+          if [ ! -f "$project_version_file" ]; then
+            echo "Missing $project_version_file" >&2
+            exit 1
+          fi
 
-          cat > "$PROJECT_PATH/ProjectSettings/ProjectVersion.txt" <<EOF
-          m_EditorVersion: ${UNITY_VERSION}
-          EOF
+          unity_version="$(sed -nE 's/^m_EditorVersion:[[:space:]]*(.+)$/\1/p' "$project_version_file" | head -n 1)"
+          if [ -z "$unity_version" ]; then
+            echo "Failed to resolve m_EditorVersion from $project_version_file" >&2
+            exit 1
+          fi
 
-          mv "Samples~" "Samples"
+          echo "unity_version=$unity_version" >> "$GITHUB_OUTPUT"
 
       - name: Cache Library
         uses: actions/cache@v4
         with:
           path: ${{ env.PROJECT_PATH }}/Library
-          key: Library-WebGL-${{ env.UNITY_VERSION }}-${{ hashFiles(
-            format('{0}/Packages/manifest.json', env.PROJECT_PATH),
-            format('{0}/Assets/Editor/BuildWebGlSample.cs', env.PROJECT_PATH)
-            ) }}
+          key: Library-${{ runner.os }}-${{ env.PROJECT_PATH }}-WebGL-${{ steps.unity_version.outputs.unity_version }}-${{ hashFiles('project-demo/Assets/**', 'project-demo/Packages/**', 'project-demo/ProjectSettings/**', 'package/package.json', 'package/Editor/**', 'package/Runtime/**', 'package/Samples~/**') }}
+          restore-keys: |
+            Library-${{ runner.os }}-${{ env.PROJECT_PATH }}-WebGL-${{ steps.unity_version.outputs.unity_version }}-
 
       - name: Build WebGL sample
         uses: game-ci/unity-builder@v4
@@ -181,8 +178,7 @@ jobs:
         with:
           projectPath: ${{ env.PROJECT_PATH }}
           targetPlatform: WebGL
-          unityVersion: ${{ env.UNITY_VERSION }}
-          buildMethod: BuildWebGlSample.Build
+          unityVersion: ${{ steps.unity_version.outputs.unity_version }}
           allowDirtyBuild: true
 
       - name: Prepare versioned Pages site

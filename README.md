@@ -1,12 +1,20 @@
 # Voxel Lighting for Unity
 
-Måste bygga om git-repot, så UnityProject är i en mapp och Package är i en annan. Basically gör ett miniproject av "Developpackages
-
-* LotecVoxelLighting
-  * Package/
-  * Project/
-
 A voxel-based lighting system playground for Unity. Goal is a performant lighting system with no dependency on Unity lightmaps or shadowmaps.
+
+## Repository layout
+
+* `package/` contains the Unity Package Manager package content (`package.json`, `Editor/`, `Runtime/`, `Samples~/`).
+* `project-demo/` contains the Unity project used for local validation and WebGL builds.
+* The repository root contains docs, changelog, and CI/release configuration.
+
+## Demo samples setup
+
+If you want the demo project to use the in-repo package samples directly, or you want to modify the package samples in place from Windows, run `scripts\setup-samples-link.cmd` manually. The script creates this link:
+
+* `project-demo/Assets/_Samples` -> `../../package/Samples~`
+
+`mklink` requires Windows symlink permission. If the script fails, enable Windows Developer Mode or run the shell as Administrator and try again.
 
 ## Features
 
@@ -39,7 +47,7 @@ Use the `webgl-pages` workflow in GitHub Actions when you want a manual preview 
 Automatic branch previews and manual previews now publish under `previews/<preview-name>/`, so the URL always points at the latest build for that preview name.
 If you need to remove a manual preview without deleting a branch, run the `webgl-preview-cleanup` workflow and pass the preview name.
 
-Release Pages builds publish under `versions/<tag>/` when a `release-please` PR is merged into `main`. `release-please` also updates `package.json` to the same version recorded in `CHANGELOG.md` and the GitHub release tag. When the GitHub release is published, the release workflow updates the release notes with the Pages links.
+Release Pages builds publish under `versions/<tag>/` when a `release-please` PR is merged into `main`. `release-please` also updates `package/package.json` to the same version recorded in `CHANGELOG.md` and the GitHub release tag. When the GitHub release is published, the release workflow updates the release notes with the Pages links.
 
 ## TODO
 

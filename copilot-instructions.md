@@ -2,7 +2,7 @@
 
 # Copilot instructions (Unity-Voxel-Lighting)
 
-This repo is a **Unity Package Manager (UPM) package** (`com.lotecsoftware.lighting`), not a full Unity project. Code is meant to be imported via Package Manager.
+This repo is a **Unity Package Manager (UPM) package** (`com.lotecsoftware.voxel-lighting`) in the directory `package` and a demo project in the directory `project-demo`. Open project-demo in Unity to run the demo. The package code is meant to be imported via Package Manager.
 
 ## Big picture (voxel lighting architecture)
 - For performance reasons, we use a voxel-space lookup structure for as much as possible.
