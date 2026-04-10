@@ -84,6 +84,13 @@ namespace Lotec.Lighting {
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
+        static readonly int s_pointLightCount = Shader.PropertyToID("_PointLightCount");
+        static readonly int s_pointLightPositionRange = Shader.PropertyToID("_PointLightPositionRange");
+        static readonly int s_pointLightColor = Shader.PropertyToID("_PointLightColor");
+        static readonly int s_spotLightCount = Shader.PropertyToID("_SpotLightCount");
+        static readonly int s_spotLightPositionRange = Shader.PropertyToID("_SpotLightPositionRange");
+        static readonly int s_spotLightDirectionAngleScale = Shader.PropertyToID("_SpotLightDirectionAngleScale");
+        static readonly int s_spotLightColorAngleOffset = Shader.PropertyToID("_SpotLightColorAngleOffset");
         static readonly int s_skyColor = Shader.PropertyToID("_SkyColor");
         static readonly int s_blueNoiseTex = Shader.PropertyToID("_BlueNoiseTex");
         static readonly int s_injectLpvSky = Shader.PropertyToID("_InjectLpvSky");
@@ -146,10 +153,12 @@ namespace Lotec.Lighting {
                 SetGlobalShaderVariables();
             }
 
+            LightingManager lightingManager = GetLightingManager();
             _prevLightSettings = new LightSettings {
                 sunDirection = RenderSettings.sun != null ? -RenderSettings.sun.transform.forward : Vector3.down,
                 sunColor = RenderSettings.sun != null ? (Vector4)RenderSettings.sun.color * RenderSettings.sun.intensity : Vector4.zero,
-                skyColor = RenderSettings.ambientMode == AmbientMode.Flat ? (Vector4)RenderSettings.ambientLight : (Vector4)RenderSettings.ambientSkyColor
+                skyColor = RenderSettings.ambientMode == AmbientMode.Flat ? (Vector4)RenderSettings.ambientLight : (Vector4)RenderSettings.ambientSkyColor,
+                localLightHash = lightingManager != null ? lightingManager.GetLocalLightStateHash() : 0
             };
         }
 
@@ -218,10 +227,21 @@ namespace Lotec.Lighting {
             Vector3 sunDir = RenderSettings.sun != null ? -RenderSettings.sun.transform.forward : Vector3.down;
             Vector4 sunCol = RenderSettings.sun != null ? (Vector4)RenderSettings.sun.color * RenderSettings.sun.intensity : Vector4.zero;
             Vector4 skyCol = RenderSettings.ambientMode == AmbientMode.Flat ? (Vector4)RenderSettings.ambientLight : (Vector4)RenderSettings.ambientSkyColor;
+            LightingManager lightingManager = GetLightingManager();
+            int localLightHash = lightingManager != null ? lightingManager.GetLocalLightStateHash() : 0;
 
             return sunDir != _prevLightSettings.sunDirection ||
                    sunCol != _prevLightSettings.sunColor ||
-                   skyCol != _prevLightSettings.skyColor;
+                   skyCol != _prevLightSettings.skyColor ||
+                   localLightHash != _prevLightSettings.localLightHash;
+        }
+
+        LightingManager GetLightingManager() {
+            if (LightingManager.Instance != null) {
+                return LightingManager.Instance;
+            }
+
+            return GetComponent<LightingManager>();
         }
 
         void EnsureInitialized() {
@@ -445,6 +465,7 @@ namespace Lotec.Lighting {
         }
 
         void SetDirectLightParams() {
+            LightingManager lightingManager = GetLightingManager();
             Light sun = RenderSettings.sun;
 
             if (sun != null) {
@@ -456,6 +477,14 @@ namespace Lotec.Lighting {
                 DelayedLogger.Log("GI Updater: No sun light found in the scene. GI will be computed with no direct lighting.");
                 _giComputeShader.SetVector(s_directLightDir, Vector3.down);
                 _giComputeShader.SetVector(s_directLightColor, Vector4.zero);
+            }
+
+            if (lightingManager != null) {
+                lightingManager.SetPointLightShaderUniforms(_giComputeShader, s_pointLightCount, s_pointLightPositionRange, s_pointLightColor);
+                lightingManager.SetSpotLightShaderUniforms(_giComputeShader, s_spotLightCount, s_spotLightPositionRange, s_spotLightDirectionAngleScale, s_spotLightColorAngleOffset);
+            } else {
+                _giComputeShader.SetInt(s_pointLightCount, 0);
+                _giComputeShader.SetInt(s_spotLightCount, 0);
             }
 
             Color sky = RenderSettings.ambientMode == AmbientMode.Flat ? RenderSettings.ambientLight : RenderSettings.ambientSkyColor;
@@ -478,6 +507,7 @@ namespace Lotec.Lighting {
         public Vector3 sunDirection;
         public Vector4 sunColor;
         public Vector4 skyColor;
+        public int localLightHash;
     }
 
     internal class DelayedLogger {

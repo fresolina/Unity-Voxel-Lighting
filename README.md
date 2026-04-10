@@ -51,14 +51,6 @@ Release Pages builds publish under `versions/<tag>/` when a `release-please` PR 
 
 ## TODO
 
-* Bake each mesh, cache to file, merge into single SDF field, rebake only when needed. Bake unrotated mesh, support rotating mesh, without rebaking. Eventually support merging dynamic SDFs that moves and rotates into the final SDF field.
-
-* option: Turn off realtime shadow
-* Nåt verkar fel på sdf shadow, den förstör normalmap.
-* Fixa SDF Shadows, i vissa vinklar räcker inte 64 max steps, måste gå upp till 80.
-* Support for multiple light sources: Extend the system to handle multiple dynamic lights, each with their own contribution to the voxel lighting. This will require some way to blend the contributions from different lights in the voxel field.
-* Shadow map field: Cache the raymarch "is lit" result per voxel. Use for cheap shadows, or to determine if this voxel radiates (early exit).
-
 ## TODO 2 PC
 
 * Emission: Separate emission from albedo field. Add emissive materials field that supports light being a different color than albedo.
@@ -82,11 +74,6 @@ Release Pages builds publish under `versions/<tag>/` when a `release-please` PR 
 * Fibonachi cheat texture. Skapa den automatiskt om den inte finns. Skippa editor-menyn
 * Gör shadern i ShaderGraph med custom lighting. Se sample tutorial, ska redan vara uppsatt.
 * Så småningom: Stöd point light (attenuation från distance) och spot light (attenuation från distance och light direction och spridningskon).
-
-## Möjlig optimering
-
-* Möjlig optimering vid öppna ytor (basically snabbkolla om det är tomt runt halva vägen): Kolla SDF-värdet 'd' för halva vägen till ljuset 0.5*maxDistance, om värdet d > 0.5*maxDistance så är det garanterat inget hinder på vägen till ljuset.
-* Ett lowres SDF för mindre minnesbandbredd vid raymarching. Switcha över till hires när d < sqrt(3)*voxelSize (dvs när vi är nära ytan).
 
 ## Global Illumination (indirect lighting) plan
 

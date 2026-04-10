@@ -44,3 +44,7 @@ float3 GetNormalFromSDF(float3 pos) {
 float RaymarchSDF(float3 voxelCenter, float3 rayDir, out float3 hitPos) {
     return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, 0, MAX_SDF_DIST, EPSILON, 0.01, 64, 0.5, hitPos);
 }
+
+float RaymarchSDF(float3 voxelCenter, float3 rayDir, float maxDistance, out float3 hitPos) {
+    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, 0, maxDistance, EPSILON, 0.01, 64, 0.5, hitPos);
+}
