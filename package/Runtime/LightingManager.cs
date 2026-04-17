@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 #if UNITY_EDITOR
 using UnityEditor;
@@ -21,13 +22,23 @@ namespace Lotec.Lighting {
     public class LightingManager : MonoBehaviour {
         public static LightingManager Instance { get; private set; }
 
+        // Keep in sync with MAX_POINT_LIGHTS and MAX_SPOT_LIGHTS in VoxelGiUpdate.compute.
+        internal const int MaxPointLights = 4;
+        internal const int MaxSpotLights = 4;
+
         [Header("Source")]
         [SerializeField] LightingVolume _volume;
         [SerializeField] GiFieldUpdater _giUpdater;
+
+        [Header("Additional Lights")]
+        [Tooltip("Extra runtime GI lights. The first 4 supported point lights and the first 4 supported spot lights are injected.")]
+        [SerializeField] List<Light> _additionalLights = new List<Light>();
+
         SdfShaderGlobals _sdfShaderGlobals; // TODO: Merge SdfShaderGlobals into this class.
 
         public LightingVolume Volume => _volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
+        internal IReadOnlyList<Light> AdditionalLights => _additionalLights;
 
         void Awake() {
             Instance = this;
@@ -64,5 +75,6 @@ namespace Lotec.Lighting {
             }
 #endif
         }
+
     }
 }

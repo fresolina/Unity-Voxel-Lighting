@@ -7,6 +7,9 @@
 // --- CONSTANTS ---
 // LPV neighbor propagation factor
 #define LPV_PROPAGATION_STRENGTH 0.97
+// Keep in sync with LightingManager.MaxPointLights and MaxSpotLights.
+#define MAX_POINT_LIGHTS 4
+#define MAX_SPOT_LIGHTS 4
 
 #include "../Includes/Volume.hlsl"
 #include "../Includes/Fibonacci.hlsl"
@@ -35,6 +38,13 @@ uint _MaxSamples;
 uint _RaysPerFrame;
 float3 _DirectLightDir;
 float4 _DirectLightColor;
+uint _PointLightCount;
+float4 _PointLightPositionRange[MAX_POINT_LIGHTS];
+float4 _PointLightColor[MAX_POINT_LIGHTS];
+uint _SpotLightCount;
+float4 _SpotLightPositionRange[MAX_SPOT_LIGHTS];
+float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
+float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 float3 _SkyColor;
 int _InjectLpvSky;
 float _LpvDecay;
@@ -49,6 +59,74 @@ bool HasOpenSky(uint3 id)
     }
 
     return true;
+}
+
+float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
+{
+    float rangeFade = saturate(1.0 - (distSq / max(rangeSq, 1e-6)));
+    return rangeFade * rangeFade;
+}
+
+float3 GetPointLight(float3 voxelCenter)
+{
+    float3 totalLight = 0.0;
+    uint pointLightCount = min(_PointLightCount, (uint)MAX_POINT_LIGHTS);
+
+    [loop]
+    for (uint lightIndex = 0u; lightIndex < pointLightCount; lightIndex++) {
+        float4 positionRange = _PointLightPositionRange[lightIndex];
+        float3 toLight = positionRange.xyz - voxelCenter;
+        float distSq = dot(toLight, toLight);
+        float rangeSq = positionRange.w * positionRange.w;
+        if (distSq <= 1e-6 || distSq >= rangeSq) {
+            continue;
+        }
+
+        float invDistance = rsqrt(distSq);
+        float distanceToLight = distSq * invDistance;
+        float3 lightDir = toLight * invDistance;
+        float3 hitPos;
+        float visibility = RaymarchSDF(voxelCenter, lightDir, distanceToLight, hitPos);
+        float attenuation = visibility * GetLocalLightRangeAttenuation(distSq, rangeSq);
+        totalLight += _PointLightColor[lightIndex].rgb * attenuation;
+    }
+
+    return totalLight;
+}
+
+float3 GetSpotLight(float3 voxelCenter)
+{
+    float3 totalLight = 0.0;
+    uint spotLightCount = min(_SpotLightCount, (uint)MAX_SPOT_LIGHTS);
+
+    [loop]
+    for (uint lightIndex = 0u; lightIndex < spotLightCount; lightIndex++) {
+        float4 positionRange = _SpotLightPositionRange[lightIndex];
+        float3 toLight = positionRange.xyz - voxelCenter;
+        float distSq = dot(toLight, toLight);
+        float rangeSq = positionRange.w * positionRange.w;
+        if (distSq <= 1e-6 || distSq >= rangeSq) {
+            continue;
+        }
+
+        float invDistance = rsqrt(distSq);
+        float distanceToLight = distSq * invDistance;
+        float3 lightDir = toLight * invDistance;
+
+        float4 directionAngleScale = _SpotLightDirectionAngleScale[lightIndex];
+        float4 colorAngleOffset = _SpotLightColorAngleOffset[lightIndex];
+        float coneAttenuation = saturate(dot(-lightDir, directionAngleScale.xyz) * directionAngleScale.w + colorAngleOffset.a);
+        if (coneAttenuation <= 0.0) {
+            continue;
+        }
+
+        float3 hitPos;
+        float visibility = RaymarchSDF(voxelCenter, lightDir, distanceToLight, hitPos);
+        float attenuation = visibility * GetLocalLightRangeAttenuation(distSq, rangeSq) * (coneAttenuation * coneAttenuation);
+        totalLight += colorAngleOffset.rgb * attenuation;
+    }
+
+    return totalLight;
 }
 
 [numthreads(8, 8, 8)]
@@ -84,11 +162,12 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
     // Get indirect light from GI field.
     float3 surfaceIrradiance = _IrradianceFieldHistory.SampleLevel(pointClampSampler, uvw, 0).rgb;
     // Get direct sun light
-    // TODO: Support another direct light source, like a flashlight.
     // TODO: Optimize by sampling a shadowmap as a crude first step, then only raymarch if needed?
     float3 hitPos;
     float sunVisibility = RaymarchSDF(voxelCenter, _DirectLightDir, hitPos);
     float3 sunLight = _DirectLightColor.rgb * sunVisibility;
+    float3 pointLight = GetPointLight(voxelCenter);
+    float3 spotLight = GetSpotLight(voxelCenter);
     // Get surface albedo and emissive intensity (alpha is 8-bit log-encoded intensity)
     float4 albedoIntensity = _MaterialAlbedoIntensity.SampleLevel(pointClampSampler, uvw, 0);
     float emissionIntensity = DecodeEmissionIntensityFrom8Bit(albedoIntensity.a);
@@ -97,7 +176,7 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
     // Radiate reflected incoming light plus emissive contribution.
     // float3 safeAlbedo = min(albedoIntensity.rgb, float3(0.9f, 0.9f, 0.9f));
     float3 safeAlbedo = albedoIntensity.rgb;
-    outgoingLight += ((surfaceIrradiance + sunLight) * safeAlbedo.rgb) + emissiveLight;
+    outgoingLight += ((surfaceIrradiance + sunLight + pointLight + spotLight) * safeAlbedo.rgb) + emissiveLight;
     _RadianceFieldWrite[id] = float4(outgoingLight, 1.0);
 }
 
