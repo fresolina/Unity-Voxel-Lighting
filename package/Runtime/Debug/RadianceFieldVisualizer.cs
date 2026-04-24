@@ -12,7 +12,7 @@ namespace Lotec.Lighting {
         SdfShaderGlobals _sdfShaderGlobals;
         int _lastStatusFrame;
         protected override string ConversionShaderName => "Hidden/Unpack3D";
-        LightingVolume Volume => LightingManager.Instance.Volume;
+        LightingVolume Volume => LightingManager.Instance != null ? LightingManager.Instance.Volume : null;
 
         protected override Texture GetTexture() {
             if (source == null) {
@@ -24,9 +24,6 @@ namespace Lotec.Lighting {
             if (rt == null) { LogStatus("GetTexture: current radiance RT is null"); return null; }
             if (!rt.IsCreated()) rt.Create();
             if (rt.width == 0 || rt.height == 0 || rt.volumeDepth == 0) { LogStatus($"GetTexture: RT has invalid dims {rt.width}x{rt.height}x{rt.volumeDepth}"); return null; }
-
-            if (Time.frameCount - _lastStatusFrame < 10) return null;
-            _lastStatusFrame = Time.frameCount;
 
             return rt;
         }
