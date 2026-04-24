@@ -38,7 +38,18 @@ namespace Lotec.Lighting {
 
         public LightingVolume Volume => _volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
-        internal IReadOnlyList<Light> AdditionalLights => _additionalLights;
+        public IReadOnlyList<Light> AdditionalLights => _additionalLights;
+        public GiFieldUpdater.LightingMethod LightingMethod => _giUpdater != null ? _giUpdater.GiLightingMethod : GiFieldUpdater.LightingMethod.PathTracing;
+
+        public bool ToggleLightingMethod() {
+            EnsureFieldsAssigned();
+            if (_giUpdater == null) {
+                return false;
+            }
+
+            _giUpdater.ToggleLightingMethod();
+            return true;
+        }
 
         void Awake() {
             Instance = this;

@@ -48,7 +48,10 @@ namespace Lotec.Lighting {
         public Texture3D SurfaceDistanceFieldLowRes => Volume.sdfLowresTexture;
         public ComputeShader GiComputeShader { get => _giComputeShader; set => _giComputeShader = value; }
         public Texture2D BlueNoiseTexture { get => _blueNoiseTexture; set => _blueNoiseTexture = value; }
-        public LightingMethod GiLightingMethod { get => _lightingMethod; set => _lightingMethod = value; }
+        public LightingMethod GiLightingMethod {
+            get => _lightingMethod;
+            set => SetLightingMethod(value);
+        }
         public float LpvDecay { get => _lpvDecay; set => _lpvDecay = Mathf.Clamp01(value); }
 
         RenderTexture _radianceField;
@@ -111,6 +114,36 @@ namespace Lotec.Lighting {
         public LightingVolume Volume { get; set; }
 
         LightingManager Manager => LightingManager.Instance;
+
+        public bool SetLightingMethod(LightingMethod lightingMethod) {
+            if (_lightingMethod == lightingMethod) {
+                return false;
+            }
+
+            _lightingMethod = lightingMethod;
+            ResetLightingHistory();
+            return true;
+        }
+
+        public LightingMethod ToggleLightingMethod() {
+            SetLightingMethod(_lightingMethod == LightingMethod.PathTracing ? LightingMethod.LPV : LightingMethod.PathTracing);
+            return _lightingMethod;
+        }
+
+        public void ResetLightingHistory() {
+            _irradianceFieldSampleCount = 0;
+            _prevLightSettings = default;
+            _isEvenFrame = true;
+
+            if (_radianceField == null && _irradianceFieldA == null && _irradianceFieldB == null && _irradianceFieldFinal == null) {
+                return;
+            }
+
+            ClearVolume(_radianceField);
+            ClearVolume(_irradianceFieldA);
+            ClearVolume(_irradianceFieldB);
+            ClearVolume(_irradianceFieldFinal);
+        }
 
         void Start() {
             if (Volume == null && Manager != null)

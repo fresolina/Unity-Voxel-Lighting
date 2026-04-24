@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "*.asset": "plaintext",
+        "*.prefab": "plaintext",
+        "*.unity": "plaintext",
+        "*.meta": "plaintext"
+    }
+}

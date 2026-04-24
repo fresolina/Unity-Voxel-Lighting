@@ -51,6 +51,10 @@ namespace Lotec.Lighting.Samples {
                 _loggedKeyboardPresence = true;
             }
 
+            if (LightControllerUi.IsTextInputFocused) {
+                return;
+            }
+
             bool isLooking = !_lookWhileRightMouseHeld || IsLookHeld();
 
             if (_lookWhileRightMouseHeld) {
