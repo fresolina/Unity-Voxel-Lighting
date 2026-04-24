@@ -207,7 +207,7 @@ void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
     for (uint rayIndex = 0u; rayIndex < rayCount; rayIndex++) {
         float2 noise2 = GetBlueNoise2(_BlueNoiseTex, id, _FrameCount, rayIndex);
         half3 rayDir;
-        if (isAir) {
+        if (!isAir) {
             rayDir = CosineSampleHemisphere(surfaceNormal, noise2);
         } else {
             rayDir = GetRandomDirectionFromNoise2(noise2);
