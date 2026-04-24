@@ -74,6 +74,7 @@ crashlytics-build.properties
 
 # Other stuff not needed for bootstrap project
 .vscode
+UIElementsSchema/
 Resources*
 Packages/packages-lock.json
 Assets/Samples*

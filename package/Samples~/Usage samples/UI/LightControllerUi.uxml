@@ -1,0 +1,34 @@
+<ui:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <Style src="project://database/Assets/_Samples/Usage%20samples/UI/LightControllerUi.uss?fileID=7433441132597879392&amp;guid=8d4ea996832866749b010f7cdbe934ac&amp;type=3#LightControllerUi"/>
+    <ui:VisualElement name="screen" class="screen">
+        <ui:VisualElement name="panel" class="panel">
+            <ui:Label text="Lighting Controls" class="panel-title"/>
+            <ui:VisualElement class="panel-accent"/>
+            <ui:VisualElement name="settings-container" class="section-body">
+                <ui:EnumField label="Method [§]" value="LPV" type="Lotec.Lighting.GiFieldUpdater+LightingMethod, Lotec.Lighting" name="lighting-method-enum" class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="LightingMethod" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:EnumField>
+                <ui:FloatField name="enabled-light-intensity-field" label="Light Intensity [1-9]" is-delayed="true" tooltip="Type a value and press Enter or click away. Applies to the enabled flashlight and candle." tabindex="-1" class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="EnabledLightIntensity" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:FloatField>
+                <ui:Toggle name="flashlight-toggle" label="Flashlight [F]" class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="FlashlightEnabled" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Toggle>
+                <ui:Toggle name="candle-toggle" label="Candle [G]" class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="CandleEnabled" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Toggle>
+            </ui:VisualElement>
+            <ui:VisualElement class="hint-card">
+                <ui:Label text="Use CTRL + mouse to rotate the sun light." class="hint-text"/>
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

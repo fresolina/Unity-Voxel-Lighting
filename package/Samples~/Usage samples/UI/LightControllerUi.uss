@@ -1,0 +1,182 @@
+.screen {
+    flex-grow: 1;
+    padding-top: 18px;
+    padding-left: 18px;
+    align-items: flex-start;
+    justify-content: flex-start;
+}
+
+.panel {
+    width: 360px;
+    padding-top: 18px;
+    padding-right: 18px;
+    padding-bottom: 18px;
+    padding-left: 18px;
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    border-bottom-right-radius: 16px;
+    border-bottom-left-radius: 16px;
+    border-left-width: 1px;
+    border-right-width: 1px;
+    border-top-width: 1px;
+    border-bottom-width: 1px;
+    border-left-color: rgba(255, 255, 255, 0.12);
+    border-right-color: rgba(255, 255, 255, 0.12);
+    border-top-color: rgba(255, 255, 255, 0.12);
+    border-bottom-color: rgba(255, 255, 255, 0.12);
+    background-color: rgba(10, 16, 24, 0.9);
+}
+
+.panel-title {
+    color: rgb(244, 241, 226);
+    font-size: 19px;
+    -unity-font-style: bold;
+    margin-bottom: 6px;
+}
+
+.panel-accent {
+    height: 3px;
+    width: 100%;
+    margin-bottom: 12px;
+    border-top-left-radius: 999px;
+    border-top-right-radius: 999px;
+    border-bottom-right-radius: 999px;
+    border-bottom-left-radius: 999px;
+    background-color: rgb(227, 172, 61);
+}
+
+.section-title {
+    margin-top: 10px;
+    margin-bottom: 6px;
+    color: rgba(255, 255, 255, 0.68);
+    font-size: 11px;
+    -unity-font-style: bold;
+}
+
+.section-body {
+    margin-bottom: 4px;
+}
+
+.info-row {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    padding-top: 3px;
+    padding-bottom: 3px;
+}
+
+.info-label {
+    color: rgba(255, 255, 255, 0.78);
+    min-width: 148px;
+}
+
+.info-value {
+    color: rgb(244, 241, 226);
+    -unity-text-align: middle-right;
+    flex-grow: 1;
+}
+
+.setting-field {
+    margin-bottom: 8px;
+}
+
+.setting-field .unity-base-field__label {
+    min-width: 148px;
+    color: rgba(255, 255, 255, 0.82);
+}
+
+.setting-field .unity-base-field__input {
+    min-height: 30px;
+    padding-top: 6px;
+    padding-right: 8px;
+    padding-bottom: 6px;
+    padding-left: 8px;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+    border-bottom-left-radius: 10px;
+    border-left-width: 1px;
+    border-right-width: 1px;
+    border-top-width: 1px;
+    border-bottom-width: 1px;
+    border-left-color: rgba(227, 172, 61, 0.3);
+    border-right-color: rgba(227, 172, 61, 0.3);
+    border-top-color: rgba(227, 172, 61, 0.3);
+    border-bottom-color: rgba(227, 172, 61, 0.3);
+    background-color: rgba(255, 255, 255, 0.06);
+    color: rgb(244, 241, 226);
+}
+
+.setting-field.debug-focused-input .unity-base-field__label {
+    color: rgb(255, 183, 77);
+}
+
+.setting-field.debug-focused-input .unity-base-field__input {
+    border-left-color: rgb(255, 99, 71);
+    border-right-color: rgb(255, 99, 71);
+    border-top-color: rgb(255, 99, 71);
+    border-bottom-color: rgb(255, 99, 71);
+    background-color: rgba(255, 99, 71, 0.18);
+}
+
+.debug-focused-text-input {
+    background-color: rgba(255, 232, 140, 0.22);
+    color: rgb(255, 247, 214);
+}
+
+.setting-field.unity-toggle {
+    min-height: 28px;
+}
+
+.setting-field.unity-toggle .unity-base-field__input {
+    min-width: 18px;
+    min-height: 18px;
+}
+
+.actions-container {
+    flex-direction: column;
+}
+
+.action-button {
+    min-height: 34px;
+    margin-bottom: 8px;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+    border-bottom-left-radius: 10px;
+    border-left-width: 1px;
+    border-right-width: 1px;
+    border-top-width: 1px;
+    border-bottom-width: 1px;
+    border-left-color: rgba(255, 255, 255, 0.12);
+    border-right-color: rgba(255, 255, 255, 0.12);
+    border-top-color: rgba(255, 255, 255, 0.12);
+    border-bottom-color: rgba(255, 255, 255, 0.12);
+    background-color: rgba(44, 62, 84, 0.9);
+    color: rgb(244, 241, 226);
+    -unity-font-style: bold;
+}
+
+.action-button:hover {
+    background-color: rgba(72, 94, 120, 0.96);
+}
+
+.hint-card {
+    margin-top: 10px;
+    padding-top: 10px;
+    padding-right: 12px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    border-bottom-right-radius: 12px;
+    border-bottom-left-radius: 12px;
+    background-color: rgba(227, 172, 61, 0.08);
+}
+
+.hint-text {
+    color: rgba(255, 248, 220, 0.85);
+    font-size: 11px;
+    margin-bottom: 2px;
+}
