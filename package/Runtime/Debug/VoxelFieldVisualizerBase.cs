@@ -89,6 +89,8 @@ namespace Lotec.Lighting {
                         if (idx < 0 || idx >= _cachedPixels.Length) continue;
 
                         Color c = ProcessColor(_cachedPixels[idx]);
+                        if (c.a <= 0f) continue;
+
                         Vector3 localNorm = new Vector3((x + 0.5f) / _rx, (y + 0.5f) / _ry, (z + 0.5f) / _rz);
                         Vector3 pos = bounds.min + Vector3.Scale(localNorm, bounds.size);
 
@@ -126,6 +128,7 @@ namespace Lotec.Lighting {
                         if (idx < 0 || idx >= _cachedPixels.Length) continue;
 
                         Color c = ProcessColor(_cachedPixels[idx]);
+                        if (c.a <= 0f) continue;
                         Vector3 localNorm = new Vector3((x + 0.5f) / _rx, (y + 0.5f) / _ry, (z + 0.5f) / _rz);
                         Vector3 pos = bounds.min + Vector3.Scale(localNorm, bounds.size);
 
