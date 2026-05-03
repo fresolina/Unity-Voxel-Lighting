@@ -42,6 +42,9 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_4TAP BITMASK_RAY3 BITMASK_8TAP
             #pragma multi_compile SDF_AO_OFF SDF_AO_LQ SDF_AO_HQ
 
+            #define MAX_POINT_LIGHTS 4
+            #define MAX_SPOT_LIGHTS 4
+
             CBUFFER_START(UnityPerMaterial)
                 TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
                 TEXTURE2D(_BumpMap); SAMPLER(sampler_BumpMap);
@@ -51,6 +54,14 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
                 float4 _EmissionColor;
             CBUFFER_END
+
+            uint _PointLightCount;
+            float4 _PointLightPositionRange[MAX_POINT_LIGHTS];
+            float4 _PointLightColor[MAX_POINT_LIGHTS];
+            uint _SpotLightCount;
+            float4 _SpotLightPositionRange[MAX_SPOT_LIGHTS];
+            float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
+            float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 
             struct v {
                 float4 positionOS : POSITION;
@@ -106,29 +117,116 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 #endif
             }
 
-            // Default to SDF if no keyword is set
-            inline half GetShadow(Light light, float3 worldPos, float3 normal)
-            {
+            // Default to SDF if no keyword is set.
+            inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal) {
                 #if defined(BITMASK_POINT) || defined(BITMASK_4TAP) || defined(BITMASK_RAY3) || defined(BITMASK_8TAP)
-                    return GetFinalShadow2(worldPos, normalize(light.direction), normal);
-                    // return GetFinalShadow(worldPos, normalize(light.direction));
+                    return GetFinalShadow2(worldPos, normalize(lightDir), normal);
+                    // return GetFinalShadow(worldPos, normalize(lightDir));
                 #else
-                    return GetShadowFromSdf(normalize(light.direction), worldPos);
+                    return GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
                 #endif
+            }
+
+            inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal, float maxDistance) {
+                float3 normalizedLightDir = normalize(lightDir);
+
+                // The bitmask field stores directional occlusion to infinity, so it
+                // cannot stop at a nearby point/spot light. Use finite-distance SDF
+                // shadows for local lights so blockers behind the light do not shadow it.
+                return GetShadowFromSdf(normalizedLightDir, worldPos, maxDistance);
+            }
+
+            inline float GetLocalLightRangeAttenuation(float distSq, float rangeSq) {
+                float rangeFade = saturate(1.0 - (distSq / max(rangeSq, 1e-6)));
+                return rangeFade * rangeFade;
+            }
+
+            inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, float3 lightDir, half3 lightColor, float attenuation) {
+                half3 normalizedLightDir = normalize(lightDir);
+                half ndotl = saturate(dot(normal, normalizedLightDir));
+                if (ndotl <= 0.0h)
+                    return 0.0h;
+
+                half shadow = GetShadow(worldPos, normalizedLightDir, normal);
+                return albedo * lightColor * (ndotl * shadow * attenuation);
+            }
+
+            inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, float3 lightDir, half3 lightColor, float attenuation, float shadowDistance) {
+                half3 normalizedLightDir = normalize(lightDir);
+                half ndotl = saturate(dot(normal, normalizedLightDir));
+                if (ndotl <= 0.0h)
+                    return 0.0h;
+
+                half shadow = GetShadow(worldPos, normalizedLightDir, normal, shadowDistance);
+                return albedo * lightColor * (ndotl * shadow * attenuation);
+            }
+
+            inline half3 GetMainDirectLighting(Light light, float3 worldPos, half3 normal, half3 albedo) {
+                return GetDirectLighting(worldPos, normal, albedo, light.direction, light.color, 1.0);
+            }
+
+            inline half3 GetPointLightDirect(float3 worldPos, half3 normal, half3 albedo) {
+                half3 totalLight = 0.0h;
+                uint pointLightCount = min(_PointLightCount, (uint)MAX_POINT_LIGHTS);
+
+                [loop]
+                for (uint lightIndex = 0u; lightIndex < pointLightCount; lightIndex++)
+                {
+                    float4 positionRange = _PointLightPositionRange[lightIndex];
+                    float3 toLight = positionRange.xyz - worldPos;
+                    float surfaceDistSq = dot(toLight, toLight);
+                    if (surfaceDistSq <= 1e-6)
+                        continue;
+                    float rangeSq = positionRange.w * positionRange.w;
+                    if (surfaceDistSq >= rangeSq)
+                        continue;
+
+                    float invDistance = rsqrt(surfaceDistSq);
+                    float distanceToLight = surfaceDistSq * invDistance;
+                    float3 lightDir = toLight * invDistance;
+                    float attenuation = GetLocalLightRangeAttenuation(surfaceDistSq, rangeSq);
+                    totalLight += GetDirectLighting(worldPos, normal, albedo, lightDir, _PointLightColor[lightIndex].rgb, attenuation, distanceToLight);
+                }
+
+                return totalLight;
+            }
+
+            inline half3 GetSpotLightDirect(float3 worldPos, half3 normal, half3 albedo) {
+                half3 totalLight = 0.0h;
+                uint spotLightCount = min(_SpotLightCount, (uint)MAX_SPOT_LIGHTS);
+
+                [loop]
+                for (uint lightIndex = 0u; lightIndex < spotLightCount; lightIndex++)
+                {
+                    float4 positionRange = _SpotLightPositionRange[lightIndex];
+                    float3 toLight = positionRange.xyz - worldPos;
+                    float surfaceDistSq = dot(toLight, toLight);
+                    if (surfaceDistSq <= 1e-6)
+                        continue;
+                    float rangeSq = positionRange.w * positionRange.w;
+                    if (surfaceDistSq >= rangeSq)
+                        continue;
+
+                    float invDistance = rsqrt(surfaceDistSq);
+                    float distanceToLight = surfaceDistSq * invDistance;
+                    float3 lightDir = toLight * invDistance;
+                    float4 directionAngleScale = _SpotLightDirectionAngleScale[lightIndex];
+                    float4 colorAngleOffset = _SpotLightColorAngleOffset[lightIndex];
+                    float coneAttenuation = saturate(dot(-lightDir, directionAngleScale.xyz) * directionAngleScale.w + colorAngleOffset.a);
+                    if (coneAttenuation <= 0.0)
+                        continue;
+
+                    float attenuation = GetLocalLightRangeAttenuation(surfaceDistSq, rangeSq) * (coneAttenuation * coneAttenuation);
+                    totalLight += GetDirectLighting(worldPos, normal, albedo, lightDir, colorAngleOffset.rgb, attenuation, distanceToLight);
+                }
+
+                return totalLight;
             }
 
             half4 frag(v2f IN) : SV_Target
             {
                 Light light = GetMainLight();
                 half3 N = GetNormal(IN);
-                half3 L = normalize(light.direction);
-
-                // Self shadowing factor
-                float ndotl = saturate(dot(N, L));
-                // Direct light shadowing, only if facing the light
-                float shadow = 1.0; // No shadow.
-                if (ndotl > 0)
-                    shadow = GetShadow(light, IN.positionWS, N);
 
                 // Albedo: texture modulated by base color
                 half3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
@@ -143,10 +241,13 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 // Global Illumination from Voxel GI field
                 float3 gi = SampleVoxelGI(IN.positionWS, N);
                 float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
+                half3 directLighting = GetMainDirectLighting(light, IN.positionWS, N, albedo);
+                directLighting += GetPointLightDirect(IN.positionWS, N, albedo);
+                directLighting += GetSpotLightDirect(IN.positionWS, N, albedo);
 
                 // float3 lit = albedo * gi; // DEBUG: Indirect lit only for testing
                 half3 lit =
-                    albedo * light.color * ndotl * shadow // Direct lit
+                    directLighting // Direct lit
                     + albedo * gi * ao // Indirect lit (ambient occlusion from SDF)
                     // + light.color * spec * shadow // Specular lit
                     ;

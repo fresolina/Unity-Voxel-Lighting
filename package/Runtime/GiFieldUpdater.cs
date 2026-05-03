@@ -68,6 +68,8 @@ namespace Lotec.Lighting {
         int _irradianceFieldSampleCount;
         GraphicsFormat _giTextureFormat;
         LightSettings _prevLightSettings;
+        int _currentPointLightCount;
+        int _currentSpotLightCount;
         readonly Vector4[] _pointLightPositionRanges = new Vector4[LightingManager.MaxPointLights];
         readonly Vector4[] _pointLightColors = new Vector4[LightingManager.MaxPointLights];
         readonly Vector4[] _spotLightPositionRanges = new Vector4[LightingManager.MaxSpotLights];
@@ -114,6 +116,43 @@ namespace Lotec.Lighting {
         public LightingVolume Volume { get; set; }
 
         LightingManager Manager => LightingManager.Instance;
+
+        Vector3 GetTextureVoxelSize(Texture3D texture) {
+            if (texture == null) {
+                return Vector3.one;
+            }
+
+            return new Vector3(
+                Volume.Bounds.size.x / Mathf.Max(1, texture.width),
+                Volume.Bounds.size.y / Mathf.Max(1, texture.height),
+                Volume.Bounds.size.z / Mathf.Max(1, texture.depth));
+        }
+
+        bool TryGetCubicVoxelSize(Texture3D texture, out float voxelSize, out string reason) {
+            Vector3 voxelSize3 = GetTextureVoxelSize(texture);
+            float minVoxelSize = Mathf.Min(voxelSize3.x, Mathf.Min(voxelSize3.y, voxelSize3.z));
+            float maxVoxelSize = Mathf.Max(voxelSize3.x, Mathf.Max(voxelSize3.y, voxelSize3.z));
+            float tolerance = Mathf.Max(1e-5f, maxVoxelSize * 0.1f);
+
+            if (maxVoxelSize - minVoxelSize > tolerance) {
+                voxelSize = maxVoxelSize;
+                reason = $"{texture.name} resolves to non-cubic voxels ({voxelSize3}). Runtime GI assumes cubic voxels; recompute bounds and rebake the SDF/GI textures.";
+                return false;
+            }
+
+            voxelSize = maxVoxelSize;
+            reason = null;
+            return true;
+        }
+
+        float GetGiGridVoxelSize() {
+            // GI centers, SDF distances, and runtime irradiance reads all live on the
+            // low-res SDF / GI grid. The material field can be a different resolution,
+            // but it is only sampled by normalized UVW, so its texel size must not drive
+            // shell widths, start offsets, or runtime read offsets.
+            TryGetCubicVoxelSize(SurfaceDistanceFieldLowRes, out float voxelSize, out _);
+            return voxelSize;
+        }
 
         public bool SetLightingMethod(LightingMethod lightingMethod) {
             if (_lightingMethod == lightingMethod) {
@@ -225,6 +264,10 @@ namespace Lotec.Lighting {
 
             if (SurfaceDistanceFieldLowRes == null) {
                 reason = "LightingVolume.sdfLowresTexture";
+                return false;
+            }
+
+            if (!TryGetCubicVoxelSize(SurfaceDistanceFieldLowRes, out _, out reason)) {
                 return false;
             }
 
@@ -446,9 +489,8 @@ namespace Lotec.Lighting {
 
         void DispatchGIUpdate() {
             // Shared parameters
-            Vector3 resolution = MaterialFieldAlbedoIntensity.GetResolution();
-            float voxelSize = (float)Volume.Bounds.size.x / resolution.x;
-            _giComputeShader.SetVector(s_voxelSize, voxelSize * Vector4.one);
+            float voxelSize = GetGiGridVoxelSize();
+            _giComputeShader.SetVector(s_voxelSize, voxelSize * Vector3.one);
             _giComputeShader.SetInt(s_frameCount, Time.frameCount);
             _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
             _giComputeShader.SetInt(s_raysPerFrame, _raysPerFrame);
@@ -596,6 +638,7 @@ namespace Lotec.Lighting {
                 }
             }
 
+            _currentPointLightCount = pointLightCount;
             _giComputeShader.SetInt(s_pointLightCount, pointLightCount);
             _giComputeShader.SetVectorArray(s_pointLightPositionRange, _pointLightPositionRanges);
             _giComputeShader.SetVectorArray(s_pointLightColor, _pointLightColors);
@@ -634,6 +677,7 @@ namespace Lotec.Lighting {
                 }
             }
 
+            _currentSpotLightCount = spotLightCount;
             _giComputeShader.SetInt(s_spotLightCount, spotLightCount);
             _giComputeShader.SetVectorArray(s_spotLightPositionRange, _spotLightPositionRanges);
             _giComputeShader.SetVectorArray(s_spotLightDirectionAngleScale, _spotLightDirectionAngleScales);
@@ -661,11 +705,24 @@ namespace Lotec.Lighting {
             // LPV uses the direct ping-pong output (no blur).
             // PathTracing uses the separate blurred irradiance texture.
             Shader.SetGlobalTexture(s_irradianceFieldFinal, _lightingMethod == LightingMethod.LPV ? IrradianceFinal : _irradianceFieldFinal);
+            Shader.SetGlobalTexture(s_distanceField, SurfaceDistanceFieldLowRes);
 
             // Update these every frame in case the volume moves
-            Vector3 resolution = MaterialFieldAlbedoIntensity.GetResolution();
-            float voxelSize = MaterialFieldAlbedoIntensity.width / resolution.x;
-            Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector4.one);
+            // The runtime GI include samples the irradiance volume, so use the GI grid
+            // spacing here as well. A different material-field resolution should not
+            // change the surface read offset in SampleVoxelGI.
+            float voxelSize = GetGiGridVoxelSize();
+            Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector3.one);
+
+            // Visible local-light direct shading now runs in the fragment shader,
+            // so publish the curated point/spot light arrays there as globals too.
+            Shader.SetGlobalInt(s_pointLightCount, _currentPointLightCount);
+            Shader.SetGlobalVectorArray(s_pointLightPositionRange, _pointLightPositionRanges);
+            Shader.SetGlobalVectorArray(s_pointLightColor, _pointLightColors);
+            Shader.SetGlobalInt(s_spotLightCount, _currentSpotLightCount);
+            Shader.SetGlobalVectorArray(s_spotLightPositionRange, _spotLightPositionRanges);
+            Shader.SetGlobalVectorArray(s_spotLightDirectionAngleScale, _spotLightDirectionAngleScales);
+            Shader.SetGlobalVectorArray(s_spotLightColorAngleOffset, _spotLightColorAngleOffsets);
         }
     }
 

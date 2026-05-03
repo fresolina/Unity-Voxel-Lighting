@@ -10,7 +10,6 @@ namespace Lotec.Lighting {
         static readonly int sSdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
         static readonly int sInverseVoxelSize = Shader.PropertyToID("_InverseVoxelSize");
         static readonly int sVoxelResolution = Shader.PropertyToID("_VoxelResolution");
-        static readonly int sShadowMaxDistance = Shader.PropertyToID("_SdfShadowMaxDistance");
         static readonly int sShadowMaxSteps = Shader.PropertyToID("_SdfShadowMaxSteps");
         static readonly int sShadowSoftness = Shader.PropertyToID("_SdfShadowSoftness");
         static readonly int sShadowEpsilon = Shader.PropertyToID("_SdfShadowEpsilon");
@@ -25,7 +24,6 @@ namespace Lotec.Lighting {
         public LightingVolume Volume { get; set; }
 
         [Header("Shadow Raymarch")]
-        [Min(0f)] public float shadowMaxDistance = 10f;
         [Min(1)] public int shadowMaxSteps = 64;
         [Min(0.000001f)] public float shadowEpsilon = 0.02f;
         [Min(1f)] public float shadowSoftness = 16.0f;
@@ -103,7 +101,6 @@ namespace Lotec.Lighting {
                 1.0f / Mathf.Max(1e-9f, voxelSize.y),
                 1.0f / Mathf.Max(1e-9f, voxelSize.z));
             Shader.SetGlobalVector(sInverseVoxelSize, invVoxelSize);
-            Shader.SetGlobalFloat(sShadowMaxDistance, shadowMaxDistance);
             Shader.SetGlobalInt(sShadowMaxSteps, shadowMaxSteps);
             Shader.SetGlobalFloat(sShadowSoftness, shadowSoftness);
             Shader.SetGlobalFloat(sShadowEpsilon, shadowEpsilon);

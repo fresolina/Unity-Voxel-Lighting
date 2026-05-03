@@ -97,15 +97,23 @@ namespace Lotec.Lighting {
             float maxAxis = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
             maxAxis = Mathf.Max(0.0001f, maxAxis);
 
-            float voxelSizeX = maxAxis / _maxResolution;
-            voxelSizeX = Mathf.Max(0.0001f, voxelSizeX);
+            float voxelSize = maxAxis / _maxResolution;
+            voxelSize = Mathf.Max(0.0001f, voxelSize);
 
-            int rx = Mathf.Clamp(Mathf.CeilToInt(size.x / voxelSizeX), 4, _maxResolution);
-            int ry = Mathf.Clamp(Mathf.CeilToInt(size.y / voxelSizeX), 4, _maxResolution);
-            int rz = Mathf.Clamp(Mathf.CeilToInt(size.z / voxelSizeX), 4, _maxResolution);
+            int rx = Mathf.Clamp(Mathf.CeilToInt(size.x / voxelSize), 4, _maxResolution);
+            int ry = Mathf.Clamp(Mathf.CeilToInt(size.y / voxelSize), 4, _maxResolution);
+            int rz = Mathf.Clamp(Mathf.CeilToInt(size.z / voxelSize), 4, _maxResolution);
 
             TrimmedMaxResolution = new Vector3Int(rx, ry, rz);
-            _voxelSize = Vector3.Scale(Bounds.size, new Vector3(1.0f / TrimmedMaxResolution.x, 1.0f / TrimmedMaxResolution.y, 1.0f / TrimmedMaxResolution.z));
+
+            // Enforce cubic voxels by expanding the bounds to an integer number of
+            // cells of the chosen voxel size on every axis. Without this adjustment,
+            // the ceil() above would make the effective voxel size drift per axis and
+            // the runtime GI shaders would silently stop agreeing on shell widths,
+            // offsets, and distance thresholds.
+            Vector3 alignedSize = new Vector3(rx * voxelSize, ry * voxelSize, rz * voxelSize);
+            Bounds = new Bounds(Bounds.center, alignedSize);
+            _voxelSize = Vector3.one * voxelSize;
         }
     }
 }
