@@ -10,6 +10,7 @@
 // Keep in sync with LightingManager.MaxPointLights and MaxSpotLights.
 #define MAX_POINT_LIGHTS 4
 #define MAX_SPOT_LIGHTS 4
+#define MAX_SDF_DIST 1.0e+10
 
 #include "../Includes/Volume.hlsl"
 #include "../Includes/Fibonacci.hlsl"
@@ -67,7 +68,7 @@ float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
     return rangeFade * rangeFade;
 }
 
-float3 GetPointLight(float3 voxelCenter)
+float3 GetPointLight(float3 voxelCenter, float startOffset)
 {
     float3 totalLight = 0.0;
     uint pointLightCount = min(_PointLightCount, (uint)MAX_POINT_LIGHTS);
@@ -86,7 +87,7 @@ float3 GetPointLight(float3 voxelCenter)
         float distanceToLight = distSq * invDistance;
         float3 lightDir = toLight * invDistance;
         float3 hitPos;
-        float visibility = RaymarchSDF(voxelCenter, lightDir, distanceToLight, hitPos);
+        float visibility = RaymarchSDF(voxelCenter, lightDir, startOffset, distanceToLight, hitPos);
         float attenuation = visibility * GetLocalLightRangeAttenuation(distSq, rangeSq);
         totalLight += _PointLightColor[lightIndex].rgb * attenuation;
     }
@@ -94,7 +95,7 @@ float3 GetPointLight(float3 voxelCenter)
     return totalLight;
 }
 
-float3 GetSpotLight(float3 voxelCenter)
+float3 GetSpotLight(float3 voxelCenter, float startOffset)
 {
     float3 totalLight = 0.0;
     uint spotLightCount = min(_SpotLightCount, (uint)MAX_SPOT_LIGHTS);
@@ -121,7 +122,7 @@ float3 GetSpotLight(float3 voxelCenter)
         }
 
         float3 hitPos;
-        float visibility = RaymarchSDF(voxelCenter, lightDir, distanceToLight, hitPos);
+        float visibility = RaymarchSDF(voxelCenter, lightDir, startOffset, distanceToLight, hitPos);
         float attenuation = visibility * GetLocalLightRangeAttenuation(distSq, rangeSq) * (coneAttenuation * coneAttenuation);
         totalLight += colorAngleOffset.rgb * attenuation;
     }
@@ -139,6 +140,7 @@ void CSClearVolume(uint3 id : SV_DispatchThreadID)
 // ----------------------------------------------------------
 // RADIANCE PASS
 // Calculate how much light this voxel emits.
+// Only near-surface voxels emit light, to limit light bleeding and keep the GI field more stable.
 // ----------------------------------------------------------
 [numthreads(8, 8, 8)]
 void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
@@ -152,8 +154,11 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
     bool shouldInjectSky = _InjectLpvSky != 0 && isAir && HasOpenSky(id);
     float3 outgoingLight = shouldInjectSky ? _SkyColor : 0.0;
 
-    // Only near-surface voxels radiate.
-    bool shouldRadiate = dist > 0 && dist <= _VoxelSize.x;
+    // Only near-surface voxels radiate. dist >= 0 includes voxels exactly on the
+    // surface (e.g. wall mesh perfectly aligned to the voxel grid). LightingVolume
+    // expands bounds so the GI/SDF grid stays cubic, so _VoxelSize.x is the single
+    // world-space edge length for this grid.
+    bool shouldRadiate = dist >= 0 && dist <= _VoxelSize.x;
     if (!shouldRadiate) {
         _RadianceFieldWrite[id] = float4(outgoingLight, 1.0);
         return;
@@ -161,13 +166,28 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
 
     // Get indirect light from GI field.
     float3 surfaceIrradiance = _IrradianceFieldHistory.SampleLevel(pointClampSampler, uvw, 0).rgb;
+    // -- Self-occlusion bias (start offset for shadow rays) --
+    //
+    // RayMarchTex3D treats any sample with d <= EPSILON as a hit. A near-surface
+    // voxel whose own center sits inside that EPSILON shell would therefore
+    // self-occlude every shadow ray on the very first step, regardless of which
+    // direction the ray points, leaving the voxel permanently black.
+    //
+    // We skip past the shell by giving the raymarcher a startOffset large
+    // enough to clear EPSILON plus one minimum raymarch step. Using only
+    // EPSILON is not enough because the hit test is d <= EPSILON, so a sample
+    // that lands exactly on the threshold still self-hits.
+    //
+    // If EPSILON or RAYMARCH_MIN_STEP changes in Volume.hlsl, this helper
+    // stays in sync automatically.
+    float startOffset = ComputeRaymarchStartOffset(dist);
     // Get direct sun light
     // TODO: Optimize by sampling a shadowmap as a crude first step, then only raymarch if needed?
     float3 hitPos;
-    float sunVisibility = RaymarchSDF(voxelCenter, _DirectLightDir, hitPos);
+    float sunVisibility = RaymarchSDF(voxelCenter, _DirectLightDir, startOffset, MAX_SDF_DIST, hitPos);
     float3 sunLight = _DirectLightColor.rgb * sunVisibility;
-    float3 pointLight = GetPointLight(voxelCenter);
-    float3 spotLight = GetSpotLight(voxelCenter);
+    float3 pointLight = GetPointLight(voxelCenter, startOffset);
+    float3 spotLight = GetSpotLight(voxelCenter, startOffset);
     // Get surface albedo and emissive intensity (alpha is 8-bit log-encoded intensity)
     float4 albedoIntensity = _MaterialAlbedoIntensity.SampleLevel(pointClampSampler, uvw, 0);
     float emissionIntensity = DecodeEmissionIntensityFrom8Bit(albedoIntensity.a);
@@ -176,7 +196,8 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
     // Radiate reflected incoming light plus emissive contribution.
     // float3 safeAlbedo = min(albedoIntensity.rgb, float3(0.9f, 0.9f, 0.9f));
     float3 safeAlbedo = albedoIntensity.rgb;
-    outgoingLight += ((surfaceIrradiance + sunLight + pointLight + spotLight) * safeAlbedo.rgb) + emissiveLight;
+    float3 directLight = sunLight + pointLight + spotLight;
+    outgoingLight += ((surfaceIrradiance + directLight) * safeAlbedo.rgb) + emissiveLight;
     _RadianceFieldWrite[id] = float4(outgoingLight, 1.0);
 }
 
@@ -201,20 +222,25 @@ void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
 
     float3 incomingLight = float3(0, 0, 0);
     float3 surfaceNormal = GetNormalFromSDF(voxelCenter);
+    // Same self-occlusion bias as the radiance pass: lift the ray start past
+    // the EPSILON shell around the originating voxel so near-surface voxels
+    // don't immediately self-hit on every gathered direction. See the longer
+    // explanation in CSComputeRadiance and Volume.hlsl.
+    float startOffset = ComputeRaymarchStartOffset(dist);
     uint rayCount = max(_RaysPerFrame, 1u);
 
     [loop] // TODO: Change to [unroll] and rayCount to compile time constant (1=Mobile, 4=PC)
     for (uint rayIndex = 0u; rayIndex < rayCount; rayIndex++) {
         float2 noise2 = GetBlueNoise2(_BlueNoiseTex, id, _FrameCount, rayIndex);
         half3 rayDir;
-        if (isAir) {
+        if (!isAir) {
             rayDir = CosineSampleHemisphere(surfaceNormal, noise2);
         } else {
             rayDir = GetRandomDirectionFromNoise2(noise2);
         }
 
         float3 hitPos;
-        float lit = RaymarchSDF(voxelCenter, rayDir, hitPos);
+        float lit = RaymarchSDF(voxelCenter, rayDir, startOffset, MAX_SDF_DIST, hitPos);
         if (lit == 0) {
             // Sample value half a voxel away from the surface hit point, to avoid sampling a voxel center inside the surface.
             float3 surfaceUVW = WorldToVoxelUV(hitPos - rayDir * _VoxelSize * 0.51);
@@ -292,7 +318,21 @@ void CSComputeIrradianceLPV(uint3 id : SV_DispatchThreadID)
 
     // Decay controls retention of propagated light.
     // Inverted decay (1 - decay) is used as radiance injection weight.
-    float3 injectedRadiance = _RadianceField.Load(int4(id, 0)).rgb * (1.0 - _LpvDecay);
+    //
+    // LPV is sampled on the air side of surfaces, but direct/bounce radiance is
+    // concentrated in the near-surface shell. Loading only _RadianceField[id]
+    // makes an air receiver voxel miss nearby lit shell voxels unless the light
+    // happens to land on exactly the same cell. That showed up as roofs lighting
+    // while floors / side walls stayed dark.
+    //
+    // Pull the injection sample back toward the nearest surface until the sample
+    // sits about half a voxel outside it. This keeps the lookup on the air side
+    // while allowing LPV receiver voxels to see the directly lit shell.
+    float3 surfaceNormal = GetNormalFromSDF(voxelCenter);
+    float radianceBackoff = max(dist - (_VoxelSize.x * 0.5f), 0.0f);
+    float3 radianceSamplePos = voxelCenter - surfaceNormal * radianceBackoff;
+    float3 radianceUVW = WorldToVoxelUV(radianceSamplePos);
+    float3 injectedRadiance = _RadianceField.SampleLevel(linearClampSampler, radianceUVW, 0).rgb * (1.0 - _LpvDecay);
     float3 incomingLight = max((propagated * _LpvDecay) + injectedRadiance, 0.0);
     _IrradianceFieldWrite[id] = float4(incomingLight, 1.0);
 }
