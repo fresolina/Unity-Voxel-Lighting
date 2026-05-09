@@ -137,8 +137,11 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             }
 
             inline float GetLocalLightRangeAttenuation(float distSq, float rangeSq) {
+                // Inverse-square distance falloff (physical light intensity) combined with
+                // a smooth range window that fades to zero at max range.
+                float distanceAtten = rcp(max(distSq, 0.01));
                 float rangeFade = saturate(1.0 - (distSq / max(rangeSq, 1e-6)));
-                return rangeFade * rangeFade;
+                return distanceAtten * rangeFade * rangeFade;
             }
 
             inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, float3 lightDir, half3 lightColor, float attenuation) {

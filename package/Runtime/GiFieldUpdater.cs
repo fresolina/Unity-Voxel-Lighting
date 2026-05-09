@@ -26,7 +26,7 @@ namespace Lotec.Lighting {
 
         [SerializeField] ComputeShader _giComputeShader;
         [SerializeField] bool _continuousGi;
-        [Tooltip("Consider GI stable after this many samples. Stops GI updates until a lighting change is detected or continuousGI is enabled.")]
+        [Tooltip("Number of GI update frames before the solver stops. Also controls the temporal blend weight (1 / maxSamples).")]
         [SerializeField] int _maxSamples = 90;
         [SerializeField] int _raysPerFrame = 1;
         [SerializeField] Texture2D _blueNoiseTexture;
@@ -80,7 +80,6 @@ namespace Lotec.Lighting {
         // Property IDs local to gi update compute shader
         static readonly int s_radianceField = Shader.PropertyToID("_RadianceField");
         static readonly int s_radianceFieldWrite = Shader.PropertyToID("_RadianceFieldWrite");
-        static readonly int s_maxSamples = Shader.PropertyToID("_MaxSamples");
         static readonly int s_raysPerFrame = Shader.PropertyToID("_RaysPerFrame");
         static readonly int s_irradianceFieldWrite = Shader.PropertyToID("_IrradianceFieldWrite");
         static readonly int s_irradianceFieldInput = Shader.PropertyToID("_IrradianceFieldInput");
@@ -92,6 +91,7 @@ namespace Lotec.Lighting {
         static readonly int s_distanceField = Shader.PropertyToID("_DistanceField");
         static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
+        static readonly int s_temporalBlendWeight = Shader.PropertyToID("_TemporalBlendWeight");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
         static readonly int s_pointLightCount = Shader.PropertyToID("_PointLightCount");
@@ -109,6 +109,7 @@ namespace Lotec.Lighting {
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
         #endregion
 
+        public RenderTexture RadianceField => _radianceField;
         public RenderTexture IrradianceFinal => _isEvenFrame ? _irradianceFieldA : _irradianceFieldB;
         public RenderTexture IrradianceBlurred => _irradianceFieldFinal;
         RenderTexture IrradianceRead => _isEvenFrame ? _irradianceFieldB : _irradianceFieldA;
@@ -116,6 +117,12 @@ namespace Lotec.Lighting {
         public LightingVolume Volume { get; set; }
 
         LightingManager Manager => LightingManager.Instance;
+
+        void OnValidate() {
+            _maxSamples = Mathf.Max(1, _maxSamples);
+            _raysPerFrame = Mathf.Max(1, _raysPerFrame);
+            _lpvDecay = Mathf.Clamp01(_lpvDecay);
+        }
 
         Vector3 GetTextureVoxelSize(Texture3D texture) {
             if (texture == null) {
@@ -221,7 +228,7 @@ namespace Lotec.Lighting {
             if (HasLightChanged()) {
                 _irradianceFieldSampleCount = 0;
             }
-            bool isStable = _irradianceFieldSampleCount > _maxSamples * 2;
+            bool isStable = _irradianceFieldSampleCount >= _maxSamples;
 
             EnsureInitialized();
             if (!isStable || _continuousGi) {
@@ -494,7 +501,11 @@ namespace Lotec.Lighting {
             _giComputeShader.SetInt(s_frameCount, Time.frameCount);
             _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
             _giComputeShader.SetInt(s_raysPerFrame, _raysPerFrame);
-            _giComputeShader.SetInt(s_maxSamples, _maxSamples);
+            // When is the stale history gone?
+            // EMA with weight α reaches (1 - (1-α)^N) convergence after N frames.
+            // α = 1/N -> 63%. α = 3/N -> ~95%. α = 4.6/N -> ~99% convergence in N = _maxSamples frames.
+            // Suggested value: 90fps, maxSamples=270 for 3 second ~95% convergence.
+            _giComputeShader.SetFloat(s_temporalBlendWeight, 3f / Mathf.Max(_maxSamples, 1));
             _giComputeShader.SetInt(s_injectLpvSky, _lightingMethod == LightingMethod.LPV ? 1 : 0);
             _giComputeShader.SetFloat(s_lpvDecay, _lpvDecay);
 

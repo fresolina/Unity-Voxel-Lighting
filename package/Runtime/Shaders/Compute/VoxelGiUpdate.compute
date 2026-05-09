@@ -35,8 +35,8 @@ Texture2D<float> _BlueNoiseTex;
 // --- UNIFORMS ---
 float3 _RadianceTextureSize;
 uint _FrameCount;
-uint _MaxSamples;
 uint _RaysPerFrame;
+float _TemporalBlendWeight;
 float3 _DirectLightDir;
 float4 _DirectLightColor;
 uint _PointLightCount;
@@ -64,8 +64,11 @@ bool HasOpenSky(uint3 id)
 
 float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
 {
+    // Inverse-square distance falloff (physical light intensity) combined with
+    // a smooth range window that fades to zero at max range.
+    float distanceAtten = rcp(max(distSq, 0.01));
     float rangeFade = saturate(1.0 - (distSq / max(rangeSq, 1e-6)));
-    return rangeFade * rangeFade;
+    return distanceAtten * rangeFade * rangeFade;
 }
 
 float3 GetPointLight(float3 voxelCenter, float startOffset)
@@ -255,8 +258,7 @@ void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
 
     float4 history = _IrradianceFieldHistory.Load(int4(id, 0));
     float3 oldColor = history.rgb;
-    float weight = max(1.0f / (_MaxSamples * 2), 0.01f);
-    float3 finalColor = lerp(oldColor, incomingLight, weight);
+    float3 finalColor = lerp(oldColor, incomingLight, saturate(_TemporalBlendWeight));
 
     _IrradianceFieldWrite[id] = float4(finalColor, 1.0);
 }
