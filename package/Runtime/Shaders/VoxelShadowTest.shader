@@ -62,6 +62,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             float4 _SpotLightPositionRange[MAX_SPOT_LIGHTS];
             float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
             float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
+            float _Exposure;
 
             struct v {
                 float4 positionOS : POSITION;
@@ -254,6 +255,10 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                     + albedo * gi * ao // Indirect lit (ambient occlusion from SDF)
                     // + light.color * spec * shadow // Specular lit
                     ;
+
+                // Exposure (EV stops) + Reinhard tonemapping
+                lit *= exp2(_Exposure);
+                lit = lit / (1.0h + lit);
 
                 return half4(lit, _BaseColor.a);
             }
