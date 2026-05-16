@@ -17,7 +17,6 @@ namespace Lotec.Lighting {
     }
 
     [ExecuteInEditMode]
-    [RequireComponent(typeof(SdfShaderGlobals))]
     [RequireComponent(typeof(GiFieldUpdater))]
     public class LightingManager : MonoBehaviour {
         public static LightingManager Instance { get; private set; }
@@ -25,6 +24,7 @@ namespace Lotec.Lighting {
         // Keep in sync with MAX_POINT_LIGHTS and MAX_SPOT_LIGHTS in VoxelGiUpdate.compute.
         internal const int MaxPointLights = 4;
         internal const int MaxSpotLights = 4;
+        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask8Tap = 4 }
 
         [Header("Source")]
         [SerializeField] LightingVolume _volume;
@@ -34,12 +34,24 @@ namespace Lotec.Lighting {
         [Tooltip("Extra runtime GI lights. The first 4 supported point lights and the first 4 supported spot lights are injected.")]
         [SerializeField] List<Light> _additionalLights = new List<Light>();
 
-        SdfShaderGlobals _sdfShaderGlobals; // TODO: Merge SdfShaderGlobals into this class.
+        [Header("Shadows")]
+        [SerializeField] ShadowMode _shadowMode = ShadowMode.SDF;
+        [SerializeField] SdfShadowConfig _sdfShadow = new SdfShadowConfig();
+
+        [Header("Ambient Occlusion")]
+        [SerializeField] SdfAoConfig _sdfAo = new SdfAoConfig();
+
+        [SerializeField] bool _updateInEditor = true;
+
 
         public LightingVolume Volume => _volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
         public IReadOnlyList<Light> AdditionalLights => _additionalLights;
         public GiFieldUpdater.LightingMethod LightingMethod => _giUpdater != null ? _giUpdater.GiLightingMethod : GiFieldUpdater.LightingMethod.PathTracing;
+
+        void OnValidate() {
+            EnsureFieldsAssigned();
+        }
 
         public bool ToggleLightingMethod() {
             EnsureFieldsAssigned();
@@ -55,23 +67,32 @@ namespace Lotec.Lighting {
             Instance = this;
             Debug.Log($"LightingManager Awake: Instance set. Volume assigned? {_volume != null} ({_volume?.gameObject?.name ?? "null"})", this);
             EnsureFieldsAssigned();
+            ApplyShaderGlobals();
         }
 
         void OnEnable() {
             EnsureFieldsAssigned();
+            ApplyShaderGlobals();
+        }
+
+        private void ApplyShaderGlobals() {
+            ApplyShadowModeKeywords();
+            if (_volume != null) {
+                _volume.ApplyShaderGlobals();
+            }
+            _sdfShadow.ApplyShaderGlobals();
+            _sdfAo.ApplyShaderGlobals();
         }
 
         // Update is called once per frame
         void Update() {
             EnsureFieldsAssigned();
+            if (Application.isPlaying || _updateInEditor) {
+                ApplyShaderGlobals();
+            }
         }
 
         void EnsureFieldsAssigned() {
-            _sdfShaderGlobals = GetComponent<SdfShaderGlobals>();
-            if (_sdfShaderGlobals != null) {
-                _sdfShaderGlobals.Volume = _volume;
-            }
-
             if (_giUpdater == null) {
                 _giUpdater = GetComponent<GiFieldUpdater>();
                 if (_giUpdater == null) return;
@@ -85,6 +106,26 @@ namespace Lotec.Lighting {
                 _giUpdater.Volume = Volume;
             }
 #endif
+        }
+
+        void ApplyShadowModeKeywords() {
+            switch (_shadowMode) {
+                case ShadowMode.SDF:
+                    Shader.EnableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_8TAP");
+                    break;
+                case ShadowMode.BitmaskPoint:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.EnableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_8TAP");
+                    break;
+                case ShadowMode.Bitmask8Tap:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.EnableKeyword("BITMASK_8TAP");
+                    break;
+            }
         }
 
     }
