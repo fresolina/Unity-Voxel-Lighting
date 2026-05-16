@@ -34,12 +34,21 @@ namespace Lotec.Lighting {
         [Tooltip("Extra runtime GI lights. The first 4 supported point lights and the first 4 supported spot lights are injected.")]
         [SerializeField] List<Light> _additionalLights = new List<Light>();
 
-        SdfShaderGlobals _sdfShaderGlobals; // TODO: Merge SdfShaderGlobals into this class.
+        [Header("SDF Shadow")]
+        [SerializeField] SdfShadowConfig _sdfShadow = new SdfShadowConfig();
+        [SerializeField] bool _updateInEditor = true;
+
+        SdfShaderGlobals _sdfShaderGlobals;
 
         public LightingVolume Volume => _volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
         public IReadOnlyList<Light> AdditionalLights => _additionalLights;
         public GiFieldUpdater.LightingMethod LightingMethod => _giUpdater != null ? _giUpdater.GiLightingMethod : GiFieldUpdater.LightingMethod.PathTracing;
+        public SdfShadowConfig SdfShadow => _sdfShadow;
+
+        void OnValidate() {
+            EnsureFieldsAssigned();
+        }
 
         public bool ToggleLightingMethod() {
             EnsureFieldsAssigned();
@@ -55,15 +64,20 @@ namespace Lotec.Lighting {
             Instance = this;
             Debug.Log($"LightingManager Awake: Instance set. Volume assigned? {_volume != null} ({_volume?.gameObject?.name ?? "null"})", this);
             EnsureFieldsAssigned();
+            _sdfShadow.ApplyShaderGlobals();
         }
 
         void OnEnable() {
             EnsureFieldsAssigned();
+            _sdfShadow.ApplyShaderGlobals();
         }
 
         // Update is called once per frame
         void Update() {
             EnsureFieldsAssigned();
+            if (Application.isPlaying || _updateInEditor) {
+                _sdfShadow.ApplyShaderGlobals();
+            }
         }
 
         void EnsureFieldsAssigned() {
