@@ -62,6 +62,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             float4 _SpotLightPositionRange[MAX_SPOT_LIGHTS];
             float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
             float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
+            float _Exposure;
 
             struct v {
                 float4 positionOS : POSITION;
@@ -137,8 +138,11 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             }
 
             inline float GetLocalLightRangeAttenuation(float distSq, float rangeSq) {
+                // Inverse-square distance falloff (physical light intensity) combined with
+                // a smooth range window that fades to zero at max range.
+                float distanceAtten = rcp(max(distSq, 0.01));
                 float rangeFade = saturate(1.0 - (distSq / max(rangeSq, 1e-6)));
-                return rangeFade * rangeFade;
+                return distanceAtten * rangeFade * rangeFade;
             }
 
             inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, float3 lightDir, half3 lightColor, float attenuation) {
@@ -251,6 +255,10 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                     + albedo * gi * ao // Indirect lit (ambient occlusion from SDF)
                     // + light.color * spec * shadow // Specular lit
                     ;
+
+                // Exposure (EV stops) + Reinhard tonemapping
+                lit *= exp2(_Exposure);
+                lit = lit / (1.0h + lit);
 
                 return half4(lit, _BaseColor.a);
             }

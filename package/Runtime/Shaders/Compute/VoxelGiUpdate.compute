@@ -3,6 +3,7 @@
 #pragma kernel CSComputeIrradianceLPV
 #pragma kernel CSBlurIrradiance
 #pragma kernel CSClearVolume
+#pragma kernel CSComputeAverageLuminance
 
 // --- CONSTANTS ---
 // LPV neighbor propagation factor
@@ -29,14 +30,17 @@ Texture3D<float4> _IrradianceFieldInput;   // Temporal irradiance (read in blur 
 RWTexture3D<float4> _IrradianceFieldFinal; // Final blurred irradiance
 RWTexture3D<float4> _ClearVolumeTarget;
 
+// Auto-exposure luminance reduction buffer (sum, count)
+RWStructuredBuffer<uint> _LuminanceResult;
+
 // Blue noise for stochastic sampling
 Texture2D<float> _BlueNoiseTex;
 
 // --- UNIFORMS ---
 float3 _RadianceTextureSize;
 uint _FrameCount;
-uint _MaxSamples;
 uint _RaysPerFrame;
+float _TemporalBlendWeight;
 float3 _DirectLightDir;
 float4 _DirectLightColor;
 uint _PointLightCount;
@@ -49,6 +53,9 @@ float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 float3 _SkyColor;
 int _InjectLpvSky;
 float _LpvDecay;
+float3 _CameraPosition;
+float3 _CameraForward;
+float _LuminanceRadius;
 
 bool HasOpenSky(uint3 id)
 {
@@ -64,8 +71,26 @@ bool HasOpenSky(uint3 id)
 
 float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
 {
+    // Inverse-square distance falloff (physical light intensity) combined with
+    // a smooth range window that fades to zero at max range.
+    float distanceAtten = rcp(max(distSq, 0.01));
     float rangeFade = saturate(1.0 - (distSq / max(rangeSq, 1e-6)));
-    return rangeFade * rangeFade;
+    return distanceAtten * rangeFade * rangeFade;
+}
+
+float3 GetIndirectSkyLight(float3 rayDir, bool includeSun)
+{
+    float3 environmentLight = _SkyColor;
+    if (!includeSun) {
+        return environmentLight;
+    }
+
+    // Use a deliberately broad sun lobe here. A physical sun disk is too small
+    // to be sampled reliably at 1-4 rays per frame, which leaves rooms lit
+    // through small openings much darker than the user expects.
+    float sunLobe = saturate(dot(rayDir, _DirectLightDir));
+    sunLobe *= sunLobe;
+    return environmentLight + (_DirectLightColor.rgb * sunLobe);
 }
 
 float3 GetPointLight(float3 voxelCenter, float startOffset)
@@ -246,8 +271,10 @@ void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
             float3 surfaceUVW = WorldToVoxelUV(hitPos - rayDir * _VoxelSize * 0.51);
             incomingLight += _RadianceField.SampleLevel(linearClampSampler, surfaceUVW, 0).rgb;
         } else {
-            // No hit means we get sky light.
-            incomingLight += _SkyColor * lit;
+            // No hit means the ray escaped to the environment.
+            // Only air voxels add the sun miss term; near-surface shell voxels
+            // already get explicit direct sun in the radiance pass.
+            incomingLight += GetIndirectSkyLight(rayDir, isAir) * lit;
         }
     }
 
@@ -255,8 +282,7 @@ void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
 
     float4 history = _IrradianceFieldHistory.Load(int4(id, 0));
     float3 oldColor = history.rgb;
-    float weight = max(1.0f / (_MaxSamples * 2), 0.01f);
-    float3 finalColor = lerp(oldColor, incomingLight, weight);
+    float3 finalColor = lerp(oldColor, incomingLight, saturate(_TemporalBlendWeight));
 
     _IrradianceFieldWrite[id] = float4(finalColor, 1.0);
 }
@@ -364,4 +390,43 @@ void CSBlurIrradiance(uint3 id : SV_DispatchThreadID)
     sum += _IrradianceFieldInput.SampleLevel(linearClampSampler, uvwCenter + float3( uvwHalf.x,  uvwHalf.y,  uvwHalf.z), 0).rgb;
 
     _IrradianceFieldFinal[id] = float4(sum * 0.125f, 1.0);
+}
+
+// ----------------------------------------------------------
+// AUTO-EXPOSURE: Compute average log-luminance in the camera's
+// view direction. Only samples voxels within _LuminanceRadius
+// that lie in a forward-facing cone (dot >= 0 with camera forward)
+// and outside geometry (dist >= 0).
+// ----------------------------------------------------------
+[numthreads(8, 8, 8)]
+void CSComputeAverageLuminance(uint3 id : SV_DispatchThreadID)
+{
+    if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
+
+    float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
+
+    float3 offset = voxelCenter - _CameraPosition;
+    float distSq = dot(offset, offset);
+    // Skip voxels outside the sampling radius.
+    if (distSq > _LuminanceRadius * _LuminanceRadius) return;
+    // Skip voxels behind the camera. Weight by how aligned the voxel
+    // direction is with the camera forward (cosine weighting).
+    float invDist = rsqrt(max(distSq, 1e-6));
+    float cosAngle = dot(offset * invDist, _CameraForward);
+    if (cosAngle < 0.0) return;
+
+    float3 uvw = WorldToVoxelUV(voxelCenter);
+    half dist = _DistanceField.SampleLevel(pointClampSampler, uvw, 0).r;
+    // Skip voxels inside geometry.
+    if (dist < 0) return;
+
+    float3 irr = _IrradianceFieldInput.Load(int4(id, 0)).rgb;
+    float lum = dot(irr, float3(0.2126, 0.7152, 0.0722));
+    // Cosine-weight: voxels more centered in view contribute more.
+    // Scale luminance by cosAngle so off-axis voxels have less influence.
+    float weightedLum = lum * cosAngle;
+    float logLum = log2(max(weightedLum, 1e-4));
+    uint encoded = (uint)((logLum + 16.0) * 1024.0);
+    InterlockedAdd(_LuminanceResult[0], encoded);
+    InterlockedAdd(_LuminanceResult[1], 1u);
 }

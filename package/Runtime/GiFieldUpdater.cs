@@ -1,3 +1,4 @@
+using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
@@ -26,12 +27,24 @@ namespace Lotec.Lighting {
 
         [SerializeField] ComputeShader _giComputeShader;
         [SerializeField] bool _continuousGi;
-        [Tooltip("Consider GI stable after this many samples. Stops GI updates until a lighting change is detected or continuousGI is enabled.")]
+        [Tooltip("Number of GI update frames before the solver stops. Also controls the temporal blend weight (1 / maxSamples).")]
         [SerializeField] int _maxSamples = 90;
         [SerializeField] int _raysPerFrame = 1;
         [SerializeField] Texture2D _blueNoiseTexture;
 
         [Header("Lighting")]
+        [Tooltip("Manual exposure offset in EV stops (added on top of auto-exposure).")]
+        [SerializeField] float _exposure;
+        [Tooltip("Automatically adapt exposure based on average scene luminance.")]
+        [SerializeField] bool _autoExposure;
+        [Tooltip("Minimum auto-exposure in EV stops.")]
+        [SerializeField] float _autoExposureMin = -2f;
+        [Tooltip("Maximum auto-exposure in EV stops.")]
+        [SerializeField] float _autoExposureMax = 4f;
+        [Tooltip("How quickly exposure adapts (higher = faster). Roughly seconds to adapt.")]
+        [SerializeField][Range(0.5f, 10f)] float _adaptationSpeed = 2f;
+        [Tooltip("Radius around the camera (in meters) to sample for auto-exposure.")]
+        [SerializeField] float _autoExposureRadius = 3f;
         [Tooltip("Select GI solve method.")]
         [SerializeField] LightingMethod _lightingMethod = LightingMethod.PathTracing;
         [Range(0f, 1f)]
@@ -58,12 +71,16 @@ namespace Lotec.Lighting {
         RenderTexture _irradianceFieldA;  // Ping
         RenderTexture _irradianceFieldB;  // Pong
         RenderTexture _irradianceFieldFinal; // Blurred final
+        ComputeBuffer _luminanceBuffer;
+        bool _luminanceReadbackPending;
+        float _autoExposureEV;
         bool _isEvenFrame = true;
         int _radianceKernel;
         int _irradiancePathTracingKernel;
         int _irradianceLpvKernel;
         int _blurKernel;
         int _clearVolumeKernel;
+        int _averageLuminanceKernel;
         Vector3 _radianceTextureResolution;
         int _irradianceFieldSampleCount;
         GraphicsFormat _giTextureFormat;
@@ -80,7 +97,6 @@ namespace Lotec.Lighting {
         // Property IDs local to gi update compute shader
         static readonly int s_radianceField = Shader.PropertyToID("_RadianceField");
         static readonly int s_radianceFieldWrite = Shader.PropertyToID("_RadianceFieldWrite");
-        static readonly int s_maxSamples = Shader.PropertyToID("_MaxSamples");
         static readonly int s_raysPerFrame = Shader.PropertyToID("_RaysPerFrame");
         static readonly int s_irradianceFieldWrite = Shader.PropertyToID("_IrradianceFieldWrite");
         static readonly int s_irradianceFieldInput = Shader.PropertyToID("_IrradianceFieldInput");
@@ -92,6 +108,7 @@ namespace Lotec.Lighting {
         static readonly int s_distanceField = Shader.PropertyToID("_DistanceField");
         static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
+        static readonly int s_temporalBlendWeight = Shader.PropertyToID("_TemporalBlendWeight");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
         static readonly int s_pointLightCount = Shader.PropertyToID("_PointLightCount");
@@ -105,10 +122,16 @@ namespace Lotec.Lighting {
         static readonly int s_blueNoiseTex = Shader.PropertyToID("_BlueNoiseTex");
         static readonly int s_injectLpvSky = Shader.PropertyToID("_InjectLpvSky");
         static readonly int s_lpvDecay = Shader.PropertyToID("_LpvDecay");
+        static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
+        static readonly int s_cameraPosition = Shader.PropertyToID("_CameraPosition");
+        static readonly int s_cameraForward = Shader.PropertyToID("_CameraForward");
+        static readonly int s_luminanceRadius = Shader.PropertyToID("_LuminanceRadius");
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
+        static readonly int s_exposure = Shader.PropertyToID("_Exposure");
         #endregion
 
+        public RenderTexture RadianceField => _radianceField;
         public RenderTexture IrradianceFinal => _isEvenFrame ? _irradianceFieldA : _irradianceFieldB;
         public RenderTexture IrradianceBlurred => _irradianceFieldFinal;
         RenderTexture IrradianceRead => _isEvenFrame ? _irradianceFieldB : _irradianceFieldA;
@@ -116,6 +139,12 @@ namespace Lotec.Lighting {
         public LightingVolume Volume { get; set; }
 
         LightingManager Manager => LightingManager.Instance;
+
+        void OnValidate() {
+            _maxSamples = Mathf.Max(1, _maxSamples);
+            _raysPerFrame = Mathf.Max(1, _raysPerFrame);
+            _lpvDecay = Mathf.Clamp01(_lpvDecay);
+        }
 
         Vector3 GetTextureVoxelSize(Texture3D texture) {
             if (texture == null) {
@@ -221,7 +250,7 @@ namespace Lotec.Lighting {
             if (HasLightChanged()) {
                 _irradianceFieldSampleCount = 0;
             }
-            bool isStable = _irradianceFieldSampleCount > _maxSamples * 2;
+            bool isStable = _irradianceFieldSampleCount >= _maxSamples;
 
             EnsureInitialized();
             if (!isStable || _continuousGi) {
@@ -231,13 +260,18 @@ namespace Lotec.Lighting {
                 DispatchGIUpdate();
                 _irradianceFieldSampleCount++;
                 _isEvenFrame = !_isEvenFrame;
-                SetGlobalShaderVariables();
             }
+
+            if (_autoExposure) {
+                DispatchLuminanceReduction();
+                UpdateAutoExposure();
+            }
+            SetGlobalShaderVariables();
 
             _prevLightSettings = new LightSettings {
                 sunDirection = RenderSettings.sun != null ? -RenderSettings.sun.transform.forward : Vector3.down,
                 sunColor = RenderSettings.sun != null ? (Vector4)RenderSettings.sun.color * RenderSettings.sun.intensity : Vector4.zero,
-                skyColor = RenderSettings.ambientMode == AmbientMode.Flat ? (Vector4)RenderSettings.ambientLight : (Vector4)RenderSettings.ambientSkyColor,
+                skyColor = GetSkyEnvironmentColor(),
                 localLightHash = GetLocalLightStateHash()
             };
         }
@@ -310,13 +344,18 @@ namespace Lotec.Lighting {
         bool HasLightChanged() {
             Vector3 sunDir = RenderSettings.sun != null ? -RenderSettings.sun.transform.forward : Vector3.down;
             Vector4 sunCol = RenderSettings.sun != null ? (Vector4)RenderSettings.sun.color * RenderSettings.sun.intensity : Vector4.zero;
-            Vector4 skyCol = RenderSettings.ambientMode == AmbientMode.Flat ? (Vector4)RenderSettings.ambientLight : (Vector4)RenderSettings.ambientSkyColor;
+            Vector4 skyCol = GetSkyEnvironmentColor();
             int localLightHash = GetLocalLightStateHash();
 
             return sunDir != _prevLightSettings.sunDirection ||
                    sunCol != _prevLightSettings.sunColor ||
                    skyCol != _prevLightSettings.skyColor ||
                    localLightHash != _prevLightSettings.localLightHash;
+        }
+
+        static Vector4 GetSkyEnvironmentColor() {
+            Color sky = RenderSettings.ambientMode == AmbientMode.Flat ? RenderSettings.ambientLight : RenderSettings.ambientSkyColor * RenderSettings.ambientIntensity;
+            return (Vector4)sky;
         }
 
         int GetLocalLightStateHash() {
@@ -398,6 +437,7 @@ namespace Lotec.Lighting {
             _irradianceLpvKernel = _giComputeShader.FindKernel("CSComputeIrradianceLPV");
             _blurKernel = _giComputeShader.FindKernel("CSBlurIrradiance");
             _clearVolumeKernel = _giComputeShader.FindKernel("CSClearVolume");
+            _averageLuminanceKernel = _giComputeShader.FindKernel("CSComputeAverageLuminance");
 
             // Verify kernel validity on this platform/build. Some backends may fail to compile
             // or expose kernels differently, which causes Dispatch to throw "Kernel at index is invalid".
@@ -444,6 +484,14 @@ namespace Lotec.Lighting {
                     Debug.LogError($"  Kernel CSClearVolume verification failed: {e.Message}", this);
                     kernelVerificationFailed = true;
                 }
+
+                try {
+                    _giComputeShader.GetKernelThreadGroupSizes(_averageLuminanceKernel, out gx, out gy, out gz);
+                    Debug.Log($"  Kernel CSComputeAverageLuminance threadgroups: {gx},{gy},{gz}", this);
+                } catch (System.Exception e) {
+                    Debug.LogError($"  Kernel CSComputeAverageLuminance verification failed: {e.Message}", this);
+                    kernelVerificationFailed = true;
+                }
             } catch (System.Exception ex) {
                 Debug.LogError($"GI compute shader kernels failed verification (outer): {ex.Message}.", this);
                 kernelVerificationFailed = true;
@@ -462,6 +510,10 @@ namespace Lotec.Lighting {
             _irradianceFieldA = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_A");
             _irradianceFieldB = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_B");
             _irradianceFieldFinal = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_Final");
+
+            _luminanceBuffer?.Release();
+            _luminanceBuffer = new ComputeBuffer(2, sizeof(uint));
+
             ClearVolume(_radianceField);
             ClearVolume(_irradianceFieldA);
             ClearVolume(_irradianceFieldB);
@@ -481,6 +533,8 @@ namespace Lotec.Lighting {
                 _irradianceFieldA.Release();
             if (_irradianceFieldFinal != null)
                 _irradianceFieldFinal.Release();
+            _luminanceBuffer?.Release();
+            _luminanceBuffer = null;
             _radianceField = null;
             _irradianceFieldB = null;
             _irradianceFieldA = null;
@@ -494,7 +548,11 @@ namespace Lotec.Lighting {
             _giComputeShader.SetInt(s_frameCount, Time.frameCount);
             _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
             _giComputeShader.SetInt(s_raysPerFrame, _raysPerFrame);
-            _giComputeShader.SetInt(s_maxSamples, _maxSamples);
+            // When is the stale history gone?
+            // EMA with weight α reaches (1 - (1-α)^N) convergence after N frames.
+            // α = 1/N -> 63%. α = 3/N -> ~95%. α = 4.6/N -> ~99% convergence in N = _maxSamples frames.
+            // Suggested value: 90fps, maxSamples=270 for 3 second ~95% convergence.
+            _giComputeShader.SetFloat(s_temporalBlendWeight, 4.6f / Mathf.Max(_maxSamples, 1));
             _giComputeShader.SetInt(s_injectLpvSky, _lightingMethod == LightingMethod.LPV ? 1 : 0);
             _giComputeShader.SetFloat(s_lpvDecay, _lpvDecay);
 
@@ -595,6 +653,53 @@ namespace Lotec.Lighting {
             _giComputeShader.Dispatch(_clearVolumeKernel, groupsX, groupsY, groupsZ);
         }
 
+        void DispatchLuminanceReduction() {
+            if (_luminanceBuffer == null || _luminanceReadbackPending) return;
+
+            // Clear the accumulation buffer.
+            _luminanceBuffer.SetData(new uint[] { 0, 0 });
+
+            int groupsX = Mathf.CeilToInt(_radianceTextureResolution.x / 8.0f);
+            int groupsY = Mathf.CeilToInt(_radianceTextureResolution.y / 8.0f);
+            int groupsZ = Mathf.CeilToInt(_radianceTextureResolution.z / 8.0f);
+
+            _giComputeShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, _luminanceBuffer);
+            _giComputeShader.SetTexture(_averageLuminanceKernel, s_irradianceFieldInput, IrradianceFinal);
+            _giComputeShader.SetTexture(_averageLuminanceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+            _giComputeShader.SetVector(s_cameraPosition, Camera.main.transform.position);
+            _giComputeShader.SetVector(s_cameraForward, Camera.main.transform.forward);
+            _giComputeShader.SetFloat(s_luminanceRadius, _autoExposureRadius);
+            _giComputeShader.Dispatch(_averageLuminanceKernel, groupsX, groupsY, groupsZ);
+
+            _luminanceReadbackPending = true;
+            AsyncGPUReadback.Request(_luminanceBuffer, OnLuminanceReadback);
+        }
+
+        void OnLuminanceReadback(AsyncGPUReadbackRequest request) {
+            _luminanceReadbackPending = false;
+            if (request.hasError) return;
+
+            NativeArray<uint> data = request.GetData<uint>();
+            uint encodedSum = data[0];
+            uint count = data[1];
+            if (count == 0) return;
+
+            // Decode: encoded = (log2(lum) + 16) * 1024, so avg log2 = (sum/count)/1024 - 16.
+            float avgLog2Luminance = (encodedSum / (float)count) / 1024f - 16f;
+            // Target: we want the geometric mean luminance to map to ~0.18 (mid-grey) after exposure.
+            // exposed = lum * 2^EV, and we want exposed ≈ 0.18
+            // => 2^avgLog2 * 2^EV = 0.18  => EV = log2(0.18) - avgLog2
+            float targetEV = -2.474f - avgLog2Luminance; // log2(0.18) ≈ -2.474
+            _autoExposureEV = Mathf.Clamp(targetEV, _autoExposureMin, _autoExposureMax);
+        }
+
+        void UpdateAutoExposure() {
+            float targetExposure = _autoExposureEV + _exposure;
+            float currentExposure = Shader.GetGlobalFloat(s_exposure);
+            float speed = 1f - Mathf.Exp(-Time.deltaTime * _adaptationSpeed);
+            Shader.SetGlobalFloat(s_exposure, Mathf.Lerp(currentExposure, targetExposure, speed));
+        }
+
         void SetDirectionalLightUniforms() {
             Light sun = RenderSettings.sun;
 
@@ -609,8 +714,7 @@ namespace Lotec.Lighting {
                 _giComputeShader.SetVector(s_directLightColor, Vector4.zero);
             }
 
-            Color sky = RenderSettings.ambientMode == AmbientMode.Flat ? RenderSettings.ambientLight : RenderSettings.ambientSkyColor;
-            _giComputeShader.SetVector(s_skyColor, (Vector4)sky);
+            _giComputeShader.SetVector(s_skyColor, GetSkyEnvironmentColor());
         }
 
         void SetPointLightShaderUniforms() {
@@ -723,6 +827,9 @@ namespace Lotec.Lighting {
             Shader.SetGlobalVectorArray(s_spotLightPositionRange, _spotLightPositionRanges);
             Shader.SetGlobalVectorArray(s_spotLightDirectionAngleScale, _spotLightDirectionAngleScales);
             Shader.SetGlobalVectorArray(s_spotLightColorAngleOffset, _spotLightColorAngleOffsets);
+            if (!_autoExposure) {
+                Shader.SetGlobalFloat(s_exposure, _exposure);
+            }
         }
     }
 
