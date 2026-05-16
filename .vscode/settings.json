@@ -1,4 +1,5 @@
 {
+    "dotnet.defaultSolution": "project-demo/project-demo.slnx",
     "files.associations": {
         "*.asset": "plaintext",
         "*.prefab": "plaintext",
