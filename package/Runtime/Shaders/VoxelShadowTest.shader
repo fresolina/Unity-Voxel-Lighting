@@ -38,8 +38,8 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelGi.hlsl"
 
             // Choose shadow implementation at compile-time only.
-            // Keywords: SDF_ONLY, BITMASK_POINT (single bit), BITMASK_4TAP (spatial 4-tap), BITMASK_RAY3 (3-step traversal), BITMASK_8TAP (trilinear 2x2x2)
-            #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_4TAP BITMASK_RAY3 BITMASK_8TAP
+            // Keywords: SDF_ONLY, BITMASK_POINT (single bit), BITMASK_8TAP (trilinear 2x2x2)
+            #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_8TAP
             #pragma multi_compile SDF_AO_OFF SDF_AO_LQ SDF_AO_HQ
 
             #define MAX_POINT_LIGHTS 4
@@ -120,7 +120,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
 
             // Default to SDF if no keyword is set.
             inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal) {
-                #if defined(BITMASK_POINT) || defined(BITMASK_4TAP) || defined(BITMASK_RAY3) || defined(BITMASK_8TAP)
+                #if defined(BITMASK_POINT) || defined(BITMASK_8TAP)
                     return GetFinalShadow2(worldPos, normalize(lightDir), normal);
                     // return GetFinalShadow(worldPos, normalize(lightDir));
                 #else
