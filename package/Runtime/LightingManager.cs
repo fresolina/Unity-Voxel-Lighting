@@ -17,7 +17,6 @@ namespace Lotec.Lighting {
     }
 
     [ExecuteInEditMode]
-    [RequireComponent(typeof(SdfShaderGlobals))]
     [RequireComponent(typeof(GiFieldUpdater))]
     public class LightingManager : MonoBehaviour {
         public static LightingManager Instance { get; private set; }
@@ -44,7 +43,6 @@ namespace Lotec.Lighting {
 
         [SerializeField] bool _updateInEditor = true;
 
-        SdfShaderGlobals _sdfShaderGlobals;
 
         public LightingVolume Volume => _volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
@@ -69,14 +67,19 @@ namespace Lotec.Lighting {
             Instance = this;
             Debug.Log($"LightingManager Awake: Instance set. Volume assigned? {_volume != null} ({_volume?.gameObject?.name ?? "null"})", this);
             EnsureFieldsAssigned();
-            ApplyShadowModeKeywords();
-            _sdfShadow.ApplyShaderGlobals();
-            _sdfAo.ApplyShaderGlobals();
+            ApplyShaderGlobals();
         }
 
         void OnEnable() {
             EnsureFieldsAssigned();
+            ApplyShaderGlobals();
+        }
+
+        private void ApplyShaderGlobals() {
             ApplyShadowModeKeywords();
+            if (_volume != null) {
+                _volume.ApplyShaderGlobals();
+            }
             _sdfShadow.ApplyShaderGlobals();
             _sdfAo.ApplyShaderGlobals();
         }
@@ -85,18 +88,11 @@ namespace Lotec.Lighting {
         void Update() {
             EnsureFieldsAssigned();
             if (Application.isPlaying || _updateInEditor) {
-                ApplyShadowModeKeywords();
-                _sdfShadow.ApplyShaderGlobals();
-                _sdfAo.ApplyShaderGlobals();
+                ApplyShaderGlobals();
             }
         }
 
         void EnsureFieldsAssigned() {
-            _sdfShaderGlobals = GetComponent<SdfShaderGlobals>();
-            if (_sdfShaderGlobals != null) {
-                _sdfShaderGlobals.Volume = _volume;
-            }
-
             if (_giUpdater == null) {
                 _giUpdater = GetComponent<GiFieldUpdater>();
                 if (_giUpdater == null) return;

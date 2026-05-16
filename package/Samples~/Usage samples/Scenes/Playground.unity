@@ -2704,7 +2704,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1437948842}
-  - component: {fileID: 1437948841}
   - component: {fileID: 1437948844}
   - component: {fileID: 1437948843}
   - component: {fileID: 1437948845}
@@ -2716,20 +2715,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &1437948841
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1437948840}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 99c5355d30b95b848bc438aba6a5472d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.SdfShaderGlobals
-  autoUpdate: 1
-  fibonacciCheatIndices: {fileID: 2800000, guid: 4c3e0bbf57fbd74418ef35bf222d8bfb, type: 3}
 --- !u!4 &1437948842
 Transform:
   m_ObjectHideFlags: 0
@@ -2843,6 +2828,7 @@ MonoBehaviour:
   sdfLowresTexture: {fileID: 11700000, guid: 80ccdea2531973e4e84ca75953324dc8, type: 2}
   occlusionBitmaskTexture: {fileID: 11700000, guid: afe60146ad9ffe24fb04b4a164e35a51, type: 2}
   materialAlbedoIntensityTexture: {fileID: 11700000, guid: 4129b6f5d9e7e39478b74818dfe80db6, type: 2}
+  _fibonacciCheatIndices: {fileID: 2800000, guid: 4c3e0bbf57fbd74418ef35bf222d8bfb, type: 3}
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0

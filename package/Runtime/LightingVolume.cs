@@ -2,6 +2,17 @@ using UnityEngine;
 
 namespace Lotec.Lighting {
     public class LightingVolume : MonoBehaviour {
+        static readonly int s_sSdfTex = Shader.PropertyToID("_SdfTex");
+        static readonly int s_sBitmaskTex = Shader.PropertyToID("_BitmaskTex");
+        static readonly int s_sFibIndexTexture = Shader.PropertyToID("_FibIndexTexture");
+        static readonly int s_sSdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
+        static readonly int s_sSdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
+        static readonly int s_sInverseVoxelSize = Shader.PropertyToID("_InverseVoxelSize");
+        static readonly int s_sVoxelResolution = Shader.PropertyToID("_VoxelResolution");
+        static readonly int s_sFibonacciDirections = Shader.PropertyToID("_FibonacciDirections");
+        static readonly int s_sVolumeSize = Shader.PropertyToID("_VolumeSize");
+        static readonly int s_sVolumePosition = Shader.PropertyToID("_VolumePosition");
+
         [Header("Bake Input")]
         [SerializeField] Transform _root;
 
@@ -26,9 +37,13 @@ namespace Lotec.Lighting {
         [Tooltip("Lower-resolution material property: albedo.rgb + emissionIntensity (a)")]
         public Texture3D materialAlbedoIntensityTexture;
 
+        [Header("Lookup Textures")]
+        [SerializeField] Texture2D _fibonacciCheatIndices;
+
         Vector3 _voxelSize;
 
         public Transform BakeRoot { get => _root; set => _root = value; }
+        public Texture2D FibonacciCheatIndices { get => _fibonacciCheatIndices; set => _fibonacciCheatIndices = value; }
 
         void OnValidate() {
             _maxResolution = Mathf.Max(4, _maxResolution);
@@ -52,6 +67,38 @@ namespace Lotec.Lighting {
 
             ComputeBounds();
             ComputeMaxResolutionForBounds();
+        }
+
+        public void ApplyShaderGlobals() {
+            Shader.SetGlobalVectorArray(s_sFibonacciDirections, OcclusionBitmaskBaker.GetOrCreateFibonacciDirectionsV4());
+
+            if (sdfHiresTexture == null) return;
+
+            Shader.SetGlobalTexture(s_sSdfTex, sdfHiresTexture);
+
+            if (occlusionBitmaskTexture != null) {
+                Shader.SetGlobalTexture(s_sBitmaskTex, occlusionBitmaskTexture);
+                Shader.SetGlobalVector(s_sVoxelResolution,
+                    new Vector3(TrimmedMaxResolution.x, TrimmedMaxResolution.y, TrimmedMaxResolution.z));
+            }
+
+            Shader.SetGlobalVector(s_sVolumeSize, Bounds.size);
+            Shader.SetGlobalVector(s_sVolumePosition, Bounds.min);
+            Shader.SetGlobalVector(s_sSdfBoundsMin, Bounds.min);
+            Shader.SetGlobalVector(s_sSdfBoundsSize, Bounds.size);
+
+            Vector3 voxelSize = new Vector3(
+                Bounds.size.x / Mathf.Max(1, TrimmedMaxResolution.x),
+                Bounds.size.y / Mathf.Max(1, TrimmedMaxResolution.y),
+                Bounds.size.z / Mathf.Max(1, TrimmedMaxResolution.z));
+            Vector3 inverseVoxelSize = new Vector3(
+                1.0f / Mathf.Max(1e-9f, voxelSize.x),
+                1.0f / Mathf.Max(1e-9f, voxelSize.y),
+                1.0f / Mathf.Max(1e-9f, voxelSize.z));
+            Shader.SetGlobalVector(s_sInverseVoxelSize, inverseVoxelSize);
+
+            if (_fibonacciCheatIndices != null)
+                Shader.SetGlobalTexture(s_sFibIndexTexture, _fibonacciCheatIndices);
         }
 
         /// <summary>
