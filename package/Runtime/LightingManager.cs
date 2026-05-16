@@ -38,6 +38,10 @@ namespace Lotec.Lighting {
         [Header("Shadows")]
         [SerializeField] ShadowMode _shadowMode = ShadowMode.SDF;
         [SerializeField] SdfShadowConfig _sdfShadow = new SdfShadowConfig();
+
+        [Header("Ambient Occlusion")]
+        [SerializeField] SdfAoConfig _sdfAo = new SdfAoConfig();
+
         [SerializeField] bool _updateInEditor = true;
 
         SdfShaderGlobals _sdfShaderGlobals;
@@ -67,12 +71,14 @@ namespace Lotec.Lighting {
             EnsureFieldsAssigned();
             ApplyShadowModeKeywords();
             _sdfShadow.ApplyShaderGlobals();
+            _sdfAo.ApplyShaderGlobals();
         }
 
         void OnEnable() {
             EnsureFieldsAssigned();
             ApplyShadowModeKeywords();
             _sdfShadow.ApplyShaderGlobals();
+            _sdfAo.ApplyShaderGlobals();
         }
 
         // Update is called once per frame
@@ -81,6 +87,7 @@ namespace Lotec.Lighting {
             if (Application.isPlaying || _updateInEditor) {
                 ApplyShadowModeKeywords();
                 _sdfShadow.ApplyShaderGlobals();
+                _sdfAo.ApplyShaderGlobals();
             }
         }
 
