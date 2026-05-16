@@ -24,10 +24,6 @@ namespace Lotec.Lighting {
         [Header("Lookup Textures")]
         public Texture2D fibonacciCheatIndices;
 
-        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask8Tap = 4 }
-        [Header("Shadow Mode")]
-        public ShadowMode shadowMode = ShadowMode.SDF;
-
         [Header("SDF AO")]
         [Min(0.000001f)]
         [Tooltip("How far each raymarching step is in world units.")]
@@ -93,25 +89,6 @@ namespace Lotec.Lighting {
             // Set cheat-sheet lookup textures if provided
             if (fibonacciCheatIndices != null)
                 Shader.SetGlobalTexture(sFibIndexTexture, fibonacciCheatIndices);
-
-            // Set shadow mode keyword
-            switch (shadowMode) {
-                case ShadowMode.SDF:
-                    Shader.EnableKeyword("SDF_ONLY");
-                    Shader.DisableKeyword("BITMASK_POINT");
-                    Shader.DisableKeyword("BITMASK_8TAP");
-                    break;
-                case ShadowMode.BitmaskPoint:
-                    Shader.DisableKeyword("SDF_ONLY");
-                    Shader.EnableKeyword("BITMASK_POINT");
-                    Shader.DisableKeyword("BITMASK_8TAP");
-                    break;
-                case ShadowMode.Bitmask8Tap:
-                    Shader.DisableKeyword("SDF_ONLY");
-                    Shader.DisableKeyword("BITMASK_POINT");
-                    Shader.EnableKeyword("BITMASK_8TAP");
-                    break;
-            }
 
             ApplyAoShaderGlobals();
             ApplyAoShaderKeywords();

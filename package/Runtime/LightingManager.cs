@@ -25,6 +25,7 @@ namespace Lotec.Lighting {
         // Keep in sync with MAX_POINT_LIGHTS and MAX_SPOT_LIGHTS in VoxelGiUpdate.compute.
         internal const int MaxPointLights = 4;
         internal const int MaxSpotLights = 4;
+        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask8Tap = 4 }
 
         [Header("Source")]
         [SerializeField] LightingVolume _volume;
@@ -34,7 +35,8 @@ namespace Lotec.Lighting {
         [Tooltip("Extra runtime GI lights. The first 4 supported point lights and the first 4 supported spot lights are injected.")]
         [SerializeField] List<Light> _additionalLights = new List<Light>();
 
-        [Header("SDF Shadow")]
+        [Header("Shadows")]
+        [SerializeField] ShadowMode _shadowMode = ShadowMode.SDF;
         [SerializeField] SdfShadowConfig _sdfShadow = new SdfShadowConfig();
         [SerializeField] bool _updateInEditor = true;
 
@@ -44,7 +46,6 @@ namespace Lotec.Lighting {
         public GiFieldUpdater GiUpdater => _giUpdater;
         public IReadOnlyList<Light> AdditionalLights => _additionalLights;
         public GiFieldUpdater.LightingMethod LightingMethod => _giUpdater != null ? _giUpdater.GiLightingMethod : GiFieldUpdater.LightingMethod.PathTracing;
-        public SdfShadowConfig SdfShadow => _sdfShadow;
 
         void OnValidate() {
             EnsureFieldsAssigned();
@@ -64,11 +65,13 @@ namespace Lotec.Lighting {
             Instance = this;
             Debug.Log($"LightingManager Awake: Instance set. Volume assigned? {_volume != null} ({_volume?.gameObject?.name ?? "null"})", this);
             EnsureFieldsAssigned();
+            ApplyShadowModeKeywords();
             _sdfShadow.ApplyShaderGlobals();
         }
 
         void OnEnable() {
             EnsureFieldsAssigned();
+            ApplyShadowModeKeywords();
             _sdfShadow.ApplyShaderGlobals();
         }
 
@@ -76,6 +79,7 @@ namespace Lotec.Lighting {
         void Update() {
             EnsureFieldsAssigned();
             if (Application.isPlaying || _updateInEditor) {
+                ApplyShadowModeKeywords();
                 _sdfShadow.ApplyShaderGlobals();
             }
         }
@@ -99,6 +103,26 @@ namespace Lotec.Lighting {
                 _giUpdater.Volume = Volume;
             }
 #endif
+        }
+
+        void ApplyShadowModeKeywords() {
+            switch (_shadowMode) {
+                case ShadowMode.SDF:
+                    Shader.EnableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_8TAP");
+                    break;
+                case ShadowMode.BitmaskPoint:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.EnableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_8TAP");
+                    break;
+                case ShadowMode.Bitmask8Tap:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.EnableKeyword("BITMASK_8TAP");
+                    break;
+            }
         }
 
     }
