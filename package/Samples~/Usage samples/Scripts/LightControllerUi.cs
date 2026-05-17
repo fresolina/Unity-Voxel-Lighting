@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using Unity.Properties;
@@ -12,6 +13,21 @@ using UnityEditor;
 namespace Lotec.Lighting.Samples {
     [RequireComponent(typeof(UIDocument))]
     public class LightControllerUi : MonoBehaviour, INotifyBindablePropertyChanged {
+        const float OneSecondWindowDuration = 1f;
+        const float TenSecondWindowDuration = 10f;
+        const float SecondsToMilliseconds = 1000f;
+        const string UnavailableFrameTimeText = "--.-- ms";
+
+        struct FrameTimeSample {
+            public readonly float Timestamp;
+            public readonly float Milliseconds;
+
+            public FrameTimeSample(float timestamp, float milliseconds) {
+                Timestamp = timestamp;
+                Milliseconds = milliseconds;
+            }
+        }
+
         static LightControllerUi s_instance;
 
         [SerializeField] LightController _lightController;
@@ -21,7 +37,22 @@ namespace Lotec.Lighting.Samples {
         [SerializeField] int _sortingOrder = 1000;
 
         VisualElement _boundRoot;
+        readonly Queue<FrameTimeSample> _frameTimeSamples = new Queue<FrameTimeSample>();
+        Label _frameTimeLastTenSecondsLowLabel;
+        Label _frameTimeLastTenSecondsHighLabel;
+        Label _frameTimeLastTenSecondsAverageLabel;
+        Label _frameTimeLastSecondLowLabel;
+        Label _frameTimeLastSecondHighLabel;
+        Label _frameTimeLastSecondAverageLabel;
+        Label _frameTimeLastFrameLabel;
         bool _hasBindingSnapshot;
+        string _frameTimeLastTenSecondsLowText = UnavailableFrameTimeText;
+        string _frameTimeLastTenSecondsHighText = UnavailableFrameTimeText;
+        string _frameTimeLastTenSecondsAverageText = UnavailableFrameTimeText;
+        string _frameTimeLastSecondLowText = UnavailableFrameTimeText;
+        string _frameTimeLastSecondHighText = UnavailableFrameTimeText;
+        string _frameTimeLastSecondAverageText = UnavailableFrameTimeText;
+        string _frameTimeLastFrameText = UnavailableFrameTimeText;
         GiFieldUpdater.LightingMethod _lastLightingMethod;
         float _lastEnabledLightIntensity;
         bool _lastFlashlightEnabled;
@@ -44,6 +75,7 @@ namespace Lotec.Lighting.Samples {
             EnsureLightController();
             EnsureDocument();
             ApplyDocumentAssets();
+            ResetFrameTimeStats();
             BindUi();
             RefreshUi(false);
         }
@@ -54,10 +86,13 @@ namespace Lotec.Lighting.Samples {
             }
 
             UnbindUi();
+            ResetFrameTimeStats();
             _hasBindingSnapshot = false;
         }
 
         void Update() {
+            UpdateFrameTimeStats();
+
             if (_boundRoot != _document.rootVisualElement) {
                 EnsureDocument();
                 ApplyDocumentAssets();
@@ -166,13 +201,31 @@ namespace Lotec.Lighting.Samples {
             Toggle flashlightToggle = root.Q<Toggle>("flashlight-toggle");
             Toggle candleToggle = root.Q<Toggle>("candle-toggle");
 
-            if (giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null) {
+            if (giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
 
             _boundRoot = root;
             _boundRoot.dataSource = this;
+        }
+
+        bool TryCacheFrameTimeLabels(VisualElement root) {
+            _frameTimeLastTenSecondsLowLabel = root.Q<Label>("frame-time-last-10-seconds-low-value");
+            _frameTimeLastTenSecondsHighLabel = root.Q<Label>("frame-time-last-10-seconds-high-value");
+            _frameTimeLastTenSecondsAverageLabel = root.Q<Label>("frame-time-last-10-seconds-average-value");
+            _frameTimeLastSecondLowLabel = root.Q<Label>("frame-time-last-second-low-value");
+            _frameTimeLastSecondHighLabel = root.Q<Label>("frame-time-last-second-high-value");
+            _frameTimeLastSecondAverageLabel = root.Q<Label>("frame-time-last-second-average-value");
+            _frameTimeLastFrameLabel = root.Q<Label>("frame-time-last-frame-value");
+
+            return _frameTimeLastTenSecondsLowLabel != null
+                && _frameTimeLastTenSecondsHighLabel != null
+                && _frameTimeLastTenSecondsAverageLabel != null
+                && _frameTimeLastSecondLowLabel != null
+                && _frameTimeLastSecondHighLabel != null
+                && _frameTimeLastSecondAverageLabel != null
+                && _frameTimeLastFrameLabel != null;
         }
 
         void UnbindUi() {
@@ -184,6 +237,13 @@ namespace Lotec.Lighting.Samples {
                 _boundRoot.dataSource = null;
             }
 
+            _frameTimeLastTenSecondsLowLabel = null;
+            _frameTimeLastTenSecondsHighLabel = null;
+            _frameTimeLastTenSecondsAverageLabel = null;
+            _frameTimeLastSecondLowLabel = null;
+            _frameTimeLastSecondHighLabel = null;
+            _frameTimeLastSecondAverageLabel = null;
+            _frameTimeLastFrameLabel = null;
             _boundRoot = null;
         }
 
@@ -250,6 +310,92 @@ namespace Lotec.Lighting.Samples {
 
         void RefreshUi(bool notifyChanges) {
             UpdateBindingSnapshot(notifyChanges);
+            RefreshFrameTimeLabels();
+        }
+
+        void ResetFrameTimeStats() {
+            _frameTimeSamples.Clear();
+            _frameTimeLastTenSecondsLowText = UnavailableFrameTimeText;
+            _frameTimeLastTenSecondsHighText = UnavailableFrameTimeText;
+            _frameTimeLastTenSecondsAverageText = UnavailableFrameTimeText;
+            _frameTimeLastSecondLowText = UnavailableFrameTimeText;
+            _frameTimeLastSecondHighText = UnavailableFrameTimeText;
+            _frameTimeLastSecondAverageText = UnavailableFrameTimeText;
+            _frameTimeLastFrameText = UnavailableFrameTimeText;
+        }
+
+        void UpdateFrameTimeStats() {
+            float frameTimeMilliseconds = Time.unscaledDeltaTime * SecondsToMilliseconds;
+            float now = Time.unscaledTime;
+
+            _frameTimeSamples.Enqueue(new FrameTimeSample(now, frameTimeMilliseconds));
+            TrimFrameTimeSamples(now);
+
+            _frameTimeLastFrameText = FormatFrameTime(frameTimeMilliseconds);
+            UpdateFrameTimeWindowTexts(now - OneSecondWindowDuration, out _frameTimeLastSecondLowText, out _frameTimeLastSecondHighText, out _frameTimeLastSecondAverageText);
+            UpdateFrameTimeWindowTexts(now - TenSecondWindowDuration, out _frameTimeLastTenSecondsLowText, out _frameTimeLastTenSecondsHighText, out _frameTimeLastTenSecondsAverageText);
+        }
+
+        void TrimFrameTimeSamples(float now) {
+            float cutoffTime = now - TenSecondWindowDuration;
+            while (_frameTimeSamples.Count > 0 && _frameTimeSamples.Peek().Timestamp < cutoffTime) {
+                _frameTimeSamples.Dequeue();
+            }
+        }
+
+        void UpdateFrameTimeWindowTexts(float cutoffTime, out string lowText, out string highText, out string averageText) {
+            if (!TryGetFrameTimeStats(cutoffTime, out float lowestMilliseconds, out float highestMilliseconds, out float averageMilliseconds)) {
+                lowText = UnavailableFrameTimeText;
+                highText = UnavailableFrameTimeText;
+                averageText = UnavailableFrameTimeText;
+                return;
+            }
+
+            lowText = FormatFrameTime(lowestMilliseconds);
+            highText = FormatFrameTime(highestMilliseconds);
+            averageText = FormatFrameTime(averageMilliseconds);
+        }
+
+        bool TryGetFrameTimeStats(float cutoffTime, out float lowestMilliseconds, out float highestMilliseconds, out float averageMilliseconds) {
+            lowestMilliseconds = 0f;
+            highestMilliseconds = 0f;
+            averageMilliseconds = 0f;
+
+            float totalMilliseconds = 0f;
+            int sampleCount = 0;
+            foreach (FrameTimeSample sample in _frameTimeSamples) {
+                if (sample.Timestamp < cutoffTime) {
+                    continue;
+                }
+
+                if (sampleCount == 0) {
+                    lowestMilliseconds = sample.Milliseconds;
+                    highestMilliseconds = sample.Milliseconds;
+                } else {
+                    lowestMilliseconds = Mathf.Min(lowestMilliseconds, sample.Milliseconds);
+                    highestMilliseconds = Mathf.Max(highestMilliseconds, sample.Milliseconds);
+                }
+
+                totalMilliseconds += sample.Milliseconds;
+                sampleCount++;
+            }
+
+            if (sampleCount == 0) {
+                return false;
+            }
+
+            averageMilliseconds = totalMilliseconds / sampleCount;
+            return true;
+        }
+
+        void RefreshFrameTimeLabels() {
+            UpdateLabelText(_frameTimeLastTenSecondsLowLabel, _frameTimeLastTenSecondsLowText);
+            UpdateLabelText(_frameTimeLastTenSecondsHighLabel, _frameTimeLastTenSecondsHighText);
+            UpdateLabelText(_frameTimeLastTenSecondsAverageLabel, _frameTimeLastTenSecondsAverageText);
+            UpdateLabelText(_frameTimeLastSecondLowLabel, _frameTimeLastSecondLowText);
+            UpdateLabelText(_frameTimeLastSecondHighLabel, _frameTimeLastSecondHighText);
+            UpdateLabelText(_frameTimeLastSecondAverageLabel, _frameTimeLastSecondAverageText);
+            UpdateLabelText(_frameTimeLastFrameLabel, _frameTimeLastFrameText);
         }
 
         void UpdateBindingSnapshot(bool notifyChanges) {
@@ -304,6 +450,18 @@ namespace Lotec.Lighting.Samples {
             if (notifyChanges) {
                 NotifyBindingChanged(propertyName);
             }
+        }
+
+        static void UpdateLabelText(Label label, string text) {
+            if (label == null || label.text == text) {
+                return;
+            }
+
+            label.text = text;
+        }
+
+        static string FormatFrameTime(float milliseconds) {
+            return $"{milliseconds:0.00} ms";
         }
 
         void NotifyBindingChanged([CallerMemberName] string propertyName = "") {

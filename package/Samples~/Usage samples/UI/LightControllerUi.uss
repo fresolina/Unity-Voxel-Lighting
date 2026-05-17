@@ -57,24 +57,56 @@
     margin-bottom: 4px;
 }
 
-.info-row {
+.debug-info-section {
+    width: 100%;
+}
+
+.debug-info-row {
     flex-direction: row;
-    justify-content: space-between;
     align-items: center;
     margin-bottom: 4px;
-    padding-top: 3px;
-    padding-bottom: 3px;
 }
 
-.info-label {
+.debug-info-header-row {
+    margin-bottom: 2px;
+}
+
+.debug-info-caption {
+    width: 68px;
+    min-width: 68px;
+    margin-right: 6px;
     color: rgba(255, 255, 255, 0.78);
-    min-width: 148px;
+    font-size: 11px;
 }
 
-.info-value {
-    color: rgb(244, 241, 226);
+.debug-info-heading {
+    width: 72px;
+    min-width: 72px;
+    max-width: 72px;
+    margin-right: 6px;
+    color: rgba(255, 255, 255, 0.58);
+    font-size: 11px;
+    -unity-font-style: bold;
     -unity-text-align: middle-right;
+}
+
+.debug-info-cell {
+    width: 72px;
+    min-width: 72px;
+    max-width: 72px;
+    margin-right: 6px;
+    color: rgb(244, 241, 226);
+    font-size: 11px;
+    -unity-text-align: middle-right;
+    white-space: nowrap;
+}
+
+.debug-info-cell-wide {
     flex-grow: 1;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    margin-right: 0;
 }
 
 .setting-field {
@@ -132,34 +164,6 @@
 .setting-field.unity-toggle .unity-base-field__input {
     min-width: 18px;
     min-height: 18px;
-}
-
-.actions-container {
-    flex-direction: column;
-}
-
-.action-button {
-    min-height: 34px;
-    margin-bottom: 8px;
-    border-top-left-radius: 10px;
-    border-top-right-radius: 10px;
-    border-bottom-right-radius: 10px;
-    border-bottom-left-radius: 10px;
-    border-left-width: 1px;
-    border-right-width: 1px;
-    border-top-width: 1px;
-    border-bottom-width: 1px;
-    border-left-color: rgba(255, 255, 255, 0.12);
-    border-right-color: rgba(255, 255, 255, 0.12);
-    border-top-color: rgba(255, 255, 255, 0.12);
-    border-bottom-color: rgba(255, 255, 255, 0.12);
-    background-color: rgba(44, 62, 84, 0.9);
-    color: rgb(244, 241, 226);
-    -unity-font-style: bold;
-}
-
-.action-button:hover {
-    background-color: rgba(72, 94, 120, 0.96);
 }
 
 .hint-card {
