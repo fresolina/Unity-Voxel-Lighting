@@ -61,7 +61,6 @@ namespace Lotec.Lighting {
             }
         }
         public ComputeShader bitmaskBakeCompute;
-        [Min(0.1f)] public float occlusionDistance = 5.0f;
         [Tooltip("Number of Fibonacci directions to bake (supported: 64).")]
         public int fibonacciDirectionCount = FibonacciDirectionCount;
 
@@ -69,7 +68,6 @@ namespace Lotec.Lighting {
         static readonly int sBoundsSize = Shader.PropertyToID("_BoundsSize");
         static readonly int sResolution = Shader.PropertyToID("_Resolution");
         static readonly int sOutBitmask = Shader.PropertyToID("_OutBitmask");
-        static readonly int sOcclusionDistance = Shader.PropertyToID("_OcclusionDistance");
 
         public bool TryBake(
             LightingVolume sourceVolume,
@@ -145,7 +143,6 @@ namespace Lotec.Lighting {
             bitmaskBakeCompute.SetVector(sBoundsMin, bounds.min);
             bitmaskBakeCompute.SetVector(sBoundsSize, bounds.size);
             bitmaskBakeCompute.SetInts(sResolution, resolution.x, resolution.y, resolution.z);
-            bitmaskBakeCompute.SetFloat(sOcclusionDistance, occlusionDistance);
             bitmaskBakeCompute.SetBuffer(kernelIdx, Shader.PropertyToID("_FibonacciDirs"), fibonacciBuffer);
             bitmaskBakeCompute.SetInt(Shader.PropertyToID("_FibonacciDirCount"), fibonacciDirectionCount);
             bitmaskBakeCompute.SetBuffer(kernelIdx, sOutBitmask, bitmaskBuffer);

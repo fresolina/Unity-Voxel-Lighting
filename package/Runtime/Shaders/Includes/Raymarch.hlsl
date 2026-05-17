@@ -1,12 +1,16 @@
 #ifndef LOTEC_RAYMARCH_INCLUDED
 #define LOTEC_RAYMARCH_INCLUDED
 
-// RayIntersectUnitAabb
 #include "Math.hlsl"
+
+struct RayMarchResult {
+    float lit;
+    float3 hitPos;
+};
 
 // General-purpose SDF raymarch used by both runtime and baker.
 // Returns 0..1: total occlusion hit to no occlusion.
-float RayMarchTex3D(
+RayMarchResult RayMarchTex3DSdf(
     Texture3D<float> sdfTex,
     SamplerState sampler_SdfTex,
     float3 worldPos,
@@ -14,62 +18,56 @@ float RayMarchTex3D(
     float3 boundsMin,
     float3 boundsSize,
     float startOffset,
-    float maxDistance, // Use to not travel past the flashlight
+    float maxDistance,
     float epsilon,
     float minStep,
     int maxSteps,
-    half softness, // Lower = softer shadows
-    out float3 hitPos
+    half softness
 ) {
-    hitPos = 0;
+    RayMarchResult result = (RayMarchResult)0;
+    result.lit = 1.0;
+
     float3 size = max(boundsSize, 1e-6);
     float3 invSize = rcp(size);
-    // Transform ray into SDF local space once.
     float3 rayOrigin = (worldPos - boundsMin) * invSize;
     float3 dirUvw = dir * invSize;
 
-    // Ensure we are inside the SDF bounds
-    float tAabbEnter, tAabbExit;
-    if (!RayIntersectUnitAabb(rayOrigin, dirUvw, tAabbEnter, tAabbExit)) {
-        return 1.0;
-    }
-    maxDistance = min(maxDistance, tAabbExit);
-    float t = max(startOffset, tAabbEnter);
-    float lit = 1.0;
+    AabbHit aabb = RayIntersectUnitAabb(rayOrigin, dirUvw);
+    maxDistance = aabb.hit ? min(maxDistance, aabb.tExit) : 0.0;
+    float t = aabb.hit ? max(startOffset, aabb.tEnter) : 1.0;
 
     [loop]
     for (int stepIndex = 0; stepIndex < maxSteps; stepIndex++) {
-        // Traveled max distance
-        if (t > maxDistance) {
-            hitPos = worldPos + dir * maxDistance;
-            return lit;
-        }
+        if (t > maxDistance)
+            break;
 
         float3 uvw = rayOrigin + dirUvw * t;
-
         float d = sdfTex.SampleLevel(sampler_SdfTex, uvw, 0).r;
 
-        // Inside surface -> full shadow
         if (d <= epsilon) {
-            hitPos = worldPos + dir * t;
-            return 0.0;
+            result.hitPos = worldPos + dir * t;
+            result.lit = 0.0;
+            break;
         }
 
-        // Rays that did not hit, gets partial shadow, based on how close they got to a surface.
-        // Use reciprocal instead of division (cheaper on many GPUs)
-        lit = min(lit, softness * d * rcp(max(t, 1e-6)));
-        // Early exit if we are effectively in total darkness
-        if (lit < 0.01) {
-            hitPos = worldPos + dir * t;
-            return 0.0;
+        result.lit = min(result.lit, softness * d * rcp(max(t, 1e-6)));
+        if (result.lit < 0.01) {
+            result.hitPos = worldPos + dir * t;
+            result.lit = 0.0;
+            break;
         }
-        
+
         t += max(d, minStep);
     }
 
-    hitPos = worldPos + dir * t;
-    return saturate(lit);
+    if (result.lit > 0.0) {
+        result.hitPos = worldPos + dir * min(t, maxDistance);
+        result.lit = saturate(result.lit);
+    }
+    return result;
 }
+
+// Convenience overloads matching the old signatures.
 float RayMarchTex3D(
     Texture3D<float> sdfTex,
     SamplerState sampler_SdfTex,
@@ -78,27 +76,33 @@ float RayMarchTex3D(
     float3 boundsMin,
     float3 boundsSize,
     float startOffset,
-    float maxDistance, // Use to not travel past the flashlight
+    float maxDistance,
     float epsilon,
     float minStep,
     int maxSteps,
-    half softness // Lower = softer shadows
+    half softness,
+    out float3 hitPos
 ) {
-    float3 hitPos;
-    return RayMarchTex3D(
-        sdfTex,
-        sampler_SdfTex,
-        worldPos,
-        dir,
-        boundsMin,
-        boundsSize,
-        startOffset,
-        maxDistance,
-        epsilon,
-        minStep,
-        maxSteps,
-        softness,
-        hitPos
-    );
+    RayMarchResult r = RayMarchTex3DSdf(sdfTex, sampler_SdfTex, worldPos, dir, boundsMin, boundsSize, startOffset, maxDistance, epsilon, minStep, maxSteps, softness);
+    hitPos = r.hitPos;
+    return r.lit;
+}
+
+float RayMarchTex3D(
+    Texture3D<float> sdfTex,
+    SamplerState sampler_SdfTex,
+    float3 worldPos,
+    float3 dir,
+    float3 boundsMin,
+    float3 boundsSize,
+    float startOffset,
+    float maxDistance,
+    float epsilon,
+    float minStep,
+    int maxSteps,
+    half softness
+) {
+    RayMarchResult r = RayMarchTex3DSdf(sdfTex, sampler_SdfTex, worldPos, dir, boundsMin, boundsSize, startOffset, maxDistance, epsilon, minStep, maxSteps, softness);
+    return r.lit;
 }
 #endif

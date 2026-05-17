@@ -24,7 +24,7 @@ namespace Lotec.Lighting {
         // Keep in sync with MAX_POINT_LIGHTS and MAX_SPOT_LIGHTS in VoxelGiUpdate.compute.
         internal const int MaxPointLights = 4;
         internal const int MaxSpotLights = 4;
-        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask8Tap = 4 }
+        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask8Tap = 4, OcclusionField = 5 }
 
         [Header("Source")]
         [SerializeField] LightingVolume _volume;
@@ -114,16 +114,25 @@ namespace Lotec.Lighting {
                     Shader.EnableKeyword("SDF_ONLY");
                     Shader.DisableKeyword("BITMASK_POINT");
                     Shader.DisableKeyword("BITMASK_8TAP");
+                    Shader.DisableKeyword("OCC_FIELD");
                     break;
                 case ShadowMode.BitmaskPoint:
                     Shader.DisableKeyword("SDF_ONLY");
                     Shader.EnableKeyword("BITMASK_POINT");
                     Shader.DisableKeyword("BITMASK_8TAP");
+                    Shader.DisableKeyword("OCC_FIELD");
                     break;
                 case ShadowMode.Bitmask8Tap:
                     Shader.DisableKeyword("SDF_ONLY");
                     Shader.DisableKeyword("BITMASK_POINT");
                     Shader.EnableKeyword("BITMASK_8TAP");
+                    Shader.DisableKeyword("OCC_FIELD");
+                    break;
+                case ShadowMode.OcclusionField:
+                    Shader.DisableKeyword("SDF_ONLY");
+                    Shader.DisableKeyword("BITMASK_POINT");
+                    Shader.DisableKeyword("BITMASK_8TAP");
+                    Shader.EnableKeyword("OCC_FIELD");
                     break;
             }
         }

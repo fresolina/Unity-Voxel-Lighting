@@ -36,11 +36,17 @@ namespace Lotec.Lighting {
         public Texture3D occlusionBitmaskTexture;
         [Tooltip("Lower-resolution material property: albedo.rgb + emissionIntensity (a)")]
         public Texture3D materialAlbedoIntensityTexture;
+        [Tooltip("RGBA32 textures storing per-direction lit values. 4 directions per texture.")]
+        public Texture3D[] occlusionFieldTextures;
+        [Tooltip("Baked Fibonacci directions used by the occlusion field.")]
+        [HideInInspector]
+        public Vector3[] occlusionFieldDirections;
 
         [Header("Lookup Textures")]
         [SerializeField] Texture2D _fibonacciCheatIndices;
 
         Vector3 _voxelSize;
+        OcclusionFieldQuery _occlusionFieldQuery;
 
         public Transform BakeRoot { get => _root; set => _root = value; }
         public Texture2D FibonacciCheatIndices { get => _fibonacciCheatIndices; set => _fibonacciCheatIndices = value; }
@@ -99,6 +105,20 @@ namespace Lotec.Lighting {
 
             if (_fibonacciCheatIndices != null)
                 Shader.SetGlobalTexture(s_sFibIndexTexture, _fibonacciCheatIndices);
+
+            ApplyOcclusionFieldGlobals();
+        }
+
+        void ApplyOcclusionFieldGlobals() {
+            if (occlusionFieldDirections == null || occlusionFieldDirections.Length == 0) return;
+            if (occlusionFieldTextures == null || occlusionFieldTextures.Length == 0) return;
+
+            if (_occlusionFieldQuery == null) {
+                _occlusionFieldQuery = new OcclusionFieldQuery();
+                _occlusionFieldQuery.Initialize(occlusionFieldDirections, occlusionFieldTextures);
+            }
+
+            _occlusionFieldQuery.ApplyShaderGlobals();
         }
 
         /// <summary>

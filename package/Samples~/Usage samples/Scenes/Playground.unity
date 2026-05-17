@@ -2776,8 +2776,12 @@ MonoBehaviour:
     sdfBakeCompute: {fileID: 7200000, guid: b69a1acfc8ae8044384411949a5b3e0b, type: 3}
   _occlusionBitmaskBaker:
     bitmaskBakeCompute: {fileID: 7200000, guid: e0f7c494ba521474e9fdbcaf190a0e90, type: 3}
-    occlusionDistance: 10
     fibonacciDirectionCount: 64
+  _occlusionFieldBaker:
+    occlusionFieldBakeCompute: {fileID: 7200000, guid: 072dc532c95fd5040894f9193b6fad72, type: 3}
+    directionCount: 32
+    hemisphereOnly: 1
+    shadowSoftness: 3
   _materialBaker:
     MaterialBakeCompute: {fileID: 7200000, guid: 7f32bd09c6a495746a7840c188a184c4, type: 3}
 --- !u!114 &1437948845
@@ -2828,6 +2832,48 @@ MonoBehaviour:
   sdfLowresTexture: {fileID: 11700000, guid: 80ccdea2531973e4e84ca75953324dc8, type: 2}
   occlusionBitmaskTexture: {fileID: 11700000, guid: afe60146ad9ffe24fb04b4a164e35a51, type: 2}
   materialAlbedoIntensityTexture: {fileID: 11700000, guid: 4129b6f5d9e7e39478b74818dfe80db6, type: 2}
+  occlusionFieldTextures:
+  - {fileID: 11700000, guid: 742407f4fd6f8714c930873cda345b7e, type: 2}
+  - {fileID: 11700000, guid: 1e763b2253f13364b9694ac5e26a426b, type: 2}
+  - {fileID: 11700000, guid: 7ee86a2d819f8374a9c8555309bf719f, type: 2}
+  - {fileID: 11700000, guid: 3b19b04df3f110a49a63938ab1061327, type: 2}
+  - {fileID: 11700000, guid: d217219f7766ae641b3d86e60187a928, type: 2}
+  - {fileID: 11700000, guid: 428281ac1c47ebd44a6dc07d32946a64, type: 2}
+  - {fileID: 11700000, guid: a8a6d6b1b5330544baa445dea236a452, type: 2}
+  - {fileID: 11700000, guid: 184c9076e4a2b1e4a884d3b789ea814f, type: 2}
+  occlusionFieldDirections:
+  - {x: 0.1760848, y: 0.984375, z: 0}
+  - {x: -0.2231107, y: 0.953125, z: 0.20438772}
+  - {x: 0.0338763, y: 0.921875, z: -0.38600373}
+  - {x: 0.27668077, y: 0.890625, z: 0.36088067}
+  - {x: -0.5035292, y: 0.859375, z: -0.08906704}
+  - {x: 0.47296146, y: 0.828125, z: -0.30085948}
+  - {x: -0.15683785, y: 0.796875, z: 0.58343136}
+  - {x: -0.29649603, y: 0.765625, z: -0.57088387}
+  - {x: 0.6375588, y: 0.734375, z: 0.23283495}
+  - {x: -0.6572707, y: 0.703125, z: 0.27131227}
+  - {x: 0.3139274, y: 0.671875, z: -0.6708454}
+  - {x: 0.2298065, y: 0.640625, z: 0.73265857}
+  - {x: -0.6860113, y: 0.609375, z: -0.39755574}
+  - {x: 0.79691654, y: 0.578125, z: -0.17520143}
+  - {x: -0.4815054, y: 0.546875, z: 0.6848944}
+  - {x: -0.11011114, y: 0.515625, z: -0.84970963}
+  - {x: 0.668962, y: 0.484375, z: 0.5638002}
+  - {x: -0.8906857, y: 0.453125, z: 0.03683379}
+  - {x: 0.6426623, y: 0.421875, z: -0.63953626}
+  - {x: -0.042520627, y: 0.390625, z: 0.91956735}
+  - {x: -0.597906, y: 0.359375, z: -0.71649003}
+  - {x: 0.93619823, y: 0.328125, z: 0.12596351}
+  - {x: -0.7838508, y: 0.296875, z: 0.5453836}
+  - {x: 0.21159644, y: 0.265625, z: -0.9405691}
+  - {x: 0.48333597, y: 0.234375, z: 0.8434778}
+  - {x: -0.93283296, y: 0.203125, z: -0.29759514}
+  - {x: 0.89428055, y: 0.171875, z: -0.41318434}
+  - {x: -0.3822215, y: 0.140625, z: 0.91330796}
+  - {x: -0.33642498, y: 0.109375, z: -0.935337}
+  - {x: 0.88248545, y: 0.078125, z: 0.4638059}
+  - {x: -0.96590626, y: 0.046875, z: 0.25461307}
+  - {x: 0.54076916, y: 0.015625, z: -0.8410259}
   _fibonacciCheatIndices: {fileID: 2800000, guid: 4c3e0bbf57fbd74418ef35bf222d8bfb, type: 3}
 --- !u!1 &1451824435
 GameObject:

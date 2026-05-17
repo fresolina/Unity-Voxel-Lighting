@@ -20,9 +20,6 @@ RWStructuredBuffer<uint2> _OutBitmask;
 StructuredBuffer<float3> _FibonacciDirs;
 int _FibonacciDirCount;
 
-// Occlusion distance threshold (in world units)
-float _OcclusionDistance;
-
 // Input: Voxel volume SDF
 // SDF volume to use for sphere-trace based occlusion
 int _SdfMaxSteps;
@@ -41,6 +38,8 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     
     uint2 bitmask = uint2(0, 0);
     float voxelDiag = length(voxelSize);
+    // Full-volume traversal: bounds diagonal is the max possible ray distance.
+    float maxDistance = length(_BoundsSize);
     // Test each Fibonacci direction using sphere-trace on the SDF
     // Clamp direction count to valid range [1,64] to avoid OOB accesses
     int dirCount = max(1, min(_FibonacciDirCount, 64));
@@ -57,7 +56,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         float3 originProbeUvw = (originProbePos - _BoundsMin) / _BoundsSize;
 
         // Set bit if direction is occluded
-        float free = RayMarchTex3D(_SdfTex, sampler_SdfTex, voxelCenter, rayDir, _BoundsMin, _BoundsSize, originBias, _OcclusionDistance, _SdfThicknessTol, _SdfMinStep, _SdfMaxSteps, 64);
+        float free = RayMarchTex3D(_SdfTex, sampler_SdfTex, voxelCenter, rayDir, _BoundsMin, _BoundsSize, originBias, maxDistance, _SdfThicknessTol, _SdfMinStep, _SdfMaxSteps, 64);
         if (free < 0.5)
         {
             uint bit = 1u << (dirIdx & 31u); // defensive mask for shift

@@ -14,6 +14,7 @@ namespace Lotec.Lighting {
         [Header("Bakers")]
         [SerializeField] SdfBaker _sdfBaker = new SdfBaker();
         [SerializeField] OcclusionBitmaskBaker _occlusionBitmaskBaker = new OcclusionBitmaskBaker();
+        [SerializeField] OcclusionFieldBaker _occlusionFieldBaker = new OcclusionFieldBaker();
         [SerializeField] MaterialBaker _materialBaker = new MaterialBaker();
         public LightingVolume targetSdfVolume => _lightingManager.Volume;
 
@@ -56,6 +57,16 @@ namespace Lotec.Lighting {
                     Debug.LogWarning("Could not find SdfBake compute shader in project. Please assign it manually to the VoxelLightingBaker.");
                 }
             }
+            if (_occlusionFieldBaker.occlusionFieldBakeCompute == null) {
+                string[] guids = AssetDatabase.FindAssets("OcclusionFieldBake t:ComputeShader");
+                if (guids.Length > 0) {
+                    string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                    _occlusionFieldBaker.occlusionFieldBakeCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                    EditorUtility.SetDirty(this);
+                } else {
+                    Debug.LogWarning("Could not find OcclusionFieldBake compute shader in project. Please assign it manually to the VoxelLightingBaker.");
+                }
+            }
         }
 #endif
 
@@ -88,6 +99,16 @@ namespace Lotec.Lighting {
                 return;
             }
             volume.occlusionBitmaskTexture = bakedBitmask;
+
+            // Bake occlusion field (per-direction lit values for hardware-interpolated shadows).
+            if (_occlusionFieldBaker.occlusionFieldBakeCompute != null) {
+                if (!_occlusionFieldBaker.TryBake(volume, out Texture3D[] fieldTextures, out Vector3[] fieldDirections, out error)) {
+                    Debug.LogError("Occlusion Field Bake failed: " + error, _lightingManager);
+                    return;
+                }
+                volume.occlusionFieldTextures = fieldTextures;
+                volume.occlusionFieldDirections = fieldDirections;
+            }
 
             // Material baker produces one lower-res packed material texture (albedo+emissionIntensity)
             if (_materialBaker.MaterialBakeCompute == null) {

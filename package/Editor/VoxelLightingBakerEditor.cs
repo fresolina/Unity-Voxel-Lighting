@@ -53,6 +53,15 @@ namespace Lotec.Lighting.Editor {
                 string bitmaskPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.occlusionBitmaskTexture.name}.asset");
                 baker.targetSdfVolume.occlusionBitmaskTexture = SaveAsset(baker.targetSdfVolume.occlusionBitmaskTexture, bitmaskPath, "Occlusion Bitmask");
             }
+            // Save baked Occlusion Field textures
+            if (baker.targetSdfVolume.occlusionFieldTextures != null && !string.IsNullOrEmpty(basePath)) {
+                for (int i = 0; i < baker.targetSdfVolume.occlusionFieldTextures.Length; i++) {
+                    var tex = baker.targetSdfVolume.occlusionFieldTextures[i];
+                    if (tex == null) continue;
+                    string fieldPath = System.IO.Path.Combine(basePath, $"{tex.name}.asset");
+                    baker.targetSdfVolume.occlusionFieldTextures[i] = SaveAsset(tex, fieldPath, "Occlusion Field");
+                }
+            }
             // Save baked packed material texture (albedo+emissionIntensity)
             if (baker.targetSdfVolume.materialAlbedoIntensityTexture != null && !string.IsNullOrEmpty(basePath)) {
                 string matPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.materialAlbedoIntensityTexture.name}.asset");

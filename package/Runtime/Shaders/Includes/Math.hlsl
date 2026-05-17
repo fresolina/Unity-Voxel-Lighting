@@ -158,33 +158,28 @@ float GetIGN(float3 position, int frame) {
     return frac(52.9829189f * frac(0.06711056f * p.x + 0.00583715f * p.y + 0.0123456f * p.z));
 }
 
+struct AabbHit {
+    bool hit;
+    float tEnter;
+    float tExit;
+};
+
 // Intersect ray (ro + rd * t) with unit AABB [0,1]^3.
 // ro/rd are in UVW space; t is still in world-distance units (because rd already includes invSize).
-inline bool RayIntersectUnitAabb(float3 ro, float3 rd, out float tEnter, out float tExit)
+inline AabbHit RayIntersectUnitAabb(float3 ro, float3 rd)
 {
-    const float kHuge = 1e20;
-    bool3 parallel = abs(rd) < 1e-8;
-
-    // If we're parallel to a slab and outside it, no hit.
-    if (parallel.x && (ro.x < 0.0 || ro.x > 1.0)) { tEnter = 0.0; tExit = 0.0; return false; }
-    if (parallel.y && (ro.y < 0.0 || ro.y > 1.0)) { tEnter = 0.0; tExit = 0.0; return false; }
-    if (parallel.z && (ro.z < 0.0 || ro.z > 1.0)) { tEnter = 0.0; tExit = 0.0; return false; }
-
     float3 invRd = rcp(rd);
     float3 t0 = (0.0 - ro) * invRd;
     float3 t1 = (1.0 - ro) * invRd;
 
-    // Ignore parallel axes by making their interval unbounded.
-    t0 = float3(parallel.x ? -kHuge : t0.x, parallel.y ? -kHuge : t0.y, parallel.z ? -kHuge : t0.z);
-    t1 = float3(parallel.x ?  kHuge : t1.x, parallel.y ?  kHuge : t1.y, parallel.z ?  kHuge : t1.z);
-
     float3 tMin3 = min(t0, t1);
     float3 tMax3 = max(t0, t1);
 
-    tEnter = max(max(tMin3.x, tMin3.y), tMin3.z);
-    tExit  = min(min(tMax3.x, tMax3.y), tMax3.z);
-
-    return tExit >= tEnter;
+    AabbHit result = (AabbHit)0;
+    result.tEnter = max(max(tMin3.x, tMin3.y), tMin3.z);
+    result.tExit  = min(min(tMax3.x, tMax3.y), tMax3.z);
+    result.hit = result.tExit >= result.tEnter;
+    return result;
 }
 
 // Ray-Triangle intersection (Möller-Trumbore)
