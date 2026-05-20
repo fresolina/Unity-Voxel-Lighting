@@ -60,7 +60,6 @@ Release Pages builds publish under `versions/<tag>/` when a `release-please` PR 
 
 * Dra ner på antalet uniforms. Kanske gör om de flesta sdf-relaterade typ epsilon osv som konstanter.
 * Använd Texture3DReadback.cs där det behövs.
-* BakeFibonacciLookup.cs:UnpackOctahedral() ta bort och ersätt med Math.hsls. Även Fibonacci. Pack/UnpackOctahedral -> Pack/UnpackDirection
 * RadianceField -> IrradianceField. (Light hitting the voxel, not leaving the voxel)
 * Shadervars: _VolumeSize, VolumePosition ska vara world units._VoxelSize måste prefixas med vilket fält det hör till, eller om det räcker med lowres/hires.
   * Vi borde nog ha en global VolumePosition och VolumeSize. Sen egna Resolution och VoxelSize per fält.
