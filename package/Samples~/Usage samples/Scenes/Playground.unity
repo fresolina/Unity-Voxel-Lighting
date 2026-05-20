@@ -2874,7 +2874,6 @@ MonoBehaviour:
   - {x: 0.88248545, y: 0.078125, z: 0.4638059}
   - {x: -0.96590626, y: 0.046875, z: 0.25461307}
   - {x: 0.54076916, y: 0.015625, z: -0.8410259}
-  _fibonacciCheatIndices: {fileID: 2800000, guid: 4c3e0bbf57fbd74418ef35bf222d8bfb, type: 3}
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0

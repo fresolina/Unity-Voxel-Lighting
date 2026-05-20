@@ -9,8 +9,6 @@
 //   float3 _VoxelResolution;
 //
 
-#include "Fibonacci.hlsl"
-
 // -----------------------------------------------------------------------------
 // DATA STRUCTURES
 // -----------------------------------------------------------------------------
@@ -19,12 +17,8 @@
 //   R,G = low/high 16 bits of uint bitmask.x
 //   B,A = low/high 16 bits of uint bitmask.y
 TEXTURE3D(_BitmaskTex);
-// Precomputed 64 directions evenly distributed on a sphere with Fibonacci.
-// Mapped onto 2D texture using octahedral mapping.
-// We pack: R,G,B,A = 0..63 indices
-// Usage: Map a direction to octahedral UVs, sample this texture to get the 4 nearest direction indices.
-TEXTURE2D(_FibIndexTexture);
-SAMPLER(sampler_FibIndexTexture);
+// Precomputed nearest Fibonacci direction index for the sun (set from C# each frame).
+int _BitmaskSunFibIndex;
 
 // Inverse of voxel size in world units (set from C#)
 float3 _InverseVoxelSize;
@@ -107,46 +101,40 @@ inline float GetShadowBitTrilinear8Tap(float3 localPos, uint chosenIndex)
 }
 
 /*
-* Main entry point: Fetch final shadow value from voxel occlusion bitmask
-* using the selected method.
+* Main entry point: Fetch final shadow value from voxel occlusion bitmask.
+* Uses the precomputed sun Fibonacci index set from C# each frame.
 * @param worldPos World position of the pixel to shade
-* @param lightDir Normalized light direction
 * Returns 0.0 (Shadow) to 1.0 (Lit)
 */
-float GetFinalShadow(float3 worldPos, float3 lightDir) {
+float GetFinalShadow(float3 worldPos) {
     // 1) Convert to voxel space.
     float3 localPos = (worldPos - _SdfBoundsMin) * _InverseVoxelSize;
+    uint chosenIndex = (uint)_BitmaskSunFibIndex;
 
     // BITMASK_POINT: simplest possible shadow test (single voxel, single bit)
-    // 1 = lit, 0 = shadow.
     #if defined(BITMASK_POINT)
         int3 baseIdx = int3(floor(localPos));
-        uint chosenIndex = FibonacciIndexTex(_FibIndexTexture, sampler_FibIndexTexture, lightDir);
         uint2 mask = GetBitmaskAtVoxel(baseIdx);
         return saturate(1.0 - (float)GetBit64(mask, chosenIndex));
     #endif
 
     // BITMASK_8TAP: 2x2x2 trilinear blend of the selected-direction occlusion bit.
     #if defined(BITMASK_8TAP)
-        uint chosenIndex = FibonacciIndexTex(_FibIndexTexture, sampler_FibIndexTexture, lightDir);
         return GetShadowBitTrilinear8Tap(localPos, chosenIndex);
     #endif
 
     // Default to 8-tap if no mode is selected.
-    return GetShadowBitTrilinear8Tap(localPos, FibonacciIndexTex(_FibIndexTexture, sampler_FibIndexTexture, lightDir));
+    return GetShadowBitTrilinear8Tap(localPos, chosenIndex);
 }
 
 /*
-* Variant of GetFinalShadow that adds a normal-based offset to reduce self-occlusion.
+* Variant that adds a normal-based offset to reduce self-occlusion.
 * @param worldPos World position of the pixel to shade
-* @param lightDir Normalized light direction
 * @param normal   Normal at the world position
 * Returns 0.0 (Shadow) to 1.0 (Lit)
 */
-float GetFinalShadow2(float3 worldPos, float3 lightDir, float3 normal) {
-    // Offset sampling position along normal to reduce self-occlusion
+float GetFinalShadow(float3 worldPos, float3 normal) {
     float3 offsetPos = worldPos + normal * GetVoxelSizeWorld() * 1.2;
-    // float3 offsetPos = worldPos;
-    return GetFinalShadow(offsetPos, lightDir);
+    return GetFinalShadow(offsetPos);
 }
 #endif

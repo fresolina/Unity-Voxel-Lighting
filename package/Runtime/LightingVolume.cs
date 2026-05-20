@@ -4,14 +4,13 @@ namespace Lotec.Lighting {
     public class LightingVolume : MonoBehaviour {
         static readonly int s_sSdfTex = Shader.PropertyToID("_SdfTex");
         static readonly int s_sBitmaskTex = Shader.PropertyToID("_BitmaskTex");
-        static readonly int s_sFibIndexTexture = Shader.PropertyToID("_FibIndexTexture");
         static readonly int s_sSdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
         static readonly int s_sSdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
         static readonly int s_sInverseVoxelSize = Shader.PropertyToID("_InverseVoxelSize");
         static readonly int s_sVoxelResolution = Shader.PropertyToID("_VoxelResolution");
-        static readonly int s_sFibonacciDirections = Shader.PropertyToID("_FibonacciDirections");
         static readonly int s_sVolumeSize = Shader.PropertyToID("_VolumeSize");
         static readonly int s_sVolumePosition = Shader.PropertyToID("_VolumePosition");
+        static readonly int s_sBitmaskSunFibIndex = Shader.PropertyToID("_BitmaskSunFibIndex");
 
         [Header("Bake Input")]
         [SerializeField] Transform _root;
@@ -38,18 +37,13 @@ namespace Lotec.Lighting {
         public Texture3D materialAlbedoIntensityTexture;
         [Tooltip("RGBA32 textures storing per-direction lit values. 4 directions per texture.")]
         public Texture3D[] occlusionFieldTextures;
-        [Tooltip("Baked Fibonacci directions used by the occlusion field.")]
         [HideInInspector]
         public Vector3[] occlusionFieldDirections;
-
-        [Header("Lookup Textures")]
-        [SerializeField] Texture2D _fibonacciCheatIndices;
 
         Vector3 _voxelSize;
         OcclusionFieldQuery _occlusionFieldQuery;
 
         public Transform BakeRoot { get => _root; set => _root = value; }
-        public Texture2D FibonacciCheatIndices { get => _fibonacciCheatIndices; set => _fibonacciCheatIndices = value; }
 
         void OnValidate() {
             _maxResolution = Mathf.Max(4, _maxResolution);
@@ -76,8 +70,6 @@ namespace Lotec.Lighting {
         }
 
         public void ApplyShaderGlobals() {
-            Shader.SetGlobalVectorArray(s_sFibonacciDirections, OcclusionBitmaskBaker.GetOrCreateFibonacciDirectionsV4());
-
             if (sdfHiresTexture == null) return;
 
             Shader.SetGlobalTexture(s_sSdfTex, sdfHiresTexture);
@@ -103,10 +95,25 @@ namespace Lotec.Lighting {
                 1.0f / Mathf.Max(1e-9f, voxelSize.z));
             Shader.SetGlobalVector(s_sInverseVoxelSize, inverseVoxelSize);
 
-            if (_fibonacciCheatIndices != null)
-                Shader.SetGlobalTexture(s_sFibIndexTexture, _fibonacciCheatIndices);
-
+            ApplyBitmaskSunDirection();
             ApplyOcclusionFieldGlobals();
+        }
+
+        void ApplyBitmaskSunDirection() {
+            if (occlusionBitmaskTexture == null) return;
+
+            Vector3 sunDir = RenderSettings.sun != null ? -RenderSettings.sun.transform.forward : Vector3.down;
+            Vector3[] dirs = OcclusionBitmaskBaker.GetOrCreateFibonacciDirectionsV3();
+            int bestIndex = 0;
+            float bestDot = -2f;
+            for (int i = 0; i < dirs.Length; i++) {
+                float d = Vector3.Dot(sunDir, dirs[i]);
+                if (d > bestDot) {
+                    bestDot = d;
+                    bestIndex = i;
+                }
+            }
+            Shader.SetGlobalInt(s_sBitmaskSunFibIndex, bestIndex);
         }
 
         void ApplyOcclusionFieldGlobals() {
