@@ -14,6 +14,7 @@ SamplerState sampler_SdfTex;
 float3 _SdfBoundsMin;
 float3 _SdfBoundsSize;
 float3 _VoxelResolution; // resolution of the bitmask voxel grid (set from C# as float vector)
+float3 _InverseVoxelSize; // inverse of voxel size in world units (set from C#)
 
 float _SdfShadowEpsilon;
 float _SdfShadowMinStep;

@@ -14,7 +14,6 @@
 #define MAX_SDF_DIST 1.0e+10
 
 #include "../Includes/Volume.hlsl"
-#include "../Includes/Fibonacci.hlsl"
 
 // --- RESOURCES ---
 

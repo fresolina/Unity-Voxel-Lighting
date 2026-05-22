@@ -35,11 +35,13 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelSdfAo.hlsl"
             // Lotec Voxel Lighting occlusion direction bitmask shadows
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionDirection.hlsl"
+            // Lotec Voxel Lighting per-direction occlusion field (hardware-interpolated)
+            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionField.hlsl"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelGi.hlsl"
 
             // Choose shadow implementation at compile-time only.
-            // Keywords: SDF_ONLY, BITMASK_POINT (single bit), BITMASK_8TAP (trilinear 2x2x2)
-            #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_8TAP
+            // Keywords: SDF_ONLY, BITMASK_POINT (single bit), BITMASK_8TAP (trilinear 2x2x2), OCC_FIELD (per-direction field)
+            #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_8TAP OCC_FIELD
             #pragma multi_compile SDF_AO_OFF SDF_AO_LQ SDF_AO_HQ
 
             #define MAX_POINT_LIGHTS 4
@@ -120,9 +122,10 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
 
             // Default to SDF if no keyword is set.
             inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal) {
-                #if defined(BITMASK_POINT) || defined(BITMASK_8TAP)
-                    return GetFinalShadow2(worldPos, normalize(lightDir), normal);
-                    // return GetFinalShadow(worldPos, normalize(lightDir));
+                #if defined(OCC_FIELD)
+                    return GetOccFieldShadow(worldPos, normal);
+                #elif defined(BITMASK_POINT) || defined(BITMASK_8TAP)
+                    return GetBitmaskShadow(worldPos, normal);
                 #else
                     return GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
                 #endif

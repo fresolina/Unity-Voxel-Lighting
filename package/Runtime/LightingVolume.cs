@@ -4,14 +4,14 @@ namespace Lotec.Lighting {
     public class LightingVolume : MonoBehaviour {
         static readonly int s_sSdfTex = Shader.PropertyToID("_SdfTex");
         static readonly int s_sBitmaskTex = Shader.PropertyToID("_BitmaskTex");
-        static readonly int s_sFibIndexTexture = Shader.PropertyToID("_FibIndexTexture");
         static readonly int s_sSdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
         static readonly int s_sSdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
         static readonly int s_sInverseVoxelSize = Shader.PropertyToID("_InverseVoxelSize");
         static readonly int s_sVoxelResolution = Shader.PropertyToID("_VoxelResolution");
-        static readonly int s_sFibonacciDirections = Shader.PropertyToID("_FibonacciDirections");
         static readonly int s_sVolumeSize = Shader.PropertyToID("_VolumeSize");
         static readonly int s_sVolumePosition = Shader.PropertyToID("_VolumePosition");
+        static readonly int s_sBitmaskSunFibIndex = Shader.PropertyToID("_BitmaskSunFibIndex");
+        static readonly int s_sBitmaskDirCount = Shader.PropertyToID("_BitmaskDirCount");
 
         [Header("Bake Input")]
         [SerializeField] Transform _root;
@@ -36,14 +36,17 @@ namespace Lotec.Lighting {
         public Texture3D occlusionBitmaskTexture;
         [Tooltip("Lower-resolution material property: albedo.rgb + emissionIntensity (a)")]
         public Texture3D materialAlbedoIntensityTexture;
-
-        [Header("Lookup Textures")]
-        [SerializeField] Texture2D _fibonacciCheatIndices;
+        [Tooltip("RGBA32 textures storing per-direction lit values. 4 directions per texture.")]
+        public Texture3D[] occlusionFieldTextures;
+        [HideInInspector]
+        public Vector3[] occlusionBitmaskDirections;
+        [HideInInspector]
+        public Vector3[] occlusionFieldDirections;
 
         Vector3 _voxelSize;
+        OcclusionFieldQuery _occlusionFieldQuery;
 
         public Transform BakeRoot { get => _root; set => _root = value; }
-        public Texture2D FibonacciCheatIndices { get => _fibonacciCheatIndices; set => _fibonacciCheatIndices = value; }
 
         void OnValidate() {
             _maxResolution = Mathf.Max(4, _maxResolution);
@@ -70,8 +73,6 @@ namespace Lotec.Lighting {
         }
 
         public void ApplyShaderGlobals() {
-            Shader.SetGlobalVectorArray(s_sFibonacciDirections, OcclusionBitmaskBaker.GetOrCreateFibonacciDirectionsV4());
-
             if (sdfHiresTexture == null) return;
 
             Shader.SetGlobalTexture(s_sSdfTex, sdfHiresTexture);
@@ -97,8 +98,29 @@ namespace Lotec.Lighting {
                 1.0f / Mathf.Max(1e-9f, voxelSize.z));
             Shader.SetGlobalVector(s_sInverseVoxelSize, inverseVoxelSize);
 
-            if (_fibonacciCheatIndices != null)
-                Shader.SetGlobalTexture(s_sFibIndexTexture, _fibonacciCheatIndices);
+            ApplyBitmaskSunDirection();
+            ApplyOcclusionFieldGlobals();
+        }
+
+        void ApplyBitmaskSunDirection() {
+            if (occlusionBitmaskTexture == null) return;
+            if (occlusionBitmaskDirections == null || occlusionBitmaskDirections.Length == 0) return;
+
+            Vector3 sunDir = OcclusionFieldQuery.GetSunDirection();
+            int bestIndex = OcclusionFieldQuery.FindNearestDirection(sunDir, occlusionBitmaskDirections, occlusionBitmaskDirections.Length);
+            Shader.SetGlobalInt(s_sBitmaskSunFibIndex, bestIndex);
+            Shader.SetGlobalInt(s_sBitmaskDirCount, occlusionBitmaskDirections.Length);
+        }
+
+        void ApplyOcclusionFieldGlobals() {
+            if (occlusionFieldDirections == null || occlusionFieldDirections.Length == 0) return;
+            if (occlusionFieldTextures == null || occlusionFieldTextures.Length == 0) return;
+
+            if (_occlusionFieldQuery == null)
+                _occlusionFieldQuery = new OcclusionFieldQuery();
+
+            _occlusionFieldQuery.Initialize(occlusionFieldDirections, occlusionFieldTextures);
+            _occlusionFieldQuery.ApplyShaderGlobals();
         }
 
         /// <summary>

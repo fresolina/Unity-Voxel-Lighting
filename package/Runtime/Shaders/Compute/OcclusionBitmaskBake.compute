@@ -1,75 +1,40 @@
 #pragma kernel CSMain
 #pragma target 5.0
 
-#include "../Includes/Math.hlsl"
-#include "../Includes/Raymarch.hlsl"
-
-// Compute path: declare the SDF texture and sampler so the include can use them.
-Texture3D<float> _SdfTex;
-SamplerState sampler_SdfTex;
-
-// Bounds
-float3 _BoundsMin;
-float3 _BoundsSize;
-uint3 _Resolution;
+#include "OcclusionBakeCommon.hlsl"
 
 // Output: directional bitmask (uint2 = 64 bits per voxel, one per Fibonacci direction)
-// TODO: We can probably write directly to RWTexture3D
 RWStructuredBuffer<uint2> _OutBitmask;
-// Fibonacci directions uploaded from C# (float3 per direction)
-StructuredBuffer<float3> _FibonacciDirs;
-int _FibonacciDirCount;
 
-// Occlusion distance threshold (in world units)
-float _OcclusionDistance;
-
-// Input: Voxel volume SDF
-// SDF volume to use for sphere-trace based occlusion
-int _SdfMaxSteps;
-float _SdfMinStep;
-float _SdfThicknessTol;
+// Number of baked directions (8, 32, or 64).
+int _BitmaskDirCount;
 
 [numthreads(8, 8, 8)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
     if (any(id >= _Resolution))
         return;
-    
-    // Voxel world-space center
-    float3 voxelSize = _BoundsSize / float3(_Resolution);
-    float3 voxelCenter = _BoundsMin + (float3(id) + 0.5) * voxelSize;
-    
+
+    float3 voxelCenter;
+    float originBias, maxDistance;
+    ComputeVoxelParams(id, voxelCenter, originBias, maxDistance);
+
     uint2 bitmask = uint2(0, 0);
-    float voxelDiag = length(voxelSize);
-    // Test each Fibonacci direction using sphere-trace on the SDF
-    // Clamp direction count to valid range [1,64] to avoid OOB accesses
-    int dirCount = max(1, min(_FibonacciDirCount, 64));
+    int dirCount = min(_BitmaskDirCount, 64);
     for (uint dirIdx = 0; dirIdx < (uint)dirCount; dirIdx++)
     {
         float3 rayDir = _FibonacciDirs[dirIdx];
-
-        // use a safer bias proportional to configured min step and voxel size
-        float originBias = max(_SdfMinStep * 0.5f, voxelDiag * 0.01f);
-
-        // Use shared raymarch function so baker and runtime behave identically.
-        // Sample SDF at the immediate origin bias position for debug
-        float3 originProbePos = voxelCenter + rayDir * originBias;
-        float3 originProbeUvw = (originProbePos - _BoundsMin) / _BoundsSize;
-
-        // Set bit if direction is occluded
-        float free = RayMarchTex3D(_SdfTex, sampler_SdfTex, voxelCenter, rayDir, _BoundsMin, _BoundsSize, originBias, _OcclusionDistance, _SdfThicknessTol, _SdfMinStep, _SdfMaxSteps, 64);
+        float free = RayMarchTex3D(_SdfTex, sampler_SdfTex, voxelCenter, rayDir, _BoundsMin, _BoundsSize, originBias, maxDistance, _SdfThicknessTol, _SdfMinStep, _SdfMaxSteps, 64);
         if (free < 0.5)
         {
-            uint bit = 1u << (dirIdx & 31u); // defensive mask for shift
-            if (dirIdx < 32u) {
+            uint bit = 1u << (dirIdx & 31u);
+            if (dirIdx < 32u)
                 bitmask.x |= bit;
-            } else {
+            else
                 bitmask.y |= bit;
-            }
         }
     }
-    
-    // Flatten 3D index to 1D and store
-    uint flatIdx = id.x + (id.y * _Resolution.x) + (id.z * _Resolution.x * _Resolution.y);
+
+    uint flatIdx = id.x + id.y * _Resolution.x + id.z * _Resolution.x * _Resolution.y;
     _OutBitmask[flatIdx] = bitmask;
 }
