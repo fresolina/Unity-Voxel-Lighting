@@ -18,6 +18,29 @@ namespace Lotec.Lighting {
         Texture3D[] _textures;
 
         /// <summary>
+        /// Returns the current sun direction (negated forward of the sun light, or Vector3.down if none).
+        /// </summary>
+        public static Vector3 GetSunDirection() {
+            return RenderSettings.sun != null ? -RenderSettings.sun.transform.forward : Vector3.down;
+        }
+
+        /// <summary>
+        /// Finds the index of the direction in <paramref name="candidates"/> most aligned with <paramref name="direction"/>.
+        /// </summary>
+        public static int FindNearestDirection(Vector3 direction, Vector3[] candidates, int count) {
+            int bestIndex = 0;
+            float bestDot = -2f;
+            for (int i = 0; i < count; i++) {
+                float d = Vector3.Dot(direction, candidates[i]);
+                if (d > bestDot) {
+                    bestDot = d;
+                    bestIndex = i;
+                }
+            }
+            return bestIndex;
+        }
+
+        /// <summary>
         /// Initialize with the baked direction set. Must be called once after baking or loading.
         /// </summary>
         public void Initialize(Vector3[] bakedDirections, Texture3D[] textures) {
@@ -27,33 +50,15 @@ namespace Lotec.Lighting {
         }
 
         /// <summary>
-        /// Find the nearest Fibonacci direction index to a given direction.
-        /// Also computes which texture and channel (0-3) the direction maps to.
-        /// </summary>
-        public int FindNearest(Vector3 direction, out int textureIndex, out int channel) {
-            int bestIndex = 0;
-            float bestDot = -2f;
-            for (int i = 0; i < _directionCount; i++) {
-                float d = Vector3.Dot(direction, _directions[i]);
-                if (d > bestDot) {
-                    bestDot = d;
-                    bestIndex = i;
-                }
-            }
-            textureIndex = bestIndex / 4;
-            channel = bestIndex % 4;
-            return bestIndex;
-        }
-
-        /// <summary>
         /// Call once per frame to update shader globals with the current sun direction.
         /// </summary>
         public void ApplyShaderGlobals() {
             if (_directions == null || _directionCount == 0 || _textures == null) return;
 
-            Vector3 sunDirection = RenderSettings.sun != null ? -RenderSettings.sun.transform.forward : Vector3.down;
-
-            FindNearest(sunDirection, out int texIndex, out int channel);
+            Vector3 sunDirection = GetSunDirection();
+            int bestIndex = FindNearestDirection(sunDirection, _directions, _directionCount);
+            int texIndex = bestIndex / 4;
+            int channel = bestIndex % 4;
 
             Shader.SetGlobalVector(s_sunDirection, sunDirection);
             Shader.SetGlobalInt(s_sunChannel, channel);

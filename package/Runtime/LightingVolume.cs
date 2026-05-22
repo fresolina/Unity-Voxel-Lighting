@@ -102,17 +102,9 @@ namespace Lotec.Lighting {
         void ApplyBitmaskSunDirection() {
             if (occlusionBitmaskTexture == null) return;
 
-            Vector3 sunDir = RenderSettings.sun != null ? -RenderSettings.sun.transform.forward : Vector3.down;
-            Vector3[] dirs = OcclusionBitmaskBaker.GetOrCreateFibonacciDirectionsV3();
-            int bestIndex = 0;
-            float bestDot = -2f;
-            for (int i = 0; i < dirs.Length; i++) {
-                float d = Vector3.Dot(sunDir, dirs[i]);
-                if (d > bestDot) {
-                    bestDot = d;
-                    bestIndex = i;
-                }
-            }
+            Vector3 sunDir = OcclusionFieldQuery.GetSunDirection();
+            Vector3[] dirs = OcclusionBitmaskBaker.GetOrCreateFibonacciDirections();
+            int bestIndex = OcclusionFieldQuery.FindNearestDirection(sunDir, dirs, dirs.Length);
             Shader.SetGlobalInt(s_sBitmaskSunFibIndex, bestIndex);
         }
 

@@ -125,7 +125,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 #if defined(OCC_FIELD)
                     return GetOccFieldShadow(worldPos, normal);
                 #elif defined(BITMASK_POINT) || defined(BITMASK_8TAP)
-                    return GetFinalShadow(worldPos, normal);
+                    return GetBitmaskShadow(worldPos, normal);
                 #else
                     return GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
                 #endif
