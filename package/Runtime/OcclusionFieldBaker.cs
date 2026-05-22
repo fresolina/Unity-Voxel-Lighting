@@ -6,9 +6,9 @@ using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Bakes a directional occlusion field where each direction gets a full 8-bit channel.
+    /// Bakes a directional occlusion field where each direction gets a normalized RGBA channel.
     /// Stores the "lit" value (0 = shadow, 1 = fully lit) per Fibonacci direction per voxel.
-    /// Output: N/4 RGBA32 Texture3D assets (4 directions packed per texture).
+    /// Output: N/4 normalized RGBA Texture3D assets (4 directions packed per texture).
     /// Unlike OcclusionBitmaskBaker, this supports hardware trilinear interpolation.
     /// </summary>
     [Serializable]
@@ -44,8 +44,37 @@ namespace Lotec.Lighting {
         static readonly int s_sdfThicknessTol = Shader.PropertyToID("_SdfThicknessTol");
         static readonly int s_sdfTex = Shader.PropertyToID("_SdfTex");
 
+        static GraphicsFormat GetOcclusionFieldFormat() {
+#if UNITY_EDITOR
+            if (UnityEditor.EditorUserBuildSettings.activeBuildTarget == UnityEditor.BuildTarget.Android)
+                return GraphicsFormat.R4G4B4A4_UNormPack16;
+#endif
+            return GraphicsFormat.R8G8B8A8_UNorm;
+        }
+
+        static void SetPackedTextureData(Texture3D texture, NativeArray<float> readbackData, int voxelCount, GraphicsFormat format) {
+            if (format == GraphicsFormat.R4G4B4A4_UNormPack16) {
+                var packed = new ushort[voxelCount];
+                for (int voxel = 0; voxel < voxelCount; voxel++) {
+                    int baseIndex = voxel * 4;
+                    ushort r = (ushort)Mathf.Clamp(Mathf.RoundToInt(readbackData[baseIndex + 0] * 15f), 0, 15);
+                    ushort g = (ushort)Mathf.Clamp(Mathf.RoundToInt(readbackData[baseIndex + 1] * 15f), 0, 15);
+                    ushort b = (ushort)Mathf.Clamp(Mathf.RoundToInt(readbackData[baseIndex + 2] * 15f), 0, 15);
+                    ushort a = (ushort)Mathf.Clamp(Mathf.RoundToInt(readbackData[baseIndex + 3] * 15f), 0, 15);
+                    packed[voxel] = (ushort)((r << 12) | (g << 8) | (b << 4) | a);
+                }
+                texture.SetPixelData(packed, 0);
+                return;
+            }
+
+            var packedRgba8 = new byte[voxelCount * 4];
+            for (int i = 0; i < voxelCount * 4; i++)
+                packedRgba8[i] = (byte)Mathf.Clamp(Mathf.RoundToInt(readbackData[i] * 255f), 0, 255);
+            texture.SetPixelData(packedRgba8, 0);
+        }
+
         /// <summary>
-        /// Bake the occlusion field into N/4 RGBA32 Texture3D assets.
+        /// Bake the occlusion field into N/4 normalized RGBA Texture3D assets.
         /// Each texture stores 4 directions (one per RGBA channel).
         /// </summary>
         public bool TryBake(
@@ -83,13 +112,14 @@ namespace Lotec.Lighting {
                 return false;
             }
 
-            if (!SystemInfo.IsFormatSupported(GraphicsFormat.R8G8B8A8_UNorm, GraphicsFormatUsage.Sample)) {
-                error = "OcclusionFieldBaker: RGBA8_UNorm format not supported for sampling on this platform";
+            GraphicsFormat textureFormat = GetOcclusionFieldFormat();
+            if (textureFormat == GraphicsFormat.None) {
+                error = "OcclusionFieldBaker: no filterable RGBA texture format supported (requires R4G4B4A4 or RGBA8)";
                 return false;
             }
 
-            // Generate directions
-            bakedDirections = Fibonacci.GenerateFibonacciDirections(numDirections, hemisphereOnly);
+            var packedDirections = Fibonacci.GenerateFibonacciDirections(numDirections, hemisphereOnly);
+            bakedDirections = packedDirections;
 
             // Compute voxel metrics
             Vector3 voxelSize = new Vector3(
@@ -128,7 +158,7 @@ namespace Lotec.Lighting {
                     // Upload the 4 directions for this batch
                     var batchDirs = new Vector3[4];
                     for (int c = 0; c < 4; c++)
-                        batchDirs[c] = bakedDirections[dirOffset + c];
+                        batchDirs[c] = packedDirections[dirOffset + c];
                     dirBuffer.SetData(batchDirs);
 
                     // Output buffer: 4 floats (RGBA) per voxel
@@ -160,30 +190,24 @@ namespace Lotec.Lighting {
                         return false;
                     }
 
-                    // Pack float values into RGBA8 bytes
-                    var packed = new byte[voxelCount * 4];
-                    for (int i = 0; i < voxelCount * 4; i++) {
-                        packed[i] = (byte)Mathf.Clamp(Mathf.RoundToInt(readbackData[i] * 255f), 0, 255);
-                    }
-
-                    var tex = new Texture3D(resolution.x, resolution.y, resolution.z, GraphicsFormat.R8G8B8A8_UNorm, TextureCreationFlags.None) {
+                    var tex = new Texture3D(resolution.x, resolution.y, resolution.z, textureFormat, TextureCreationFlags.None) {
                         filterMode = FilterMode.Trilinear,
                         wrapMode = TextureWrapMode.Clamp,
                         name = $"{sourceVolume.BakeRoot.name}_OcclusionField_{texIdx:D2}"
                     };
-                    tex.SetPixelData(packed, 0);
+                    SetPackedTextureData(tex, readbackData, voxelCount, textureFormat);
                     tex.Apply(false);
 
                     resultTextures[texIdx] = tex;
                     outBuffer.Dispose();
 
-                    Debug.Log($"OcclusionFieldBaker: baked texture {texIdx + 1}/{textureCount} (directions {dirOffset}..{dirOffset + 3})");
+                    Debug.Log($"OcclusionFieldBaker: baked texture {texIdx + 1}/{textureCount} (directions {dirOffset}..{dirOffset + 3}, format={textureFormat})");
                 }
             } finally {
                 dirBuffer.Dispose();
             }
 
-            Debug.Log($"OcclusionFieldBaker: baked {textureCount} textures ({numDirections} directions, {resolution.x}x{resolution.y}x{resolution.z} = {voxelCount} voxels, hemisphere={hemisphereOnly})");
+            Debug.Log($"OcclusionFieldBaker: baked {textureCount} textures ({numDirections} directions, {resolution.x}x{resolution.y}x{resolution.z} = {voxelCount} voxels, hemisphere={hemisphereOnly}, format={textureFormat})");
             return true;
         }
 

@@ -116,11 +116,10 @@ namespace Lotec.Lighting {
             if (occlusionFieldDirections == null || occlusionFieldDirections.Length == 0) return;
             if (occlusionFieldTextures == null || occlusionFieldTextures.Length == 0) return;
 
-            if (_occlusionFieldQuery == null) {
+            if (_occlusionFieldQuery == null)
                 _occlusionFieldQuery = new OcclusionFieldQuery();
-                _occlusionFieldQuery.Initialize(occlusionFieldDirections, occlusionFieldTextures);
-            }
 
+            _occlusionFieldQuery.Initialize(occlusionFieldDirections, occlusionFieldTextures);
             _occlusionFieldQuery.ApplyShaderGlobals();
         }
 
