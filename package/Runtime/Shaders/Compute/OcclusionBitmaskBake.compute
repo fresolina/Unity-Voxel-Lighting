@@ -5,7 +5,9 @@
 
 // Output: directional bitmask (uint2 = 64 bits per voxel, one per Fibonacci direction)
 RWStructuredBuffer<uint2> _OutBitmask;
-int _FibonacciDirCount;
+
+// Number of baked directions (8, 32, or 64).
+int _BitmaskDirCount;
 
 [numthreads(8, 8, 8)]
 void CSMain(uint3 id : SV_DispatchThreadID)
@@ -18,7 +20,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     ComputeVoxelParams(id, voxelCenter, originBias, maxDistance);
 
     uint2 bitmask = uint2(0, 0);
-    int dirCount = max(1, min(_FibonacciDirCount, 64));
+    int dirCount = min(_BitmaskDirCount, 64);
     for (uint dirIdx = 0; dirIdx < (uint)dirCount; dirIdx++)
     {
         float3 rayDir = _FibonacciDirs[dirIdx];

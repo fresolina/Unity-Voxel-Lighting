@@ -2775,8 +2775,9 @@ MonoBehaviour:
   _sdfBaker:
     sdfBakeCompute: {fileID: 7200000, guid: b69a1acfc8ae8044384411949a5b3e0b, type: 3}
   _occlusionBitmaskBaker:
+    directionCount: 8
+    hemisphereOnly: 1
     bitmaskBakeCompute: {fileID: 7200000, guid: e0f7c494ba521474e9fdbcaf190a0e90, type: 3}
-    fibonacciDirectionCount: 64
   _occlusionFieldBaker:
     occlusionFieldBakeCompute: {fileID: 7200000, guid: 072dc532c95fd5040894f9193b6fad72, type: 3}
     directionCount: 32
@@ -2784,6 +2785,9 @@ MonoBehaviour:
     shadowSoftness: 3
   _materialBaker:
     MaterialBakeCompute: {fileID: 7200000, guid: 7f32bd09c6a495746a7840c188a184c4, type: 3}
+  _hemisphereFlagsInitialized: 1
+  _lastBitmaskHemisphereOnly: 1
+  _lastOcclusionFieldHemisphereOnly: 1
 --- !u!114 &1437948845
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2841,6 +2845,15 @@ MonoBehaviour:
   - {fileID: 11700000, guid: 428281ac1c47ebd44a6dc07d32946a64, type: 2}
   - {fileID: 11700000, guid: a8a6d6b1b5330544baa445dea236a452, type: 2}
   - {fileID: 11700000, guid: 184c9076e4a2b1e4a884d3b789ea814f, type: 2}
+  occlusionBitmaskDirections:
+  - {x: 0.34798527, y: 0.9375, z: 0}
+  - {x: -0.4298574, y: 0.8125, z: 0.39378467}
+  - {x: 0.06348706, y: 0.6875, z: -0.7234039}
+  - {x: 0.50305593, y: 0.5625, z: 0.6561467}
+  - {x: -0.8854726, y: 0.4375, z: -0.1566273}
+  - {x: 0.801498, y: 0.3125, z: -0.50984764}
+  - {x: -0.25499916, y: 0.1875, z: 0.94858795}
+  - {x: -0.46000668, y: 0.0625, z: -0.88571304}
   occlusionFieldDirections:
   - {x: 0.1760848, y: 0.984375, z: 0}
   - {x: -0.2231107, y: 0.953125, z: 0.20438772}

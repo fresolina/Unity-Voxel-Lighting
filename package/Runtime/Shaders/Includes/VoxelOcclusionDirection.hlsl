@@ -8,13 +8,17 @@
 //   float3 _InverseVoxelSize;
 //   float3 _VoxelResolution;
 
-// 64-bit occlusion direction bitmask field, stored as RGBA16_UNorm:
-//   R,G = low/high 16 bits of uint bitmask.x
-//   B,A = low/high 16 bits of uint bitmask.y
+// Bitmask texture. Format depends on direction count:
+//   8 dirs  -> R8_UNorm      (8 bits in R channel)
+//   32 dirs -> RG16_UNorm    (32 bits: R,G = low/high 16 bits)
+//   64 dirs -> RGBA16_UNorm  (64 bits: R,G = uint.x low/high, B,A = uint.y low/high)
 TEXTURE3D(_BitmaskTex);
 
 // Precomputed nearest Fibonacci direction index for the sun (set from C# each frame).
 int _BitmaskSunFibIndex;
+
+// Number of baked directions (8, 32, or 64). Determines texture decode path.
+int _BitmaskDirCount;
 
 inline uint U16FromUNorm(float v) {
     return (uint)floor(v * 65535.0 + 0.5);
@@ -23,6 +27,18 @@ inline uint U16FromUNorm(float v) {
 inline uint2 GetBitmaskAtVoxel(int3 voxelIdx) {
     voxelIdx = clamp(voxelIdx, int3(0,0,0), int3(_VoxelResolution) - int3(1,1,1));
     float4 raw = _BitmaskTex.Load(int4(voxelIdx, 0));
+
+    if (_BitmaskDirCount <= 8) {
+        // R8_UNorm: 8 bits packed in R channel
+        return uint2((uint)floor(raw.r * 255.0 + 0.5), 0);
+    }
+    if (_BitmaskDirCount <= 32) {
+        // RG16_UNorm: 32 bits across R and G
+        uint lo = U16FromUNorm(raw.r);
+        uint hi = U16FromUNorm(raw.g);
+        return uint2(lo | (hi << 16), 0);
+    }
+    // RGBA16_UNorm: full 64 bits
     uint xLo = U16FromUNorm(raw.r);
     uint xHi = U16FromUNorm(raw.g);
     uint yLo = U16FromUNorm(raw.b);

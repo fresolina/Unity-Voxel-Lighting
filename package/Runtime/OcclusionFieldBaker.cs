@@ -45,44 +45,6 @@ namespace Lotec.Lighting {
         static readonly int s_sdfTex = Shader.PropertyToID("_SdfTex");
 
         /// <summary>
-        /// Generate Fibonacci sphere directions for a given count.
-        /// Uses centered sampling (i + 0.5) / N consistent with the shader.
-        /// If hemisphereOnly is true, only directions with Y >= 0 are kept (re-normalized distribution).
-        /// </summary>
-        public static Vector3[] GenerateFibonacciDirections(int count, bool hemisphereOnly) {
-            if (hemisphereOnly) {
-                // Generate 2x directions, keep only upper hemisphere, then trim to count.
-                var all = GenerateFibonacciSphere(count * 2);
-                var upper = new System.Collections.Generic.List<Vector3>(count);
-                foreach (var d in all) {
-                    if (d.y >= 0f) upper.Add(d);
-                    if (upper.Count >= count) break;
-                }
-                // If we didn't get enough (shouldn't happen with 2x), fill from full sphere.
-                if (upper.Count < count) {
-                    Debug.LogWarning($"OcclusionFieldBaker: hemisphere only yielded {upper.Count}/{count} directions, falling back to full sphere for remainder.");
-                    var full = GenerateFibonacciSphere(count);
-                    for (int i = upper.Count; i < count; i++)
-                        upper.Add(full[i]);
-                }
-                return upper.ToArray();
-            }
-            return GenerateFibonacciSphere(count);
-        }
-
-        static Vector3[] GenerateFibonacciSphere(int n) {
-            var dirs = new Vector3[n];
-            float goldenAngle = Mathf.PI * (3f - Mathf.Sqrt(5f));
-            for (int i = 0; i < n; i++) {
-                float y = 1f - ((i + 0.5f) / n) * 2f;
-                float radius = Mathf.Sqrt(Mathf.Max(0f, 1f - y * y));
-                float theta = goldenAngle * i;
-                dirs[i] = new Vector3(Mathf.Cos(theta) * radius, y, Mathf.Sin(theta) * radius);
-            }
-            return dirs;
-        }
-
-        /// <summary>
         /// Bake the occlusion field into N/4 RGBA32 Texture3D assets.
         /// Each texture stores 4 directions (one per RGBA channel).
         /// </summary>
@@ -127,7 +89,7 @@ namespace Lotec.Lighting {
             }
 
             // Generate directions
-            bakedDirections = GenerateFibonacciDirections(numDirections, hemisphereOnly);
+            bakedDirections = Fibonacci.GenerateFibonacciDirections(numDirections, hemisphereOnly);
 
             // Compute voxel metrics
             Vector3 voxelSize = new Vector3(

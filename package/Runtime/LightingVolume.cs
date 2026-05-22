@@ -11,6 +11,7 @@ namespace Lotec.Lighting {
         static readonly int s_sVolumeSize = Shader.PropertyToID("_VolumeSize");
         static readonly int s_sVolumePosition = Shader.PropertyToID("_VolumePosition");
         static readonly int s_sBitmaskSunFibIndex = Shader.PropertyToID("_BitmaskSunFibIndex");
+        static readonly int s_sBitmaskDirCount = Shader.PropertyToID("_BitmaskDirCount");
 
         [Header("Bake Input")]
         [SerializeField] Transform _root;
@@ -37,6 +38,8 @@ namespace Lotec.Lighting {
         public Texture3D materialAlbedoIntensityTexture;
         [Tooltip("RGBA32 textures storing per-direction lit values. 4 directions per texture.")]
         public Texture3D[] occlusionFieldTextures;
+        [HideInInspector]
+        public Vector3[] occlusionBitmaskDirections;
         [HideInInspector]
         public Vector3[] occlusionFieldDirections;
 
@@ -101,11 +104,12 @@ namespace Lotec.Lighting {
 
         void ApplyBitmaskSunDirection() {
             if (occlusionBitmaskTexture == null) return;
+            if (occlusionBitmaskDirections == null || occlusionBitmaskDirections.Length == 0) return;
 
             Vector3 sunDir = OcclusionFieldQuery.GetSunDirection();
-            Vector3[] dirs = OcclusionBitmaskBaker.GetOrCreateFibonacciDirections();
-            int bestIndex = OcclusionFieldQuery.FindNearestDirection(sunDir, dirs, dirs.Length);
+            int bestIndex = OcclusionFieldQuery.FindNearestDirection(sunDir, occlusionBitmaskDirections, occlusionBitmaskDirections.Length);
             Shader.SetGlobalInt(s_sBitmaskSunFibIndex, bestIndex);
+            Shader.SetGlobalInt(s_sBitmaskDirCount, occlusionBitmaskDirections.Length);
         }
 
         void ApplyOcclusionFieldGlobals() {
