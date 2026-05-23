@@ -147,7 +147,7 @@ Transform:
   m_GameObject: {fileID: 16022735}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 2.144, y: 3.878, z: -2.22}
+  m_LocalPosition: {x: 2.144, y: 4.114, z: -2.22}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -596,7 +596,7 @@ Transform:
   m_GameObject: {fileID: 210675846}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0.7071068, w: 0.7071068}
-  m_LocalPosition: {x: 2, y: 1.5, z: -1.313}
+  m_LocalPosition: {x: 2, y: 1.72, z: -1.313}
   m_LocalScale: {x: 0.5, y: 4.5, z: 6}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -2499,7 +2499,7 @@ Transform:
   m_GameObject: {fileID: 1389776717}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 4, y: 0, z: 0}
+  m_LocalPosition: {x: 4, y: -0.03, z: 0}
   m_LocalScale: {x: 0.6, y: 3, z: 6}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -2810,6 +2810,8 @@ MonoBehaviour:
   _autoExposureRadius: 3
   _lightingMethod: 0
   _lpvDecay: 0.99
+  _raymarchMaxSteps: 64
+  _raymarchSoftness: 1
 --- !u!114 &1437948846
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2825,10 +2827,10 @@ MonoBehaviour:
   _root: {fileID: 1127919669}
   _paddingWorld: 0.25
   _maxResolution: 128
-  TrimmedMaxResolution: {x: 80, y: 74, z: 128}
+  TrimmedMaxResolution: {x: 80, y: 77, z: 128}
   Bounds:
-    m_Center: {x: 1.99, y: 1.6140002, z: -0.26000023}
-    m_Extent: {x: 3.28125, y: 3.0351562, z: 5.25}
+    m_Center: {x: 1.99, y: 1.7320002, z: -0.26000023}
+    m_Extent: {x: 3.28125, y: 3.1582031, z: 5.25}
   sdfHiresTexture: {fileID: 11700000, guid: 8cc4ba3ba0ebdda4ca1d869df998b15a, type: 2}
   sdfLowresTexture: {fileID: 11700000, guid: 80ccdea2531973e4e84ca75953324dc8, type: 2}
   occlusionBitmaskTexture: {fileID: 11700000, guid: afe60146ad9ffe24fb04b4a164e35a51, type: 2}
