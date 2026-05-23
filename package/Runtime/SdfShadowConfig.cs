@@ -3,11 +3,11 @@ using UnityEngine;
 namespace Lotec.Lighting {
     [System.Serializable]
     public class SdfShadowConfig {
-        static readonly int sShadowMaxSteps = Shader.PropertyToID("_SdfShadowMaxSteps");
-        static readonly int sShadowSoftness = Shader.PropertyToID("_SdfShadowSoftness");
-        static readonly int sShadowEpsilon = Shader.PropertyToID("_SdfShadowEpsilon");
-        static readonly int sShadowMinStep = Shader.PropertyToID("_SdfShadowMinStep");
-        static readonly int sShadowStartOffset = Shader.PropertyToID("_SdfShadowStartOffset");
+        static readonly int sMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
+        static readonly int sSoftness = Shader.PropertyToID("_RaymarchSoftness");
+        static readonly int sEpsilon = Shader.PropertyToID("_RaymarchEpsilon");
+        static readonly int sMinStep = Shader.PropertyToID("_RaymarchMinStep");
+        static readonly int sStartOffset = Shader.PropertyToID("_RaymarchStartOffset");
 
         // Epsilon: hard-hit threshold for the raymarcher (d <= epsilon → full shadow).
         // The hi-res SDF uses high softness for penumbra, so the explicit epsilon only
@@ -27,11 +27,11 @@ namespace Lotec.Lighting {
         [field: SerializeField] public float Softness { get; set; } = 13.0f;
 
         public void ApplyShaderGlobals(float voxelSize) {
-            Shader.SetGlobalInt(sShadowMaxSteps, MaxSteps);
-            Shader.SetGlobalFloat(sShadowSoftness, Softness);
-            Shader.SetGlobalFloat(sShadowEpsilon, voxelSize * EpsilonScale);
-            Shader.SetGlobalFloat(sShadowMinStep, voxelSize * MinStepScale);
-            Shader.SetGlobalFloat(sShadowStartOffset, voxelSize * StartOffsetScale);
+            Shader.SetGlobalInt(sMaxSteps, MaxSteps);
+            Shader.SetGlobalFloat(sSoftness, Softness);
+            Shader.SetGlobalFloat(sEpsilon, voxelSize * EpsilonScale);
+            Shader.SetGlobalFloat(sMinStep, voxelSize * MinStepScale);
+            Shader.SetGlobalFloat(sStartOffset, voxelSize * StartOffsetScale);
         }
     }
 }

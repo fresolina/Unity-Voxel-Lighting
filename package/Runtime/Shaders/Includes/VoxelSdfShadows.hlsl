@@ -16,11 +16,11 @@ float3 _SdfBoundsSize;
 float3 _VoxelResolution; // resolution of the bitmask voxel grid (set from C# as float vector)
 float3 _InverseVoxelSize; // inverse of voxel size in world units (set from C#)
 
-float _SdfShadowEpsilon;
-float _SdfShadowMinStep;
-float _SdfShadowStartOffset;
-int _SdfShadowMaxSteps;
-half _SdfShadowSoftness;
+float _RaymarchEpsilon;
+float _RaymarchMinStep;
+float _RaymarchStartOffset;
+int _RaymarchMaxSteps;
+float _RaymarchSoftness;
 
 inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
 {
@@ -32,13 +32,13 @@ inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
 // Returns 0..1: fully shadowed to fully lit..
 inline float GetShadowFromSdf(float3 dir, float3 worldPos, float startOffset, float maxDistance)
 {
-    half lit = RayMarchTex3D(_SdfTex, sampler_SdfTex, worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, startOffset, maxDistance, _SdfShadowEpsilon, _SdfShadowMinStep, _SdfShadowMaxSteps, _SdfShadowSoftness);
+    half lit = RayMarchTex3D(_SdfTex, sampler_SdfTex, worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, startOffset, maxDistance, _RaymarchEpsilon, _RaymarchMinStep, _RaymarchMaxSteps, _RaymarchSoftness);
     return lit;
 }
 
 inline float GetShadowFromSdf(float3 dir, float3 worldPos, float maxDistance)
 {
-    float startOffset = min(_SdfShadowStartOffset, maxDistance * 0.5);
+    float startOffset = min(_RaymarchStartOffset, maxDistance * 0.5);
     return GetShadowFromSdf(dir, worldPos, startOffset, maxDistance);
 }
 

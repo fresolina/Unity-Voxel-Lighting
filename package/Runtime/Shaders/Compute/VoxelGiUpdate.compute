@@ -14,6 +14,31 @@
 #define MAX_SDF_DIST 1.0e+10
 
 #include "../Includes/Volume.hlsl"
+#include "../Includes/Raymarch.hlsl"
+
+// --- GI RAYMARCHING ---
+// EPSILON: hit threshold for SDF raymarching. Scales with voxel size so it
+// automatically adapts when resolution changes. 0.25 * voxelSize covers the
+// worst-case trilinear deviation for a one-voxel-thick wall.
+// RAYMARCH_MIN_STEP: minimum step to avoid micro-stepping near surfaces.
+#define EPSILON (_VoxelSize.x * 0.25)
+#define RAYMARCH_MIN_STEP (_VoxelSize.x * 0.0625)
+
+int _RaymarchMaxSteps;
+float _RaymarchSoftness;
+
+float ComputeRaymarchStartOffset(float dist)
+{
+    return max(0.0, (EPSILON + RAYMARCH_MIN_STEP) - dist);
+}
+
+float RaymarchSDF(float3 voxelCenter, float3 rayDir, float maxDistance, out float3 hitPos) {
+    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, 0, maxDistance, EPSILON, RAYMARCH_MIN_STEP, _RaymarchMaxSteps, _RaymarchSoftness, hitPos);
+}
+
+float RaymarchSDF(float3 voxelCenter, float3 rayDir, float startOffset, float maxDistance, out float3 hitPos) {
+    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, startOffset, maxDistance, EPSILON, RAYMARCH_MIN_STEP, _RaymarchMaxSteps, _RaymarchSoftness, hitPos);
+}
 
 // --- RESOURCES ---
 

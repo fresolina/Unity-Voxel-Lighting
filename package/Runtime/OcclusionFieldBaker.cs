@@ -35,13 +35,13 @@ namespace Lotec.Lighting {
         static readonly int s_boundsMin = Shader.PropertyToID("_BoundsMin");
         static readonly int s_boundsSize = Shader.PropertyToID("_BoundsSize");
         static readonly int s_resolution = Shader.PropertyToID("_Resolution");
-        static readonly int s_shadowSoftness = Shader.PropertyToID("_ShadowSoftness");
+        static readonly int s_raymarchSoftness = Shader.PropertyToID("_RaymarchSoftness");
         static readonly int s_directionOffset = Shader.PropertyToID("_DirectionOffset");
         static readonly int s_outOcclusion = Shader.PropertyToID("_OutOcclusion");
         static readonly int s_fibonacciDirs = Shader.PropertyToID("_FibonacciDirs");
-        static readonly int s_sdfMaxSteps = Shader.PropertyToID("_SdfMaxSteps");
-        static readonly int s_sdfMinStep = Shader.PropertyToID("_SdfMinStep");
-        static readonly int s_sdfThicknessTol = Shader.PropertyToID("_SdfThicknessTol");
+        static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
+        static readonly int s_raymarchMinStep = Shader.PropertyToID("_RaymarchMinStep");
+        static readonly int s_raymarchEpsilon = Shader.PropertyToID("_RaymarchEpsilon");
         static readonly int s_sdfTex = Shader.PropertyToID("_SdfTex");
 
         static GraphicsFormat GetOcclusionFieldFormat() {
@@ -136,10 +136,10 @@ namespace Lotec.Lighting {
             occlusionFieldBakeCompute.SetVector(s_boundsMin, bounds.min);
             occlusionFieldBakeCompute.SetVector(s_boundsSize, bounds.size);
             occlusionFieldBakeCompute.SetInts(s_resolution, resolution.x, resolution.y, resolution.z);
-            occlusionFieldBakeCompute.SetFloat(s_shadowSoftness, shadowSoftness);
-            occlusionFieldBakeCompute.SetInt(s_sdfMaxSteps, 256);
-            occlusionFieldBakeCompute.SetFloat(s_sdfMinStep, voxelDiag * 0.01f);
-            occlusionFieldBakeCompute.SetFloat(s_sdfThicknessTol, voxelDiag * 0.02f);
+            occlusionFieldBakeCompute.SetFloat(s_raymarchSoftness, shadowSoftness);
+            occlusionFieldBakeCompute.SetInt(s_raymarchMaxSteps, 256);
+            occlusionFieldBakeCompute.SetFloat(s_raymarchMinStep, voxelDiag * 0.01f);
+            occlusionFieldBakeCompute.SetFloat(s_raymarchEpsilon, voxelDiag * 0.02f);
 
             uint groupX = (uint)Mathf.CeilToInt(resolution.x / 8f);
             uint groupY = (uint)Mathf.CeilToInt(resolution.y / 8f);

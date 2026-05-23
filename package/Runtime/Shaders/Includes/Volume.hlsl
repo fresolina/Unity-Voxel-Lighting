@@ -1,49 +1,9 @@
- // Global shader variables used by all fields.
-//
-// EPSILON: hit threshold for SDF raymarching (RayMarchTex3D treats d <= EPSILON
-// as a surface hit and returns full occlusion).
-//
-// Why we need a non-trivial epsilon at all:
-//   The discrete SDF is reconstructed by trilinear filtering, which rounds off
-//   sharp features. A ray that grazes a thin wall can stay above d == 0 for
-//   the entire traversal even though geometrically it should have hit. With
-//   epsilon = 0 we would get pinhole light leaks through walls that are only
-//   one or two voxels thick. A positive epsilon converts those near-misses
-//   into hits and seals the wall.
-//
-// Trade-offs:
-//   * Too small  -> light leaks through thin walls / acute corners.
-//   * Too large  -> shadow acne; rays self-occlude when started near a surface
-//                   unless their startOffset clears the epsilon shell around
-//                   the originating voxel.
-//   * Effectively a per-step bias, so it is independent of step size; the
-//                   raymarcher's softness term scales with d/t, not with d - eps.
-//
-// Where the value matters:
-//   * Direct light visibility from CSComputeRadiance (sun/point/spot).
-//   * Path-traced bounce visibility in CSComputeIrradiancePathTracing.
-//   * Anything else that calls RaymarchSDF in this volume.
-// The fragment-side shadow shader (VoxelSdfShadows.hlsl) uses its own
-// _SdfShadowEpsilon supplied from C# so it can be tuned independently.
-//
-// Choosing a value:
-//   The minimum safe epsilon is roughly the largest amount the trilinearly
-//   reconstructed SDF can deviate from the true distance near a thin feature.
-//   This scales with voxel size: 0.25 * voxelSize covers the worst-case
-//   trilinear deviation for a one-voxel-thick wall.
-//
-// _VoxelSize is set per-dispatch by GiFieldUpdater to the low-res SDF voxel
-// size, so these macros automatically adapt when voxel size changes.
-#define EPSILON (_VoxelSize.x * 0.25)
-#define RAYMARCH_MIN_STEP (_VoxelSize.x * 0.0625)
-
-#include "Raymarch.hlsl"
+#ifndef LOTEC_VOLUME_INCLUDED
+#define LOTEC_VOLUME_INCLUDED
 
 float3 _VolumePosition;
 float3 _VolumeSize;
 float3 _VoxelSize;
-int _RaymarchMaxSteps;
-float _RaymarchSoftness;
 Texture3D<float> _DistanceField;
 SamplerState linearClampSampler;
 SamplerState pointClampSampler;
@@ -72,20 +32,4 @@ float3 GetNormalFromSDF(float3 pos) {
     );
 }
 
-// RayMarchTex3D treats d <= EPSILON as a hit. Starting exactly EPSILON away is
-// therefore still ambiguous because equality self-hits. The extra min-step
-// clearance guarantees the first sampled point is just outside the epsilon shell
-// in the common case where the ray is moving away from the surface.
-float ComputeRaymarchStartOffset(float dist)
-{
-    return max(0.0, (EPSILON + RAYMARCH_MIN_STEP) - dist);
-}
-
-float RaymarchSDF(float3 voxelCenter, float3 rayDir, float maxDistance, out float3 hitPos) {
-    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, 0, maxDistance, EPSILON, RAYMARCH_MIN_STEP, _RaymarchMaxSteps, _RaymarchSoftness, hitPos);
-}
-
-// Overload with explicit startOffset (bias to avoid self-occlusion at near-surface voxels).
-float RaymarchSDF(float3 voxelCenter, float3 rayDir, float startOffset, float maxDistance, out float3 hitPos) {
-    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, startOffset, maxDistance, EPSILON, RAYMARCH_MIN_STEP, _RaymarchMaxSteps, _RaymarchSoftness, hitPos);
-}
+#endif // LOTEC_VOLUME_INCLUDED
