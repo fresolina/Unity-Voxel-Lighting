@@ -36,14 +36,14 @@
 // size, so these macros automatically adapt when voxel size changes.
 #define EPSILON (_VoxelSize.x * 0.25)
 #define RAYMARCH_MIN_STEP (_VoxelSize.x * 0.0625)
-#define RAYMARCH_MAX_STEPS 64
-#define RAYMARCH_SOFTNESS 0.5
 
 #include "Raymarch.hlsl"
 
 float3 _VolumePosition;
 float3 _VolumeSize;
 float3 _VoxelSize;
+int _RaymarchMaxSteps;
+float _RaymarchSoftness;
 Texture3D<float> _DistanceField;
 SamplerState linearClampSampler;
 SamplerState pointClampSampler;
@@ -82,10 +82,10 @@ float ComputeRaymarchStartOffset(float dist)
 }
 
 float RaymarchSDF(float3 voxelCenter, float3 rayDir, float maxDistance, out float3 hitPos) {
-    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, 0, maxDistance, EPSILON, RAYMARCH_MIN_STEP, RAYMARCH_MAX_STEPS, RAYMARCH_SOFTNESS, hitPos);
+    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, 0, maxDistance, EPSILON, RAYMARCH_MIN_STEP, _RaymarchMaxSteps, _RaymarchSoftness, hitPos);
 }
 
 // Overload with explicit startOffset (bias to avoid self-occlusion at near-surface voxels).
 float RaymarchSDF(float3 voxelCenter, float3 rayDir, float startOffset, float maxDistance, out float3 hitPos) {
-    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, startOffset, maxDistance, EPSILON, RAYMARCH_MIN_STEP, RAYMARCH_MAX_STEPS, RAYMARCH_SOFTNESS, hitPos);
+    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, startOffset, maxDistance, EPSILON, RAYMARCH_MIN_STEP, _RaymarchMaxSteps, _RaymarchSoftness, hitPos);
 }

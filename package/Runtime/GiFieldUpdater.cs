@@ -51,6 +51,14 @@ namespace Lotec.Lighting {
         [Tooltip("LPV light retention per iteration. Injection uses (1 - decay).")]
         [SerializeField] float _lpvDecay = 0.97f;
 
+        [Header("GI Raymarching")]
+        [Tooltip("Maximum raymarch steps for GI visibility rays.")]
+        [Min(1)]
+        [SerializeField] int _raymarchMaxSteps = 64;
+        [Tooltip("Softness of GI shadow penumbra (lower = harder shadows).")]
+        [Min(0f)]
+        [SerializeField] float _raymarchSoftness = 0.5f;
+
         public enum LightingMethod {
             PathTracing = 0,
             LPV = 1,
@@ -126,6 +134,8 @@ namespace Lotec.Lighting {
         static readonly int s_cameraPosition = Shader.PropertyToID("_CameraPosition");
         static readonly int s_cameraForward = Shader.PropertyToID("_CameraForward");
         static readonly int s_luminanceRadius = Shader.PropertyToID("_LuminanceRadius");
+        static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
+        static readonly int s_raymarchSoftness = Shader.PropertyToID("_RaymarchSoftness");
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
         static readonly int s_exposure = Shader.PropertyToID("_Exposure");
@@ -555,6 +565,8 @@ namespace Lotec.Lighting {
             _giComputeShader.SetFloat(s_temporalBlendWeight, 4.6f / Mathf.Max(_maxSamples, 1));
             _giComputeShader.SetInt(s_injectLpvSky, _lightingMethod == LightingMethod.LPV ? 1 : 0);
             _giComputeShader.SetFloat(s_lpvDecay, _lpvDecay);
+            _giComputeShader.SetInt(s_raymarchMaxSteps, _raymarchMaxSteps);
+            _giComputeShader.SetFloat(s_raymarchSoftness, _raymarchSoftness);
 
             // Dispatch (8x8x8 threads per group)
             int groupsX = Mathf.CeilToInt(_radianceTextureResolution.x / 8.0f);
