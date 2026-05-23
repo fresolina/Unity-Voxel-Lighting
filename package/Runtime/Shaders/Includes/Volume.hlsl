@@ -29,16 +29,13 @@
 // Choosing a value:
 //   The minimum safe epsilon is roughly the largest amount the trilinearly
 //   reconstructed SDF can deviate from the true distance near a thin feature.
-//   That depends on wall thickness and voxel size:
-//     Wall thickness 0.2, voxel size 0.16 -> 0.04
-//     Wall thickness 0.5, voxel size 0.16 -> 0.02
-//   When raising EPSILON, raise the startOffset in the radiance/irradiance
-//   passes by the same amount so near-surface voxels are not self-occluded.
+//   This scales with voxel size: 0.25 * voxelSize covers the worst-case
+//   trilinear deviation for a one-voxel-thick wall.
 //
-// TODO: Calculate and set this from C# side automatically based on the
-//       smallest wall thickness in the scene and the current voxel size.
-#define EPSILON 0.04
-#define RAYMARCH_MIN_STEP 0.01
+// _VoxelSize is set per-dispatch by GiFieldUpdater to the low-res SDF voxel
+// size, so these macros automatically adapt when voxel size changes.
+#define EPSILON (_VoxelSize.x * 0.25)
+#define RAYMARCH_MIN_STEP (_VoxelSize.x * 0.0625)
 #define RAYMARCH_MAX_STEPS 64
 #define RAYMARCH_SOFTNESS 0.5
 

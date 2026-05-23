@@ -88,8 +88,8 @@ namespace Lotec.Lighting {
             ApplyShadowModeKeywords();
             if (_volume != null) {
                 _volume.ApplyShaderGlobals();
+                _sdfShadow.ApplyShaderGlobals(_volume.VoxelSize);
             }
-            _sdfShadow.ApplyShaderGlobals();
             _sdfAo.ApplyShaderGlobals();
         }
 

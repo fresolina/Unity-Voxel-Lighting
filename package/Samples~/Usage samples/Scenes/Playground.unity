@@ -2749,11 +2749,8 @@ MonoBehaviour:
   - {fileID: 333063937}
   _shadowMode: 0
   _sdfShadow:
-    <MaxSteps>k__BackingField: 64
-    <Epsilon>k__BackingField: 0.001
-    <Softness>k__BackingField: 13
-    <MinStep>k__BackingField: 0.06
-    <StartOffset>k__BackingField: 0.06
+    <MaxSteps>k__BackingField: 32
+    <Softness>k__BackingField: 20
   _sdfAo:
     <Step>k__BackingField: 0.08
     <Intensity>k__BackingField: 1.95
