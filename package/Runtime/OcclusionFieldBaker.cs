@@ -46,8 +46,8 @@ namespace Lotec.Lighting {
 
         static GraphicsFormat GetOcclusionFieldFormat() {
 #if UNITY_EDITOR
-            if (UnityEditor.EditorUserBuildSettings.activeBuildTarget == UnityEditor.BuildTarget.Android)
-                return GraphicsFormat.R4G4B4A4_UNormPack16;
+            // if (UnityEditor.EditorUserBuildSettings.activeBuildTarget == UnityEditor.BuildTarget.Android)
+            //     return GraphicsFormat.R4G4B4A4_UNormPack16;
 #endif
             return GraphicsFormat.R8G8B8A8_UNorm;
         }
