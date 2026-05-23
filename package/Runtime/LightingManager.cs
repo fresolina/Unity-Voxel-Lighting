@@ -24,7 +24,7 @@ namespace Lotec.Lighting {
         // Keep in sync with MAX_POINT_LIGHTS and MAX_SPOT_LIGHTS in VoxelGiUpdate.compute.
         internal const int MaxPointLights = 4;
         internal const int MaxSpotLights = 4;
-        public enum ShadowMode { SDF = 0, BitmaskPoint = 1, Bitmask8Tap = 4, OcclusionField = 5 }
+        public enum ShadowModeType { SDF = 0, BitmaskPoint = 1, Bitmask8Tap = 4, OcclusionField = 5 }
 
         [Header("Source")]
         [SerializeField] LightingVolume _volume;
@@ -35,7 +35,7 @@ namespace Lotec.Lighting {
         [SerializeField] List<Light> _additionalLights = new List<Light>();
 
         [Header("Shadows")]
-        [SerializeField] ShadowMode _shadowMode = ShadowMode.SDF;
+        [SerializeField] ShadowModeType _shadowMode = ShadowModeType.SDF;
         [SerializeField] SdfShadowConfig _sdfShadow = new SdfShadowConfig();
 
         [Header("Ambient Occlusion")]
@@ -43,7 +43,16 @@ namespace Lotec.Lighting {
 
         [SerializeField] bool _updateInEditor = true;
 
-
+        public ShadowModeType ShadowMode {
+            get => _shadowMode;
+            set {
+                if (_shadowMode != value) {
+                    _shadowMode = value;
+                    ApplyShadowModeKeywords();
+                }
+            }
+        }
+        public SdfShadowConfig SdfShadow => _sdfShadow;
         public LightingVolume Volume => _volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
         public IReadOnlyList<Light> AdditionalLights => _additionalLights;
@@ -110,25 +119,25 @@ namespace Lotec.Lighting {
 
         void ApplyShadowModeKeywords() {
             switch (_shadowMode) {
-                case ShadowMode.SDF:
+                case ShadowModeType.SDF:
                     Shader.EnableKeyword("SDF_ONLY");
                     Shader.DisableKeyword("BITMASK_POINT");
                     Shader.DisableKeyword("BITMASK_8TAP");
                     Shader.DisableKeyword("OCC_FIELD");
                     break;
-                case ShadowMode.BitmaskPoint:
+                case ShadowModeType.BitmaskPoint:
                     Shader.DisableKeyword("SDF_ONLY");
                     Shader.EnableKeyword("BITMASK_POINT");
                     Shader.DisableKeyword("BITMASK_8TAP");
                     Shader.DisableKeyword("OCC_FIELD");
                     break;
-                case ShadowMode.Bitmask8Tap:
+                case ShadowModeType.Bitmask8Tap:
                     Shader.DisableKeyword("SDF_ONLY");
                     Shader.DisableKeyword("BITMASK_POINT");
                     Shader.EnableKeyword("BITMASK_8TAP");
                     Shader.DisableKeyword("OCC_FIELD");
                     break;
-                case ShadowMode.OcclusionField:
+                case ShadowModeType.OcclusionField:
                     Shader.DisableKeyword("SDF_ONLY");
                     Shader.DisableKeyword("BITMASK_POINT");
                     Shader.DisableKeyword("BITMASK_8TAP");
