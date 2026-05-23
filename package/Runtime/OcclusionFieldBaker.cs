@@ -113,8 +113,8 @@ namespace Lotec.Lighting {
             }
 
             GraphicsFormat textureFormat = GetOcclusionFieldFormat();
-            if (textureFormat == GraphicsFormat.None) {
-                error = "OcclusionFieldBaker: no filterable RGBA texture format supported (requires R4G4B4A4 or RGBA8)";
+            if (!SystemInfo.IsFormatSupported(textureFormat, GraphicsFormatUsage.Sample)) {
+                error = $"OcclusionFieldBaker: format {textureFormat} not supported for sampling on this platform";
                 return false;
             }
 
