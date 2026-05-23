@@ -61,8 +61,16 @@ RayMarchResult RayMarchTex3DSdf(
     }
 
     if (result.lit > 0.0) {
-        result.hitPos = worldPos + dir * min(t, maxDistance);
-        result.lit = saturate(result.lit);
+        if (t <= maxDistance) {
+            // Ran out of steps before the ray reached maxDistance. The path
+            // has not been verified clear, so conservatively treat it as
+            // occluded to avoid light leaking through complex geometry.
+            result.hitPos = worldPos + dir * t;
+            result.lit = 0.0;
+        } else {
+            result.hitPos = worldPos + dir * min(t, maxDistance);
+            result.lit = saturate(result.lit);
+        }
     }
     return result;
 }

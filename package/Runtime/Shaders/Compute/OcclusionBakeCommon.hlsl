@@ -16,9 +16,9 @@ float3 _BoundsSize;
 uint3 _Resolution;
 
 // SDF raymarching parameters
-int _SdfMaxSteps;
-float _SdfMinStep;
-float _SdfThicknessTol;
+int _RaymarchMaxSteps;
+float _RaymarchMinStep;
+float _RaymarchEpsilon;
 
 // Fibonacci directions uploaded from C# (float3 per direction)
 StructuredBuffer<float3> _FibonacciDirs;
@@ -33,7 +33,7 @@ inline void ComputeVoxelParams(
     float3 voxelSize = _BoundsSize / float3(_Resolution);
     voxelCenter = _BoundsMin + (float3(id) + 0.5) * voxelSize;
     float voxelDiag = length(voxelSize);
-    originBias = max(_SdfMinStep * 0.5, voxelDiag * 0.01);
+    originBias = max(_RaymarchMinStep * 0.5, voxelDiag * 0.01);
     maxDistance = length(_BoundsSize);
 }
 

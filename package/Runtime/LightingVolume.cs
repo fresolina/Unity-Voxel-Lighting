@@ -46,6 +46,9 @@ namespace Lotec.Lighting {
         Vector3 _voxelSize;
         OcclusionFieldQuery _occlusionFieldQuery;
 
+        /// <summary>Cubic voxel edge length in world units, derived from Bounds and TrimmedMaxResolution.</summary>
+        public float VoxelSize => Bounds.size.x / Mathf.Max(1, TrimmedMaxResolution.x);
+
         public Transform BakeRoot { get => _root; set => _root = value; }
 
         void OnValidate() {

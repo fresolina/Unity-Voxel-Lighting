@@ -30,9 +30,9 @@ namespace Lotec.Lighting {
         static readonly int s_resolution = Shader.PropertyToID("_Resolution");
         static readonly int s_outBitmask = Shader.PropertyToID("_OutBitmask");
         static readonly int s_sdfTex = Shader.PropertyToID("_SdfTex");
-        static readonly int s_sdfMaxSteps = Shader.PropertyToID("_SdfMaxSteps");
-        static readonly int s_sdfMinStep = Shader.PropertyToID("_SdfMinStep");
-        static readonly int s_sdfThicknessTol = Shader.PropertyToID("_SdfThicknessTol");
+        static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
+        static readonly int s_raymarchMinStep = Shader.PropertyToID("_RaymarchMinStep");
+        static readonly int s_raymarchEpsilon = Shader.PropertyToID("_RaymarchEpsilon");
         static readonly int s_fibonacciDirs = Shader.PropertyToID("_FibonacciDirs");
         static readonly int s_bitmaskDirCount = Shader.PropertyToID("_BitmaskDirCount");
 
@@ -94,9 +94,9 @@ namespace Lotec.Lighting {
             float voxelDiag = voxelSize.magnitude;
 
             bitmaskBakeCompute.SetTexture(kernelIdx, s_sdfTex, sourceVolume.sdfHiresTexture);
-            bitmaskBakeCompute.SetInt(s_sdfMaxSteps, 256);
-            bitmaskBakeCompute.SetFloat(s_sdfMinStep, voxelDiag * 0.01f);
-            bitmaskBakeCompute.SetFloat(s_sdfThicknessTol, voxelDiag * 0.02f);
+            bitmaskBakeCompute.SetInt(s_raymarchMaxSteps, 256);
+            bitmaskBakeCompute.SetFloat(s_raymarchMinStep, voxelDiag * 0.01f);
+            bitmaskBakeCompute.SetFloat(s_raymarchEpsilon, voxelDiag * 0.02f);
             bitmaskBakeCompute.SetVector(s_boundsMin, bounds.min);
             bitmaskBakeCompute.SetVector(s_boundsSize, bounds.size);
             bitmaskBakeCompute.SetInts(s_resolution, resolution.x, resolution.y, resolution.z);
