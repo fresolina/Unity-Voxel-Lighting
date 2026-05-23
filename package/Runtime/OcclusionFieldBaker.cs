@@ -46,8 +46,8 @@ namespace Lotec.Lighting {
 
         static GraphicsFormat GetOcclusionFieldFormat() {
 #if UNITY_EDITOR
-            if (UnityEditor.EditorUserBuildSettings.activeBuildTarget == UnityEditor.BuildTarget.Android)
-                return GraphicsFormat.R4G4B4A4_UNormPack16;
+            // if (UnityEditor.EditorUserBuildSettings.activeBuildTarget == UnityEditor.BuildTarget.Android)
+            //     return GraphicsFormat.R4G4B4A4_UNormPack16;
 #endif
             return GraphicsFormat.R8G8B8A8_UNorm;
         }
@@ -113,8 +113,8 @@ namespace Lotec.Lighting {
             }
 
             GraphicsFormat textureFormat = GetOcclusionFieldFormat();
-            if (textureFormat == GraphicsFormat.None) {
-                error = "OcclusionFieldBaker: no filterable RGBA texture format supported (requires R4G4B4A4 or RGBA8)";
+            if (!SystemInfo.IsFormatSupported(textureFormat, GraphicsFormatUsage.Sample)) {
+                error = $"OcclusionFieldBaker: format {textureFormat} not supported for sampling on this platform";
                 return false;
             }
 

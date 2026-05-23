@@ -12,13 +12,13 @@ namespace Lotec.Lighting {
         [field: Min(1)]
         [field: SerializeField] public int MaxSteps { get; set; } = 64;
         [field: Min(0.000001f)]
-        [field: SerializeField] public float Epsilon { get; set; } = 0.02f;
+        [field: SerializeField] public float Epsilon { get; set; } = 0.001f;
         [field: Min(1f)]
-        [field: SerializeField] public float Softness { get; set; } = 16.0f;
+        [field: SerializeField] public float Softness { get; set; } = 13.0f;
         [field: Min(0.000001f)]
-        [field: SerializeField] public float MinStep { get; set; } = 0.01f;
+        [field: SerializeField] public float MinStep { get; set; } = 0.06f;
         [field: Min(0f)]
-        [field: SerializeField] public float StartOffset { get; set; } = 0.02f;
+        [field: SerializeField] public float StartOffset { get; set; } = 0.06f;
 
         public void ApplyShaderGlobals() {
             Shader.SetGlobalInt(sShadowMaxSteps, MaxSteps);
