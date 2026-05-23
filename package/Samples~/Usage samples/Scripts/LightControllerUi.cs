@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
+using Unity.Profiling;
 using Unity.Properties;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -15,8 +16,8 @@ namespace Lotec.Lighting.Samples {
     public class LightControllerUi : MonoBehaviour, INotifyBindablePropertyChanged {
         const float OneSecondWindowDuration = 1f;
         const float TenSecondWindowDuration = 10f;
-        const float SecondsToMilliseconds = 1000f;
         const string UnavailableFrameTimeText = "--.-- ms";
+        const string CpuTotalFrameTimeCounterName = "CPU Total Frame Time";
 
         struct FrameTimeSample {
             public readonly float Timestamp;
@@ -37,6 +38,7 @@ namespace Lotec.Lighting.Samples {
         [SerializeField] int _sortingOrder = 1000;
 
         VisualElement _boundRoot;
+        readonly FrameTiming[] _frameTimings = new FrameTiming[1];
         readonly Queue<FrameTimeSample> _frameTimeSamples = new Queue<FrameTimeSample>();
         Label _frameTimeLastTenSecondsLowLabel;
         Label _frameTimeLastTenSecondsHighLabel;
@@ -45,6 +47,7 @@ namespace Lotec.Lighting.Samples {
         Label _frameTimeLastSecondHighLabel;
         Label _frameTimeLastSecondAverageLabel;
         Label _frameTimeLastFrameLabel;
+        ProfilerRecorder _frameTimingCollectionRecorder;
         bool _hasBindingSnapshot;
         string _frameTimeLastTenSecondsLowText = UnavailableFrameTimeText;
         string _frameTimeLastTenSecondsHighText = UnavailableFrameTimeText;
@@ -75,6 +78,8 @@ namespace Lotec.Lighting.Samples {
             EnsureLightController();
             EnsureDocument();
             ApplyDocumentAssets();
+            DisposeRecorder(ref _frameTimingCollectionRecorder);
+            _frameTimingCollectionRecorder = ProfilerRecorder.StartNew(ProfilerCategory.Render, CpuTotalFrameTimeCounterName);
             ResetFrameTimeStats();
             BindUi();
             RefreshUi(false);
@@ -87,6 +92,7 @@ namespace Lotec.Lighting.Samples {
 
             UnbindUi();
             ResetFrameTimeStats();
+            DisposeRecorder(ref _frameTimingCollectionRecorder);
             _hasBindingSnapshot = false;
         }
 
@@ -325,15 +331,36 @@ namespace Lotec.Lighting.Samples {
         }
 
         void UpdateFrameTimeStats() {
-            float frameTimeMilliseconds = Time.unscaledDeltaTime * SecondsToMilliseconds;
             float now = Time.unscaledTime;
 
-            _frameTimeSamples.Enqueue(new FrameTimeSample(now, frameTimeMilliseconds));
-            TrimFrameTimeSamples(now);
+            if (TryGetMeasuredFrameTimeMilliseconds(out float frameTimeMilliseconds)) {
+                _frameTimeSamples.Enqueue(new FrameTimeSample(now, frameTimeMilliseconds));
+                _frameTimeLastFrameText = FormatFrameTime(frameTimeMilliseconds);
+            } else {
+                _frameTimeLastFrameText = UnavailableFrameTimeText;
+            }
 
-            _frameTimeLastFrameText = FormatFrameTime(frameTimeMilliseconds);
+            TrimFrameTimeSamples(now);
             UpdateFrameTimeWindowTexts(now - OneSecondWindowDuration, out _frameTimeLastSecondLowText, out _frameTimeLastSecondHighText, out _frameTimeLastSecondAverageText);
             UpdateFrameTimeWindowTexts(now - TenSecondWindowDuration, out _frameTimeLastTenSecondsLowText, out _frameTimeLastTenSecondsHighText, out _frameTimeLastTenSecondsAverageText);
+        }
+
+        bool TryGetMeasuredFrameTimeMilliseconds(out float frameTimeMilliseconds) {
+            frameTimeMilliseconds = 0f;
+
+            FrameTimingManager.CaptureFrameTimings();
+            if (FrameTimingManager.GetLatestTimings((uint)_frameTimings.Length, _frameTimings) == 0) {
+                return false;
+            }
+
+            FrameTiming frameTiming = _frameTimings[0];
+            double workTimeMilliseconds = frameTiming.cpuFrameTime - frameTiming.cpuMainThreadPresentWaitTime;
+            if (workTimeMilliseconds <= 0d) {
+                return false;
+            }
+
+            frameTimeMilliseconds = (float)workTimeMilliseconds;
+            return true;
         }
 
         void TrimFrameTimeSamples(float now) {
@@ -462,6 +489,15 @@ namespace Lotec.Lighting.Samples {
 
         static string FormatFrameTime(float milliseconds) {
             return $"{milliseconds:0.00} ms";
+        }
+
+        static void DisposeRecorder(ref ProfilerRecorder recorder) {
+            if (!recorder.Valid) {
+                return;
+            }
+
+            recorder.Dispose();
+            recorder = default;
         }
 
         void NotifyBindingChanged([CallerMemberName] string propertyName = "") {
