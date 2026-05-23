@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.3.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.2.0...v1.3.0) (2026-05-23)
+
+
+### Features
+
+* Add debug frame times to UI ([#44](https://github.com/fresolina/Unity-Voxel-Lighting/issues/44)) ([6bd8d6c](https://github.com/fresolina/Unity-Voxel-Lighting/commit/6bd8d6ce7daa2baf2163256daf42fc33176742c7))
+* additional lights ([5ac1c74](https://github.com/fresolina/Unity-Voxel-Lighting/commit/5ac1c7472a1947f6cb1ce2890df72657a4219b10))
+* improve path tracing GI ([#40](https://github.com/fresolina/Unity-Voxel-Lighting/issues/40)) ([fd2294e](https://github.com/fresolina/Unity-Voxel-Lighting/commit/fd2294e86fff7ead537450921538f17c6ea0917f))
+* occlusion field 2 ([880041f](https://github.com/fresolina/Unity-Voxel-Lighting/commit/880041ff404f254bf616a7e658ad9825c0a57b7c))
+* Runtime system control UI ([44336bb](https://github.com/fresolina/Unity-Voxel-Lighting/commit/44336bbed1dde264a3281731b316855f0ea5a59e))
+
+
+### Bug Fixes
+
+* frame time not accurate, says 16.7 when locked to 60 ([fd03616](https://github.com/fresolina/Unity-Voxel-Lighting/commit/fd0361603fbdc7d04fabf44d52b5470a2825bf22))
+* frame timings were too high on locked fps ([3919690](https://github.com/fresolina/Unity-Voxel-Lighting/commit/3919690bf434a8fe2fc139b4186a5514a85a460a))
+* improve point and spot light handling in voxel lighting system ([#38](https://github.com/fresolina/Unity-Voxel-Lighting/issues/38)) ([4d09011](https://github.com/fresolina/Unity-Voxel-Lighting/commit/4d09011dea566c657f39b66cd64318572b289621))
+* main should be part of preview builds ([#46](https://github.com/fresolina/Unity-Voxel-Lighting/issues/46)) ([02776ca](https://github.com/fresolina/Unity-Voxel-Lighting/commit/02776caf41e215c4d1ca0889b8c8ed7d8ff45aea))
+* Move samples scripts ([3ea15c6](https://github.com/fresolina/Unity-Voxel-Lighting/commit/3ea15c60c7cbed71f1b0955de440be15631839d9))
+* Remove _Samples from git ([e6bfaac](https://github.com/fresolina/Unity-Voxel-Lighting/commit/e6bfaacd0f159aeb6d76cd70d09c555cc52916a2))
+
 ## [1.2.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.1.0...v1.2.0) (2026-04-04)
 
 
