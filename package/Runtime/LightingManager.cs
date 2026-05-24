@@ -28,7 +28,12 @@ namespace Lotec.Lighting {
 
         [Header("Source")]
         [SerializeField] LightingVolume _volume;
+        [Tooltip("Automatically activate the volume closest to the main camera.")]
+        [SerializeField] bool _autoSwitchToClosestVolume;
         [SerializeField] GiFieldUpdater _giUpdater;
+
+        readonly List<LightingVolume> _registeredVolumes = new List<LightingVolume>();
+        LightingVolume _activeVolume;
 
         [Header("Additional Lights")]
         [Tooltip("Extra runtime GI lights. The first 4 supported point lights and the first 4 supported spot lights are injected.")]
@@ -53,13 +58,38 @@ namespace Lotec.Lighting {
             }
         }
         public SdfShadowConfig SdfShadow => _sdfShadow;
-        public LightingVolume Volume => _volume;
+        /// <summary>The currently active volume. Returns the runtime override if set, otherwise the serialized default.</summary>
+        public LightingVolume Volume => _activeVolume != null ? _activeVolume : _volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
+        /// <summary>All registered volumes in the scene.</summary>
+        public IReadOnlyList<LightingVolume> Volumes => _registeredVolumes;
         public IReadOnlyList<Light> AdditionalLights => _additionalLights;
         public GiFieldUpdater.LightingMethod LightingMethod => _giUpdater != null ? _giUpdater.GiLightingMethod : GiFieldUpdater.LightingMethod.PathTracing;
 
         void OnValidate() {
             EnsureFieldsAssigned();
+        }
+
+        /// <summary>
+        /// Switch the active lighting volume at runtime. Pass null to revert to the serialized default.
+        /// Releases GI buffers and resets lighting history for a clean transition.
+        /// </summary>
+        public void SetActiveVolume(LightingVolume volume) {
+            if (_activeVolume == volume) return;
+            _activeVolume = volume;
+            EnsureFieldsAssigned();
+            ApplyShaderGlobals();
+        }
+
+        internal void RegisterVolume(LightingVolume volume) {
+            if (volume != null && !_registeredVolumes.Contains(volume))
+                _registeredVolumes.Add(volume);
+        }
+
+        internal void UnregisterVolume(LightingVolume volume) {
+            _registeredVolumes.Remove(volume);
+            if (_activeVolume == volume)
+                _activeVolume = null;
         }
 
         public bool ToggleLightingMethod() {
@@ -74,9 +104,6 @@ namespace Lotec.Lighting {
 
         void Awake() {
             Instance = this;
-            Debug.Log($"LightingManager Awake: Instance set. Volume assigned? {_volume != null} ({_volume?.gameObject?.name ?? "null"})", this);
-            EnsureFieldsAssigned();
-            ApplyShaderGlobals();
         }
 
         void OnEnable() {
@@ -86,9 +113,9 @@ namespace Lotec.Lighting {
 
         private void ApplyShaderGlobals() {
             ApplyShadowModeKeywords();
-            if (_volume != null) {
-                _volume.ApplyShaderGlobals();
-                _sdfShadow.ApplyShaderGlobals(_volume.VoxelSize);
+            if (Volume != null) {
+                Volume.ApplyShaderGlobals();
+                _sdfShadow.ApplyShaderGlobals(Volume.VoxelSize);
             }
             _sdfAo.ApplyShaderGlobals();
         }
@@ -96,6 +123,9 @@ namespace Lotec.Lighting {
         // Update is called once per frame
         void Update() {
             EnsureFieldsAssigned();
+            if (_autoSwitchToClosestVolume) {
+                SwitchToClosestVolume();
+            }
             if (Application.isPlaying || _updateInEditor) {
                 ApplyShaderGlobals();
             }
@@ -115,6 +145,29 @@ namespace Lotec.Lighting {
                 _giUpdater.Volume = Volume;
             }
 #endif
+        }
+
+        void SwitchToClosestVolume() {
+            Camera cam = Camera.main;
+            if (cam == null || _registeredVolumes.Count == 0) return;
+
+            Vector3 camPos = cam.transform.position;
+            LightingVolume closest = null;
+            float closestDist = float.MaxValue;
+
+            for (int i = 0; i < _registeredVolumes.Count; i++) {
+                LightingVolume vol = _registeredVolumes[i];
+                if (vol == null || vol.sdfHiresTexture == null) continue;
+
+                float dist = vol.Bounds.SqrDistance(camPos);
+                if (dist < closestDist) {
+                    closestDist = dist;
+                    closest = vol;
+                }
+            }
+
+            if (closest != null)
+                SetActiveVolume(closest);
         }
 
         void ApplyShadowModeKeywords() {

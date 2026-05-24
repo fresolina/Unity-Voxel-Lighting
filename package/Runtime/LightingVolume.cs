@@ -61,11 +61,20 @@ namespace Lotec.Lighting {
         }
 
         void OnEnable() {
+            LightingManager.Instance?.RegisterVolume(this);
             if (materialAlbedoIntensityTexture == null) {
                 Debug.LogWarning("LightingVolume: materialAlbedoIntensityTexture is null at runtime (scene reference may be unresolved).", this);
             } else {
                 Debug.Log($"LightingVolume: materialAlbedoIntensityTexture loaded: {materialAlbedoIntensityTexture.name}", this);
             }
+        }
+
+        void Start() {
+            LightingManager.Instance?.RegisterVolume(this);
+        }
+
+        void OnDisable() {
+            LightingManager.Instance?.UnregisterVolume(this);
         }
 
         public void RecomputeBoundsAndResolution() {

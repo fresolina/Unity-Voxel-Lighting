@@ -146,7 +146,16 @@ namespace Lotec.Lighting {
         public RenderTexture IrradianceBlurred => _irradianceFieldFinal;
         RenderTexture IrradianceRead => _isEvenFrame ? _irradianceFieldB : _irradianceFieldA;
 
-        public LightingVolume Volume { get; set; }
+        LightingVolume _volume;
+        public LightingVolume Volume {
+            get => _volume;
+            set {
+                if (_volume == value) return;
+                _volume = value;
+                ReleaseBuffers();
+                _hasLoggedMissingReferences = false;
+            }
+        }
 
         LightingManager Manager => LightingManager.Instance;
 

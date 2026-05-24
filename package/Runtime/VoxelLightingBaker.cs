@@ -19,7 +19,8 @@ namespace Lotec.Lighting {
         [HideInInspector][SerializeField] bool _hemisphereFlagsInitialized;
         [HideInInspector][SerializeField] bool _lastBitmaskHemisphereOnly;
         [HideInInspector][SerializeField] bool _lastOcclusionFieldHemisphereOnly;
-        public LightingVolume targetSdfVolume => _lightingManager.Volume;
+        [SerializeField] LightingVolume _targetVolume;
+        public LightingVolume targetSdfVolume => _targetVolume;
 
         LightingManager _lightingManager;
 
@@ -27,6 +28,8 @@ namespace Lotec.Lighting {
         void OnValidate() {
             if (_lightingManager == null)
                 _lightingManager = FindAnyObjectByType<LightingManager>();
+            if (_targetVolume == null && _lightingManager != null)
+                _targetVolume = _lightingManager.Volume;
 
             if (!_hemisphereFlagsInitialized) {
                 _lastBitmaskHemisphereOnly = _occlusionBitmaskBaker.hemisphereOnly;
@@ -38,7 +41,7 @@ namespace Lotec.Lighting {
             bool bitmaskChanged = _lastBitmaskHemisphereOnly != _occlusionBitmaskBaker.hemisphereOnly;
             bool fieldChanged = _lastOcclusionFieldHemisphereOnly != _occlusionFieldBaker.hemisphereOnly;
             if (bitmaskChanged || fieldChanged) {
-                var volume = _lightingManager != null ? _lightingManager.Volume : null;
+                var volume = _lightingManager != null ? _lightingManager.Volume : _targetVolume;
                 bool hasBitmaskBake = volume != null && volume.occlusionBitmaskTexture != null;
                 bool hasFieldBake = volume != null && volume.occlusionFieldTextures != null && volume.occlusionFieldTextures.Length > 0;
 
@@ -99,12 +102,13 @@ namespace Lotec.Lighting {
 #endif
 
         public void Bake() {
-            if (_lightingManager == null)
-                _lightingManager = FindAnyObjectByType<LightingManager>();
-            LightingVolume volume = _lightingManager.Volume;
+            Bake(_targetVolume);
+        }
+
+        public void Bake(LightingVolume volume) {
             string error;
             if (volume == null) {
-                Debug.LogError("Target SdfVolume is not assigned.", _lightingManager);
+                Debug.LogError("Target volume is not assigned.", this);
                 return;
             }
 
@@ -112,12 +116,12 @@ namespace Lotec.Lighting {
 
             // Bake SDF fields.
             if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution, volume.BakeRoot.name, out Texture3D bakedSdf, out error)) {
-                Debug.LogError("SDF Bake failed: " + error, _lightingManager);
+                Debug.LogError("SDF Bake failed: " + error, this);
                 return;
             }
             volume.sdfHiresTexture = bakedSdf;
             if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution / LowresDownscaleFactor, volume.BakeRoot.name + "_Lowres", out bakedSdf, out error)) {
-                Debug.LogError("SDF Bake failed: " + error, _lightingManager);
+                Debug.LogError("SDF Bake failed: " + error, this);
                 return;
             }
             volume.sdfLowresTexture = bakedSdf;
@@ -132,7 +136,7 @@ namespace Lotec.Lighting {
             // Bake occlusion field (per-direction lit values for hardware-interpolated shadows).
             if (_occlusionFieldBaker.occlusionFieldBakeCompute != null) {
                 if (!_occlusionFieldBaker.TryBake(volume, out Texture3D[] fieldTextures, out Vector3[] fieldDirections, out error)) {
-                    Debug.LogError("Occlusion Field Bake failed: " + error, _lightingManager);
+                    Debug.LogError("Occlusion Field Bake failed: " + error, this);
                     return;
                 }
                 volume.occlusionFieldTextures = fieldTextures;
@@ -147,7 +151,7 @@ namespace Lotec.Lighting {
             string matErr = _materialBaker.Bake(volume, out Texture3D bakedAlbedoIntensity, LowresDownscaleFactor);
             if (!string.IsNullOrEmpty(matErr)) {
                 error = "MaterialBaker failed: " + matErr;
-                Debug.LogError(error, _lightingManager);
+                Debug.LogError(error, this);
                 return;
             }
             volume.materialAlbedoIntensityTexture = bakedAlbedoIntensity;
