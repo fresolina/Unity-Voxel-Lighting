@@ -43,6 +43,10 @@ namespace Lotec.Lighting.Samples {
                 return;
             }
 
+            if (_keyboard.hKey.wasPressedThisFrame) {
+                LightControllerUi.ToggleVisibility();
+            }
+
             if (_keyboard.backquoteKey.wasPressedThisFrame) {
                 ToggleLightingMethod();
             }

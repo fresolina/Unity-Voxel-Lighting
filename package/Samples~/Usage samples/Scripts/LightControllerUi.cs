@@ -46,7 +46,6 @@ namespace Lotec.Lighting.Samples {
         Label _frameTimeLastSecondLowLabel;
         Label _frameTimeLastSecondHighLabel;
         Label _frameTimeLastSecondAverageLabel;
-        Label _frameTimeLastFrameLabel;
         ProfilerRecorder _frameTimingCollectionRecorder;
         bool _hasBindingSnapshot;
         string _frameTimeLastTenSecondsLowText = UnavailableFrameTimeText;
@@ -55,13 +54,22 @@ namespace Lotec.Lighting.Samples {
         string _frameTimeLastSecondLowText = UnavailableFrameTimeText;
         string _frameTimeLastSecondHighText = UnavailableFrameTimeText;
         string _frameTimeLastSecondAverageText = UnavailableFrameTimeText;
-        string _frameTimeLastFrameText = UnavailableFrameTimeText;
         GiFieldUpdater.LightingMethod _lastLightingMethod;
+        LightingManager.ShadowModeType _lastShadowMode;
         float _lastEnabledLightIntensity;
         bool _lastFlashlightEnabled;
         bool _lastCandleEnabled;
 
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
+
+        public static void ToggleVisibility() {
+            if (s_instance == null || s_instance._document == null || s_instance._document.rootVisualElement == null) {
+                return;
+            }
+
+            VisualElement root = s_instance._document.rootVisualElement;
+            root.visible = !root.visible;
+        }
 
         public event EventHandler<BindablePropertyChangedEventArgs> propertyChanged;
 
@@ -206,14 +214,24 @@ namespace Lotec.Lighting.Samples {
             FloatField enabledLightIntensityField = root.Q<FloatField>("enabled-light-intensity-field");
             Toggle flashlightToggle = root.Q<Toggle>("flashlight-toggle");
             Toggle candleToggle = root.Q<Toggle>("candle-toggle");
+            EnumField shadowModeField = root.Q<EnumField>("shadow-mode-enum");
 
-            if (giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || !TryCacheFrameTimeLabels(root)) {
+            if (giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
 
             _boundRoot = root;
             _boundRoot.dataSource = this;
+
+            // Apply stylesheet to panel root so it also covers dropdown popups.
+            if (root.styleSheets.count > 0) {
+                var panelRoot = root.panel.visualTree;
+                var sheet = root.styleSheets[0];
+                if (!panelRoot.styleSheets.Contains(sheet)) {
+                    panelRoot.styleSheets.Add(sheet);
+                }
+            }
         }
 
         bool TryCacheFrameTimeLabels(VisualElement root) {
@@ -223,15 +241,13 @@ namespace Lotec.Lighting.Samples {
             _frameTimeLastSecondLowLabel = root.Q<Label>("frame-time-last-second-low-value");
             _frameTimeLastSecondHighLabel = root.Q<Label>("frame-time-last-second-high-value");
             _frameTimeLastSecondAverageLabel = root.Q<Label>("frame-time-last-second-average-value");
-            _frameTimeLastFrameLabel = root.Q<Label>("frame-time-last-frame-value");
 
             return _frameTimeLastTenSecondsLowLabel != null
                 && _frameTimeLastTenSecondsHighLabel != null
                 && _frameTimeLastTenSecondsAverageLabel != null
                 && _frameTimeLastSecondLowLabel != null
                 && _frameTimeLastSecondHighLabel != null
-                && _frameTimeLastSecondAverageLabel != null
-                && _frameTimeLastFrameLabel != null;
+                && _frameTimeLastSecondAverageLabel != null;
         }
 
         void UnbindUi() {
@@ -240,6 +256,7 @@ namespace Lotec.Lighting.Samples {
                 _boundRoot.Q<FloatField>("enabled-light-intensity-field")?.ClearBindings();
                 _boundRoot.Q<Toggle>("flashlight-toggle")?.ClearBindings();
                 _boundRoot.Q<Toggle>("candle-toggle")?.ClearBindings();
+                _boundRoot.Q<EnumField>("shadow-mode-enum")?.ClearBindings();
                 _boundRoot.dataSource = null;
             }
 
@@ -249,7 +266,6 @@ namespace Lotec.Lighting.Samples {
             _frameTimeLastSecondLowLabel = null;
             _frameTimeLastSecondHighLabel = null;
             _frameTimeLastSecondAverageLabel = null;
-            _frameTimeLastFrameLabel = null;
             _boundRoot = null;
         }
 
@@ -314,6 +330,27 @@ namespace Lotec.Lighting.Samples {
             }
         }
 
+        [CreateProperty]
+        LightingManager.ShadowModeType ShadowMode {
+            get {
+                LightingManager manager = LightingManager.Instance;
+                if (manager == null) {
+                    return LightingManager.ShadowModeType.SDF;
+                }
+
+                return manager.ShadowMode;
+            }
+            set {
+                LightingManager manager = LightingManager.Instance;
+                if (manager == null) {
+                    return;
+                }
+
+                manager.ShadowMode = value;
+                RefreshUi(true);
+            }
+        }
+
         void RefreshUi(bool notifyChanges) {
             UpdateBindingSnapshot(notifyChanges);
             RefreshFrameTimeLabels();
@@ -327,7 +364,6 @@ namespace Lotec.Lighting.Samples {
             _frameTimeLastSecondLowText = UnavailableFrameTimeText;
             _frameTimeLastSecondHighText = UnavailableFrameTimeText;
             _frameTimeLastSecondAverageText = UnavailableFrameTimeText;
-            _frameTimeLastFrameText = UnavailableFrameTimeText;
         }
 
         void UpdateFrameTimeStats() {
@@ -335,9 +371,6 @@ namespace Lotec.Lighting.Samples {
 
             if (TryGetMeasuredFrameTimeMilliseconds(out float frameTimeMilliseconds)) {
                 _frameTimeSamples.Enqueue(new FrameTimeSample(now, frameTimeMilliseconds));
-                _frameTimeLastFrameText = FormatFrameTime(frameTimeMilliseconds);
-            } else {
-                _frameTimeLastFrameText = UnavailableFrameTimeText;
             }
 
             TrimFrameTimeSamples(now);
@@ -422,7 +455,6 @@ namespace Lotec.Lighting.Samples {
             UpdateLabelText(_frameTimeLastSecondLowLabel, _frameTimeLastSecondLowText);
             UpdateLabelText(_frameTimeLastSecondHighLabel, _frameTimeLastSecondHighText);
             UpdateLabelText(_frameTimeLastSecondAverageLabel, _frameTimeLastSecondAverageText);
-            UpdateLabelText(_frameTimeLastFrameLabel, _frameTimeLastFrameText);
         }
 
         void UpdateBindingSnapshot(bool notifyChanges) {
@@ -430,12 +462,14 @@ namespace Lotec.Lighting.Samples {
             float enabledLightIntensity = EnabledLightIntensity;
             bool flashlightEnabled = FlashlightEnabled;
             bool candleEnabled = CandleEnabled;
+            LightingManager.ShadowModeType shadowMode = ShadowMode;
 
             if (!_hasBindingSnapshot) {
                 _lastLightingMethod = lightingMethod;
                 _lastEnabledLightIntensity = enabledLightIntensity;
                 _lastFlashlightEnabled = flashlightEnabled;
                 _lastCandleEnabled = candleEnabled;
+                _lastShadowMode = shadowMode;
                 _hasBindingSnapshot = true;
                 return;
             }
@@ -444,6 +478,18 @@ namespace Lotec.Lighting.Samples {
             UpdateFloatSnapshot(ref _lastEnabledLightIntensity, enabledLightIntensity, notifyChanges, nameof(EnabledLightIntensity));
             UpdateBoolSnapshot(ref _lastFlashlightEnabled, flashlightEnabled, notifyChanges, nameof(FlashlightEnabled));
             UpdateBoolSnapshot(ref _lastCandleEnabled, candleEnabled, notifyChanges, nameof(CandleEnabled));
+            UpdateShadowModeSnapshot(ref _lastShadowMode, shadowMode, notifyChanges, nameof(ShadowMode));
+        }
+
+        void UpdateShadowModeSnapshot(ref LightingManager.ShadowModeType currentValue, LightingManager.ShadowModeType nextValue, bool notifyChanges, string propertyName) {
+            if (currentValue == nextValue) {
+                return;
+            }
+
+            currentValue = nextValue;
+            if (notifyChanges) {
+                NotifyBindingChanged(propertyName);
+            }
         }
 
         void UpdateLightingMethodSnapshot(ref GiFieldUpdater.LightingMethod currentValue, GiFieldUpdater.LightingMethod nextValue, bool notifyChanges, string propertyName) {

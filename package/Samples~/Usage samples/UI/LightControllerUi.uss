@@ -8,22 +8,10 @@
 
 .panel {
     width: 360px;
-    padding-top: 18px;
-    padding-right: 18px;
-    padding-bottom: 18px;
-    padding-left: 18px;
-    border-top-left-radius: 16px;
-    border-top-right-radius: 16px;
-    border-bottom-right-radius: 16px;
-    border-bottom-left-radius: 16px;
-    border-left-width: 1px;
-    border-right-width: 1px;
-    border-top-width: 1px;
-    border-bottom-width: 1px;
-    border-left-color: rgba(255, 255, 255, 0.12);
-    border-right-color: rgba(255, 255, 255, 0.12);
-    border-top-color: rgba(255, 255, 255, 0.12);
-    border-bottom-color: rgba(255, 255, 255, 0.12);
+    padding: 18px;
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.12);
     background-color: rgba(10, 16, 24, 0.9);
 }
 
@@ -38,10 +26,7 @@
     height: 3px;
     width: 100%;
     margin-bottom: 12px;
-    border-top-left-radius: 999px;
-    border-top-right-radius: 999px;
-    border-bottom-right-radius: 999px;
-    border-bottom-left-radius: 999px;
+    border-radius: 999px;
     background-color: rgb(227, 172, 61);
 }
 
@@ -57,10 +42,6 @@
     margin-bottom: 4px;
 }
 
-.debug-info-section {
-    width: 100%;
-}
-
 .debug-info-row {
     flex-direction: row;
     align-items: center;
@@ -72,17 +53,16 @@
 }
 
 .debug-info-caption {
-    width: 68px;
-    min-width: 68px;
+    flex-shrink: 0;
     margin-right: 6px;
     color: rgba(255, 255, 255, 0.78);
     font-size: 11px;
 }
 
 .debug-info-heading {
-    width: 72px;
-    min-width: 72px;
-    max-width: 72px;
+    flex-grow: 1;
+    flex-basis: 0;
+    min-width: 60px;
     margin-right: 6px;
     color: rgba(255, 255, 255, 0.58);
     font-size: 11px;
@@ -91,9 +71,9 @@
 }
 
 .debug-info-cell {
-    width: 72px;
-    min-width: 72px;
-    max-width: 72px;
+    flex-grow: 1;
+    flex-basis: 0;
+    min-width: 60px;
     margin-right: 6px;
     color: rgb(244, 241, 226);
     font-size: 11px;
@@ -101,43 +81,26 @@
     white-space: nowrap;
 }
 
-.debug-info-cell-wide {
-    flex-grow: 1;
-    width: auto;
-    min-width: 0;
-    max-width: none;
-    margin-right: 0;
-}
-
 .setting-field {
     margin-bottom: 8px;
 }
 
 .setting-field .unity-base-field__label {
-    min-width: 148px;
     color: rgba(255, 255, 255, 0.82);
 }
 
 .setting-field .unity-base-field__input {
-    min-height: 30px;
-    padding-top: 6px;
-    padding-right: 8px;
-    padding-bottom: 6px;
-    padding-left: 8px;
-    border-top-left-radius: 10px;
-    border-top-right-radius: 10px;
-    border-bottom-right-radius: 10px;
-    border-bottom-left-radius: 10px;
-    border-left-width: 1px;
-    border-right-width: 1px;
-    border-top-width: 1px;
-    border-bottom-width: 1px;
-    border-left-color: rgba(227, 172, 61, 0.3);
-    border-right-color: rgba(227, 172, 61, 0.3);
-    border-top-color: rgba(227, 172, 61, 0.3);
-    border-bottom-color: rgba(227, 172, 61, 0.3);
+    flex-grow: 1;
+    padding: 6px 8px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: rgba(227, 172, 61, 0.3);
     background-color: rgba(255, 255, 255, 0.06);
     color: rgb(244, 241, 226);
+}
+
+.setting-field .unity-enum-field__text {
+    margin-right: 4px;
 }
 
 .setting-field.debug-focused-input .unity-base-field__label {
@@ -145,10 +108,7 @@
 }
 
 .setting-field.debug-focused-input .unity-base-field__input {
-    border-left-color: rgb(255, 99, 71);
-    border-right-color: rgb(255, 99, 71);
-    border-top-color: rgb(255, 99, 71);
-    border-bottom-color: rgb(255, 99, 71);
+    border-color: rgb(255, 99, 71);
     background-color: rgba(255, 99, 71, 0.18);
 }
 
@@ -157,25 +117,10 @@
     color: rgb(255, 247, 214);
 }
 
-.setting-field.unity-toggle {
-    min-height: 28px;
-}
-
-.setting-field.unity-toggle .unity-base-field__input {
-    min-width: 18px;
-    min-height: 18px;
-}
-
 .hint-card {
     margin-top: 10px;
-    padding-top: 10px;
-    padding-right: 12px;
-    padding-bottom: 10px;
-    padding-left: 12px;
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
-    border-bottom-right-radius: 12px;
-    border-bottom-left-radius: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
     background-color: rgba(227, 172, 61, 0.08);
 }
 
@@ -183,4 +128,8 @@
     color: rgba(255, 248, 220, 0.85);
     font-size: 11px;
     margin-bottom: 2px;
+}
+
+.unity-base-dropdown__item {
+    padding: 1px 1px;
 }
