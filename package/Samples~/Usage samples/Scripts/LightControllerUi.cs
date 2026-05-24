@@ -62,6 +62,15 @@ namespace Lotec.Lighting.Samples {
 
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
+        public static void ToggleVisibility() {
+            if (s_instance == null || s_instance._document == null || s_instance._document.rootVisualElement == null) {
+                return;
+            }
+
+            VisualElement root = s_instance._document.rootVisualElement;
+            root.visible = !root.visible;
+        }
+
         public event EventHandler<BindablePropertyChangedEventArgs> propertyChanged;
 
 #if UNITY_EDITOR

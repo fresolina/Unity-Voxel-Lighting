@@ -54,7 +54,8 @@
                 </ui:VisualElement>
             </ui:VisualElement>
             <ui:VisualElement class="hint-card">
-                <ui:Label text="Use CTRL + mouse to rotate the sun light." class="hint-text"/>
+                <ui:Label text="CTRL + mouse: rotate the sun light." class="hint-text"/>
+                <ui:Label text="H: toggle UI." class="hint-text"/>
             </ui:VisualElement>
         </ui:VisualElement>
     </ui:VisualElement>
