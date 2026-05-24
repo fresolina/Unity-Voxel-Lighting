@@ -20,8 +20,8 @@ int _RaymarchMaxSteps;
 float _RaymarchMinStep;
 float _RaymarchEpsilon;
 
-// Fibonacci directions uploaded from C# (float3 per direction)
-StructuredBuffer<float3> _FibonacciDirs;
+// Directions uploaded from C# (float3 per direction)
+StructuredBuffer<float3> _Directions;
 
 // Compute voxel center, origin bias, and max ray distance from thread ID.
 inline void ComputeVoxelParams(
