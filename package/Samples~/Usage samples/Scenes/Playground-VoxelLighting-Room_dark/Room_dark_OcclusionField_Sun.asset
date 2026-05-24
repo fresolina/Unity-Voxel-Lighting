@@ -6,7 +6,7 @@ Texture3D:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: RoomVolume_OcclusionField_Sun
+  m_Name: Room_dark_OcclusionField_Sun
   m_ImageContentsHash:
     serializedVersion: 2
     Hash: 00000000000000000000000000000000

@@ -23,6 +23,15 @@ namespace Lotec.Lighting.Editor {
             };
             root.Add(bakeButton);
 
+            var bakeAllButton = new Button(OnBakeAllClicked) {
+                text = "Bake All Volumes",
+                style = {
+                    height = 30,
+                    marginBottom = 5
+                }
+            };
+            root.Add(bakeAllButton);
+
             return root;
         }
 
@@ -31,51 +40,72 @@ namespace Lotec.Lighting.Editor {
             if (baker == null)
                 return;
 
-            baker.Bake();
-            string basePath = GetBakeFolder(baker);
+            BakeAndSave(baker, baker.targetSdfVolume);
+        }
+
+        private void OnBakeAllClicked() {
+            var baker = target as VoxelLightingBaker;
+            if (baker == null)
+                return;
+
+            var volumes = Object.FindObjectsByType<LightingVolume>(FindObjectsSortMode.None);
+            if (volumes.Length == 0) {
+                Debug.LogWarning("No LightingVolume components found in the scene.");
+                return;
+            }
+
+            Debug.Log($"Baking all {volumes.Length} volume(s)...");
+            foreach (var volume in volumes) {
+                BakeAndSave(baker, volume);
+            }
+            Debug.Log($"Finished baking {volumes.Length} volume(s).");
+        }
+
+        private void BakeAndSave(VoxelLightingBaker baker, LightingVolume volume) {
+            baker.Bake(volume);
+            string basePath = GetBakeFolder(volume);
             if (string.IsNullOrEmpty(basePath))
                 return;
 
-            Undo.RecordObject(baker.targetSdfVolume, "Bake voxel lighting assets");
+            Undo.RecordObject(volume, "Bake voxel lighting assets");
 
-            Debug.Log("VoxelLighting Baker bake completed successfully.", baker);
+            Debug.Log($"VoxelLighting Baker bake completed for '{volume.gameObject.name}'.", baker);
             // Save baked SDF asset
-            if (baker.targetSdfVolume.sdfHiresTexture != null && !string.IsNullOrEmpty(basePath)) {
-                string sdfPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.sdfHiresTexture.name}.asset");
-                baker.targetSdfVolume.sdfHiresTexture = SaveAsset(baker.targetSdfVolume.sdfHiresTexture, sdfPath, "SDF");
+            if (volume.sdfHiresTexture != null) {
+                string sdfPath = System.IO.Path.Combine(basePath, $"{volume.sdfHiresTexture.name}.asset");
+                volume.sdfHiresTexture = SaveAsset(volume.sdfHiresTexture, sdfPath, "SDF");
             }
-            if (baker.targetSdfVolume.sdfLowresTexture != null && !string.IsNullOrEmpty(basePath)) {
-                string sdfPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.sdfLowresTexture.name}.asset");
-                baker.targetSdfVolume.sdfLowresTexture = SaveAsset(baker.targetSdfVolume.sdfLowresTexture, sdfPath, "SDF");
+            if (volume.sdfLowresTexture != null) {
+                string sdfPath = System.IO.Path.Combine(basePath, $"{volume.sdfLowresTexture.name}.asset");
+                volume.sdfLowresTexture = SaveAsset(volume.sdfLowresTexture, sdfPath, "SDF");
             }
             // Save baked Bitmask asset
-            if (baker.targetSdfVolume.occlusionBitmaskTexture != null && !string.IsNullOrEmpty(basePath)) {
-                string bitmaskPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.occlusionBitmaskTexture.name}.asset");
-                baker.targetSdfVolume.occlusionBitmaskTexture = SaveAsset(baker.targetSdfVolume.occlusionBitmaskTexture, bitmaskPath, "Occlusion Bitmask");
+            if (volume.occlusionBitmaskTexture != null) {
+                string bitmaskPath = System.IO.Path.Combine(basePath, $"{volume.occlusionBitmaskTexture.name}.asset");
+                volume.occlusionBitmaskTexture = SaveAsset(volume.occlusionBitmaskTexture, bitmaskPath, "Occlusion Bitmask");
             }
             // Save baked Occlusion Field textures
-            if (baker.targetSdfVolume.occlusionFieldTextures != null && !string.IsNullOrEmpty(basePath)) {
-                for (int i = 0; i < baker.targetSdfVolume.occlusionFieldTextures.Length; i++) {
-                    var tex = baker.targetSdfVolume.occlusionFieldTextures[i];
+            if (volume.occlusionFieldTextures != null) {
+                for (int i = 0; i < volume.occlusionFieldTextures.Length; i++) {
+                    var tex = volume.occlusionFieldTextures[i];
                     if (tex == null) continue;
                     string fieldPath = System.IO.Path.Combine(basePath, $"{tex.name}.asset");
-                    baker.targetSdfVolume.occlusionFieldTextures[i] = SaveAsset(tex, fieldPath, "Occlusion Field");
+                    volume.occlusionFieldTextures[i] = SaveAsset(tex, fieldPath, "Occlusion Field");
                 }
             }
             // Save baked packed material texture (albedo+emissionIntensity)
-            if (baker.targetSdfVolume.materialAlbedoIntensityTexture != null && !string.IsNullOrEmpty(basePath)) {
-                string matPath = System.IO.Path.Combine(basePath, $"{baker.targetSdfVolume.materialAlbedoIntensityTexture.name}.asset");
-                baker.targetSdfVolume.materialAlbedoIntensityTexture = SaveAsset(baker.targetSdfVolume.materialAlbedoIntensityTexture, matPath, "Material AlbedoIntensity");
+            if (volume.materialAlbedoIntensityTexture != null) {
+                string matPath = System.IO.Path.Combine(basePath, $"{volume.materialAlbedoIntensityTexture.name}.asset");
+                volume.materialAlbedoIntensityTexture = SaveAsset(volume.materialAlbedoIntensityTexture, matPath, "Material AlbedoIntensity");
             }
 
-            EditorUtility.SetDirty(baker.targetSdfVolume);
-            EditorSceneManager.MarkSceneDirty(baker.targetSdfVolume.gameObject.scene);
+            EditorUtility.SetDirty(volume);
+            EditorSceneManager.MarkSceneDirty(volume.gameObject.scene);
         }
 
-        private static string GetBakeFolder(VoxelLightingBaker baker) {
-            LightingVolume volume = baker.targetSdfVolume;
+        private static string GetBakeFolder(LightingVolume volume) {
             if (volume == null) {
-                Debug.LogError("Target SdfVolume is not assigned.", baker);
+                Debug.LogError("Target volume is null.");
                 return null;
             }
 
@@ -93,7 +123,7 @@ namespace Lotec.Lighting.Editor {
                 return null;
             }
 
-            string bakeFolder = NormalizeAssetPath(System.IO.Path.Combine(sceneFolder, $"{sceneName}-VoxelLighting"));
+            string bakeFolder = NormalizeAssetPath(System.IO.Path.Combine(sceneFolder, $"{sceneName}-VoxelLighting-{volume.gameObject.name}"));
             if (TryGetReadonlyPackageFallback(scenePath, sceneName, out string fallbackPath, out string warning)) {
                 Debug.LogWarning(warning, volume);
                 return fallbackPath;
