@@ -63,7 +63,7 @@ namespace Lotec.Lighting.Samples {
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
         public static void ToggleVisibility() {
-            if (s_instance == null || s_instance._document == null || s_instance._document.rootVisualElement == null) {
+            if (s_instance == null || s_instance._document.rootVisualElement == null) {
                 return;
             }
 
@@ -81,34 +81,40 @@ namespace Lotec.Lighting.Samples {
         }
 #endif
 
-        void OnEnable() {
+        void Awake() {
             s_instance = this;
+        }
+
+        void Start() {
             EnsureLightController();
-            EnsureDocument();
             ApplyDocumentAssets();
-            DisposeRecorder(ref _frameTimingCollectionRecorder);
             _frameTimingCollectionRecorder = ProfilerRecorder.StartNew(ProfilerCategory.Render, CpuTotalFrameTimeCounterName);
-            ResetFrameTimeStats();
             BindUi();
             RefreshUi(false);
         }
 
-        void OnDisable() {
-            if (s_instance == this) {
-                s_instance = null;
-            }
-
-            UnbindUi();
+        void OnEnable() {
+            if (_document.rootVisualElement != null)
+                _document.rootVisualElement.visible = true;
             ResetFrameTimeStats();
+        }
+
+        void OnDisable() {
+            if (_document.rootVisualElement != null)
+                _document.rootVisualElement.visible = false;
+        }
+
+        void OnDestroy() {
+            if (s_instance == this)
+                s_instance = null;
+            UnbindUi();
             DisposeRecorder(ref _frameTimingCollectionRecorder);
-            _hasBindingSnapshot = false;
         }
 
         void Update() {
             UpdateFrameTimeStats();
 
             if (_boundRoot != _document.rootVisualElement) {
-                EnsureDocument();
                 ApplyDocumentAssets();
                 BindUi();
             }

@@ -26,10 +26,6 @@ namespace Lotec.Lighting.Samples {
             EnsureSerializedReferences();
         }
 
-        void OnEnable() {
-            SyncRotationFromSunLight();
-        }
-
         void Start() {
             SyncRotationFromSunLight();
         }
@@ -100,7 +96,7 @@ namespace Lotec.Lighting.Samples {
         }
 
         public void ToggleLightingMethod() {
-            LightingManager.Instance?.ToggleLightingMethod();
+            LightingManager.Instance.ToggleLightingMethod();
         }
 
         void ToggleFlashlight() {
