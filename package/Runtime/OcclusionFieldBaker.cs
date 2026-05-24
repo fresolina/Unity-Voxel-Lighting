@@ -15,6 +15,7 @@ namespace Lotec.Lighting {
     public class OcclusionFieldBaker {
         public enum DirectionCount {
             Dir1Sun = 1,
+            Dir8 = 8,
             Dir32 = 32,
             Dir64 = 64,
             Dir128 = 128,
