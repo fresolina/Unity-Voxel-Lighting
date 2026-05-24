@@ -5,9 +5,14 @@
             <ui:Label text="Lighting Controls" class="panel-title"/>
             <ui:VisualElement class="panel-accent"/>
             <ui:VisualElement name="settings-container" class="section-body">
-                <ui:EnumField label="Method [§]" value="LPV" type="Lotec.Lighting.GiFieldUpdater+LightingMethod, Lotec.Lighting" name="lighting-method-enum" class="setting-field">
+                <ui:EnumField label="GI Method [§]" value="LPV" type="Lotec.Lighting.GiFieldUpdater+LightingMethod, Lotec.Lighting" name="lighting-method-enum" class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="LightingMethod" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:EnumField>
+                <ui:EnumField label="Shadow Mode" value="SDF" type="Lotec.Lighting.LightingManager+ShadowModeType, Lotec.Lighting" name="shadow-mode-enum" class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="ShadowMode" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
                 <ui:FloatField name="enabled-light-intensity-field" label="Light Intensity [1-9]" is-delayed="true" tooltip="Type a value and press Enter or click away. Applies to the enabled flashlight and candle." tabindex="-1" class="setting-field">
@@ -26,29 +31,26 @@
                     </Bindings>
                 </ui:Toggle>
             </ui:VisualElement>
-            <ui:Label text="Frame Time Debug" class="section-title"/>
-            <ui:VisualElement class="section-body debug-info-section">
-                <ui:VisualElement class="debug-info-row debug-info-header-row">
-                    <ui:Label class="debug-info-caption"/>
-                    <ui:Label text="Low" class="debug-info-heading"/>
-                    <ui:Label text="High" class="debug-info-heading"/>
-                    <ui:Label text="Avg" class="debug-info-heading"/>
-                </ui:VisualElement>
-                <ui:VisualElement class="debug-info-row">
-                    <ui:Label text="Last 10s" class="debug-info-caption"/>
-                    <ui:Label name="frame-time-last-10-seconds-low-value" class="debug-info-cell"/>
-                    <ui:Label name="frame-time-last-10-seconds-high-value" class="debug-info-cell"/>
-                    <ui:Label name="frame-time-last-10-seconds-average-value" class="debug-info-cell"/>
-                </ui:VisualElement>
-                <ui:VisualElement class="debug-info-row">
-                    <ui:Label text="Last 1s" class="debug-info-caption"/>
-                    <ui:Label name="frame-time-last-second-low-value" class="debug-info-cell"/>
-                    <ui:Label name="frame-time-last-second-high-value" class="debug-info-cell"/>
-                    <ui:Label name="frame-time-last-second-average-value" class="debug-info-cell"/>
-                </ui:VisualElement>
-                <ui:VisualElement class="debug-info-row">
-                    <ui:Label text="Last frame" class="debug-info-caption"/>
-                    <ui:Label name="frame-time-last-frame-value" class="debug-info-cell debug-info-cell-wide"/>
+            <ui:VisualElement style="flex-direction: row; align-items: flex-start;">
+                <ui:VisualElement class="section-body debug-info-section">
+                    <ui:VisualElement class="debug-info-row debug-info-header-row">
+                        <ui:Label text="Frame Time" class="debug-info-caption"/>
+                        <ui:Label text="Low" class="debug-info-heading"/>
+                        <ui:Label text="High" class="debug-info-heading"/>
+                        <ui:Label text="Avg" class="debug-info-heading"/>
+                    </ui:VisualElement>
+                    <ui:VisualElement class="debug-info-row">
+                        <ui:Label text="Last 10s" class="debug-info-caption"/>
+                        <ui:Label name="frame-time-last-10-seconds-low-value" class="debug-info-cell"/>
+                        <ui:Label name="frame-time-last-10-seconds-high-value" class="debug-info-cell"/>
+                        <ui:Label name="frame-time-last-10-seconds-average-value" class="debug-info-cell"/>
+                    </ui:VisualElement>
+                    <ui:VisualElement class="debug-info-row">
+                        <ui:Label text="1s" class="debug-info-caption"/>
+                        <ui:Label name="frame-time-last-second-low-value" class="debug-info-cell"/>
+                        <ui:Label name="frame-time-last-second-high-value" class="debug-info-cell"/>
+                        <ui:Label name="frame-time-last-second-average-value" class="debug-info-cell"/>
+                    </ui:VisualElement>
                 </ui:VisualElement>
             </ui:VisualElement>
             <ui:VisualElement class="hint-card">
