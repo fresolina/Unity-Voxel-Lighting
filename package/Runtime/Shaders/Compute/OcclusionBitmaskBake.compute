@@ -23,7 +23,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     int dirCount = min(_BitmaskDirCount, 64);
     for (uint dirIdx = 0; dirIdx < (uint)dirCount; dirIdx++)
     {
-        float3 rayDir = _FibonacciDirs[dirIdx];
+        float3 rayDir = _Directions[dirIdx];
         float free = RayMarchTex3D(_SdfTex, sampler_SdfTex, voxelCenter, rayDir, _BoundsMin, _BoundsSize, originBias, maxDistance, _RaymarchEpsilon, _RaymarchMinStep, _RaymarchMaxSteps, 64);
         if (free < 0.5)
         {

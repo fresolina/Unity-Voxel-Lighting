@@ -17,7 +17,7 @@ namespace Lotec.Lighting {
             Dir64 = 64,
         }
 
-        [Tooltip("Number of Fibonacci directions to bake into the bitmask.")]
+        [Tooltip("Number of directions to bake into the bitmask.")]
         public BitmaskDirectionCount directionCount = BitmaskDirectionCount.Dir64;
 
         [Tooltip("Use only upper hemisphere directions (Y >= 0). Useful when the sun never goes below the horizon.")]
@@ -33,7 +33,7 @@ namespace Lotec.Lighting {
         static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
         static readonly int s_raymarchMinStep = Shader.PropertyToID("_RaymarchMinStep");
         static readonly int s_raymarchEpsilon = Shader.PropertyToID("_RaymarchEpsilon");
-        static readonly int s_fibonacciDirs = Shader.PropertyToID("_FibonacciDirs");
+        static readonly int s_directions = Shader.PropertyToID("_Directions");
         static readonly int s_bitmaskDirCount = Shader.PropertyToID("_BitmaskDirCount");
 
         static GraphicsFormat GetTextureFormat(int dirCount) {
@@ -100,7 +100,7 @@ namespace Lotec.Lighting {
             bitmaskBakeCompute.SetVector(s_boundsMin, bounds.min);
             bitmaskBakeCompute.SetVector(s_boundsSize, bounds.size);
             bitmaskBakeCompute.SetInts(s_resolution, resolution.x, resolution.y, resolution.z);
-            bitmaskBakeCompute.SetBuffer(kernelIdx, s_fibonacciDirs, fibonacciBuffer);
+            bitmaskBakeCompute.SetBuffer(kernelIdx, s_directions, fibonacciBuffer);
             bitmaskBakeCompute.SetInt(s_bitmaskDirCount, dirCount);
             bitmaskBakeCompute.SetBuffer(kernelIdx, s_outBitmask, bitmaskBuffer);
 

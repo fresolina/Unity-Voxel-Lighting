@@ -14,6 +14,7 @@ namespace Lotec.Lighting {
     [Serializable]
     public class OcclusionFieldBaker {
         public enum DirectionCount {
+            Dir1Sun = 1,
             Dir32 = 32,
             Dir64 = 64,
             Dir128 = 128,
@@ -22,7 +23,7 @@ namespace Lotec.Lighting {
 
         public ComputeShader occlusionFieldBakeCompute;
 
-        [Tooltip("Number of Fibonacci directions to bake.")]
+        [Tooltip("Number of directions to bake.\nDir 1 Sun bakes current sun direction.")]
         public DirectionCount directionCount = DirectionCount.Dir64;
 
         [Tooltip("Use only upper hemisphere directions (Y >= 0). Useful when the sun never goes below the horizon.")]
@@ -38,13 +39,15 @@ namespace Lotec.Lighting {
         static readonly int s_raymarchSoftness = Shader.PropertyToID("_RaymarchSoftness");
         static readonly int s_directionOffset = Shader.PropertyToID("_DirectionOffset");
         static readonly int s_outOcclusion = Shader.PropertyToID("_OutOcclusion");
-        static readonly int s_fibonacciDirs = Shader.PropertyToID("_FibonacciDirs");
+        static readonly int s_directions = Shader.PropertyToID("_Directions");
         static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
         static readonly int s_raymarchMinStep = Shader.PropertyToID("_RaymarchMinStep");
         static readonly int s_raymarchEpsilon = Shader.PropertyToID("_RaymarchEpsilon");
         static readonly int s_sdfTex = Shader.PropertyToID("_SdfTex");
 
-        static GraphicsFormat GetOcclusionFieldFormat() {
+        static GraphicsFormat GetOcclusionFieldFormat(bool isSingleDir) {
+            if (isSingleDir)
+                return GraphicsFormat.R8_UNorm;
 #if UNITY_EDITOR
             // if (UnityEditor.EditorUserBuildSettings.activeBuildTarget == UnityEditor.BuildTarget.Android)
             //     return GraphicsFormat.R4G4B4A4_UNormPack16;
@@ -100,9 +103,6 @@ namespace Lotec.Lighting {
                 return false;
             }
 
-            int numDirections = (int)directionCount;
-            int textureCount = numDirections / 4;
-
             Bounds bounds = sourceVolume.Bounds;
             Vector3Int resolution = sourceVolume.TrimmedMaxResolution;
             int voxelCount = resolution.x * resolution.y * resolution.z;
@@ -112,15 +112,6 @@ namespace Lotec.Lighting {
                 return false;
             }
 
-            GraphicsFormat textureFormat = GetOcclusionFieldFormat();
-            if (!SystemInfo.IsFormatSupported(textureFormat, GraphicsFormatUsage.Sample)) {
-                error = $"OcclusionFieldBaker: format {textureFormat} not supported for sampling on this platform";
-                return false;
-            }
-
-            var packedDirections = Fibonacci.GenerateFibonacciDirections(numDirections, hemisphereOnly);
-            bakedDirections = packedDirections;
-
             // Compute voxel metrics
             Vector3 voxelSize = new Vector3(
                 bounds.size.x / resolution.x,
@@ -128,6 +119,29 @@ namespace Lotec.Lighting {
                 bounds.size.z / resolution.z
             );
             float voxelDiag = voxelSize.magnitude;
+
+            uint groupX = (uint)Mathf.CeilToInt(resolution.x / 8f);
+            uint groupY = (uint)Mathf.CeilToInt(resolution.y / 8f);
+            uint groupZ = (uint)Mathf.CeilToInt(resolution.z / 8f);
+
+            int numDirections = (int)directionCount;
+            bool isSingleDir = directionCount == DirectionCount.Dir1Sun;
+            int dirsPerBatch = isSingleDir ? 1 : 4;
+            int textureCount = isSingleDir ? 1 : numDirections / 4;
+
+            GraphicsFormat textureFormat = GetOcclusionFieldFormat(isSingleDir);
+            if (!SystemInfo.IsFormatSupported(textureFormat, GraphicsFormatUsage.Sample)) {
+                error = $"OcclusionFieldBaker: format {textureFormat} not supported for sampling on this platform";
+                return false;
+            }
+
+            Vector3[] packedDirections;
+            if (isSingleDir) {
+                packedDirections = new[] { OcclusionFieldQuery.GetSunDirection() };
+            } else {
+                packedDirections = Fibonacci.GenerateFibonacciDirections(numDirections, hemisphereOnly);
+            }
+            bakedDirections = packedDirections;
 
             int kernelIdx = occlusionFieldBakeCompute.FindKernel("CSMain");
 
@@ -141,29 +155,21 @@ namespace Lotec.Lighting {
             occlusionFieldBakeCompute.SetFloat(s_raymarchMinStep, voxelDiag * 0.01f);
             occlusionFieldBakeCompute.SetFloat(s_raymarchEpsilon, voxelDiag * 0.02f);
 
-            uint groupX = (uint)Mathf.CeilToInt(resolution.x / 8f);
-            uint groupY = (uint)Mathf.CeilToInt(resolution.y / 8f);
-            uint groupZ = (uint)Mathf.CeilToInt(resolution.z / 8f);
-
             resultTextures = new Texture3D[textureCount];
 
-            // Upload all directions as a structured buffer (4 at a time for each dispatch batch)
-            var dirBuffer = new ComputeBuffer(4, sizeof(float) * 3);
+            var dirBuffer = new ComputeBuffer(dirsPerBatch, sizeof(float) * 3);
 
             try {
-                // Bake 4 directions at a time, producing one RGBA texture per batch
                 for (int texIdx = 0; texIdx < textureCount; texIdx++) {
-                    int dirOffset = texIdx * 4;
+                    int dirOffset = texIdx * dirsPerBatch;
 
-                    // Upload the 4 directions for this batch
-                    var batchDirs = new Vector3[4];
-                    for (int c = 0; c < 4; c++)
+                    var batchDirs = new Vector3[dirsPerBatch];
+                    for (int c = 0; c < dirsPerBatch; c++)
                         batchDirs[c] = packedDirections[dirOffset + c];
                     dirBuffer.SetData(batchDirs);
 
-                    // Output buffer: 4 floats (RGBA) per voxel
-                    var outBuffer = new ComputeBuffer(voxelCount * 4, sizeof(float));
-                    occlusionFieldBakeCompute.SetBuffer(kernelIdx, s_fibonacciDirs, dirBuffer);
+                    var outBuffer = new ComputeBuffer(voxelCount * dirsPerBatch, sizeof(float));
+                    occlusionFieldBakeCompute.SetBuffer(kernelIdx, s_directions, dirBuffer);
                     occlusionFieldBakeCompute.SetInt(s_directionOffset, dirOffset);
                     occlusionFieldBakeCompute.SetBuffer(kernelIdx, s_outOcclusion, outBuffer);
 
@@ -182,8 +188,8 @@ namespace Lotec.Lighting {
                     }
 
                     var readbackData = readbackRequest.GetData<float>();
-                    if (readbackData.Length != voxelCount * 4) {
-                        error = $"OcclusionFieldBaker: readback size mismatch for texture {texIdx} (got {readbackData.Length}, expected {voxelCount * 4})";
+                    if (readbackData.Length != voxelCount * dirsPerBatch) {
+                        error = $"OcclusionFieldBaker: readback size mismatch for texture {texIdx} (got {readbackData.Length}, expected {voxelCount * dirsPerBatch})";
                         outBuffer.Dispose();
                         DisposePartialResults(resultTextures, texIdx);
                         resultTextures = null;
@@ -193,15 +199,25 @@ namespace Lotec.Lighting {
                     var tex = new Texture3D(resolution.x, resolution.y, resolution.z, textureFormat, TextureCreationFlags.None) {
                         filterMode = FilterMode.Trilinear,
                         wrapMode = TextureWrapMode.Clamp,
-                        name = $"{sourceVolume.BakeRoot.name}_OcclusionField_{texIdx:D2}"
+                        name = isSingleDir
+                            ? $"{sourceVolume.BakeRoot.name}_OcclusionField_Sun"
+                            : $"{sourceVolume.BakeRoot.name}_OcclusionField_{texIdx:D2}"
                     };
-                    SetPackedTextureData(tex, readbackData, voxelCount, textureFormat);
+
+                    if (isSingleDir) {
+                        var packedR8 = new byte[voxelCount];
+                        for (int i = 0; i < voxelCount; i++)
+                            packedR8[i] = (byte)Mathf.Clamp(Mathf.RoundToInt(readbackData[i] * 255f), 0, 255);
+                        tex.SetPixelData(packedR8, 0);
+                    } else {
+                        SetPackedTextureData(tex, readbackData, voxelCount, textureFormat);
+                    }
                     tex.Apply(false);
 
                     resultTextures[texIdx] = tex;
                     outBuffer.Dispose();
 
-                    Debug.Log($"OcclusionFieldBaker: baked texture {texIdx + 1}/{textureCount} (directions {dirOffset}..{dirOffset + 3}, format={textureFormat})");
+                    Debug.Log($"OcclusionFieldBaker: baked texture {texIdx + 1}/{textureCount} (directions {dirOffset}..{dirOffset + dirsPerBatch - 1}, format={textureFormat})");
                 }
             } finally {
                 dirBuffer.Dispose();

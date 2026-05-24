@@ -6,7 +6,7 @@
 // Soft shadow penumbra factor
 float _RaymarchSoftness;
 
-// Output: 4 floats per voxel (R, G, B, A = directions 0, 1, 2, 3 of this batch)
+// Output: dirCount floats per voxel (1 for single-direction, 4 for multi-direction batches)
 RWStructuredBuffer<float> _OutOcclusion;
 
 [numthreads(8, 8, 8)]
@@ -19,13 +19,15 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float originBias, maxDistance;
     ComputeVoxelParams(id, voxelCenter, originBias, maxDistance);
 
-    uint flatIdx = id.x + id.y * _Resolution.x + id.z * _Resolution.x * _Resolution.y;
-    uint baseOut = flatIdx * 4;
+    uint dirCount, dirStride;
+    _Directions.GetDimensions(dirCount, dirStride);
 
-    [unroll]
-    for (uint c = 0; c < 4; c++)
+    uint flatIdx = id.x + id.y * _Resolution.x + id.z * _Resolution.x * _Resolution.y;
+    uint baseOut = flatIdx * dirCount;
+
+    for (uint c = 0; c < dirCount; c++)
     {
-        float3 rayDir = _FibonacciDirs[c];
+        float3 rayDir = _Directions[c];
         float lit = RayMarchTex3D(
             _SdfTex, sampler_SdfTex,
             voxelCenter, rayDir,
