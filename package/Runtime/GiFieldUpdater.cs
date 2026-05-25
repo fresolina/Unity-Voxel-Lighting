@@ -59,9 +59,16 @@ namespace Lotec.Lighting {
         [Min(0f)]
         [SerializeField] float _raymarchSoftness = 0.5f;
 
+        [Header("Spatial Hash GI")]
+        [Tooltip("Compute shader for the surface-based spatial hash GI method.")]
+        [SerializeField] ComputeShader _spatialHashComputeShader;
+        [Tooltip("Maximum number of surface voxels stored in the spatial hash.")]
+        [SerializeField] int _spatialHashMaxVoxels = 32768;
+
         public enum LightingMethod {
             PathTracing = 0,
             LPV = 1,
+            SpatialHashGi = 2,
         }
 
         public Texture3D MaterialFieldAlbedoIntensity => Volume.materialAlbedoIntensityTexture;
@@ -81,6 +88,7 @@ namespace Lotec.Lighting {
         RenderTexture _irradianceFieldFinal; // Blurred final
         ComputeBuffer _luminanceBuffer;
         bool _luminanceReadbackPending;
+        SpatialHashGi _spatialHashGi;
         float _autoExposureEV;
         bool _isEvenFrame = true;
         int _radianceKernel;
@@ -213,7 +221,13 @@ namespace Lotec.Lighting {
         }
 
         public LightingMethod ToggleLightingMethod() {
-            SetLightingMethod(_lightingMethod == LightingMethod.PathTracing ? LightingMethod.LPV : LightingMethod.PathTracing);
+            LightingMethod next = _lightingMethod switch {
+                LightingMethod.PathTracing => LightingMethod.LPV,
+                LightingMethod.LPV => LightingMethod.SpatialHashGi,
+                LightingMethod.SpatialHashGi => LightingMethod.PathTracing,
+                _ => LightingMethod.PathTracing,
+            };
+            SetLightingMethod(next);
             return _lightingMethod;
         }
 
@@ -221,6 +235,12 @@ namespace Lotec.Lighting {
             _irradianceFieldSampleCount = 0;
             _prevLightSettings = default;
             _isEvenFrame = true;
+
+            // Spatial hash: re-voxelize on reset
+            if (_lightingMethod == LightingMethod.SpatialHashGi) {
+                ReleaseSpatialHashBuffers();
+                return;
+            }
 
             if (_radianceField == null && _irradianceFieldA == null && _irradianceFieldB == null && _irradianceFieldFinal == null) {
                 return;
@@ -329,6 +349,11 @@ namespace Lotec.Lighting {
                 return false;
             }
 
+            if (_lightingMethod == LightingMethod.SpatialHashGi && _spatialHashComputeShader == null) {
+                reason = "SpatialHashComputeShader";
+                return false;
+            }
+
             reason = null;
             return true;
         }
@@ -346,14 +371,17 @@ namespace Lotec.Lighting {
                 return false;
             }
 
-            if (!SystemInfo.supports3DTextures) {
-                reason = "3D textures are not supported.";
-                return false;
-            }
+            // SpatialHashGi uses StructuredBuffers only, no 3D textures needed.
+            if (_lightingMethod != LightingMethod.SpatialHashGi) {
+                if (!SystemInfo.supports3DTextures) {
+                    reason = "3D textures are not supported.";
+                    return false;
+                }
 
-            if (!TryGetSupportedGiTextureFormat(out _, out string formatReason)) {
-                reason = formatReason;
-                return false;
+                if (!TryGetSupportedGiTextureFormat(out _, out string formatReason)) {
+                    reason = formatReason;
+                    return false;
+                }
             }
 
             reason = null;
@@ -435,9 +463,24 @@ namespace Lotec.Lighting {
         }
 
         void EnsureInitialized() {
+            if (_lightingMethod == LightingMethod.SpatialHashGi) {
+                EnsureSpatialHashInitialized();
+                return;
+            }
             if (_radianceField == null || _irradianceFieldB == null || _irradianceFieldA == null || _irradianceFieldFinal == null) {
                 InitializeBuffers();
             }
+        }
+
+        void EnsureSpatialHashInitialized() {
+            if (_spatialHashGi != null) return;
+
+            // Release any volume-based buffers from a previous method
+            ReleaseVolumeBuffers();
+
+            _spatialHashGi = new SpatialHashGi(_spatialHashComputeShader, _spatialHashMaxVoxels);
+            float voxelSize = GetGiGridVoxelSize();
+            _spatialHashGi.Voxelize(Volume, voxelSize);
         }
 
         void InitializeBuffers() {
@@ -544,6 +587,11 @@ namespace Lotec.Lighting {
         }
 
         public void ReleaseBuffers() {
+            ReleaseVolumeBuffers();
+            ReleaseSpatialHashBuffers();
+        }
+
+        void ReleaseVolumeBuffers() {
             if (_radianceField != null)
                 _radianceField.Release();
             if (_irradianceFieldB != null)
@@ -560,7 +608,21 @@ namespace Lotec.Lighting {
             _irradianceFieldFinal = null;
         }
 
+        void ReleaseSpatialHashBuffers() {
+            _spatialHashGi?.Dispose();
+            _spatialHashGi = null;
+#if LOTEC_URP
+            SpatialHashGiRenderPass.SetActive(false);
+#endif
+            Shader.DisableKeyword("SPATIAL_HASH_GI");
+        }
+
         void DispatchGIUpdate() {
+            if (_lightingMethod == LightingMethod.SpatialHashGi) {
+                DispatchSpatialHashGi();
+                return;
+            }
+
             // Shared parameters
             float voxelSize = GetGiGridVoxelSize();
             _giComputeShader.SetVector(s_voxelSize, voxelSize * Vector3.one);
@@ -610,6 +672,22 @@ namespace Lotec.Lighting {
                 _giComputeShader.SetTexture(_blurKernel, s_distanceField, SurfaceDistanceFieldLowRes);
                 _giComputeShader.Dispatch(_blurKernel, groupsX, groupsY, groupsZ);
             }
+        }
+
+        void DispatchSpatialHashGi() {
+            if (_spatialHashGi == null || !_spatialHashGi.IsVoxelized) return;
+
+            // Forward light uniforms to the spatial hash compute shader
+            Light sun = RenderSettings.sun;
+            Vector3 sunDir = sun != null ? -sun.transform.forward : Vector3.down;
+            Vector4 sunColor = sun != null ? (Vector4)sun.color * sun.intensity : Vector4.zero;
+            _spatialHashGi.SetDirectionalLight(sunDir, sunColor);
+            _spatialHashGi.SetSkyColor(GetSkyEnvironmentColor());
+            _spatialHashGi.SetPointLights(_currentPointLightCount, _pointLightPositionRanges, _pointLightColors);
+            _spatialHashGi.SetSpotLights(_currentSpotLightCount, _spotLightPositionRanges, _spotLightDirectionAngleScales, _spotLightColorAngleOffsets);
+
+            float voxelSize = GetGiGridVoxelSize();
+            _spatialHashGi.InjectLight(Volume, voxelSize, _raymarchMaxSteps, _raymarchSoftness);
         }
 
         RenderTexture CreateRadianceTexture(GraphicsFormat format, string name) {
@@ -827,15 +905,26 @@ namespace Lotec.Lighting {
         }
 
         void SetGlobalShaderVariables() {
-            // LPV uses the direct ping-pong output (no blur).
-            // PathTracing uses the separate blurred irradiance texture.
-            Shader.SetGlobalTexture(s_irradianceFieldFinal, _lightingMethod == LightingMethod.LPV ? IrradianceFinal : _irradianceFieldFinal);
-            Shader.SetGlobalTexture(s_distanceField, SurfaceDistanceFieldLowRes);
+            if (_lightingMethod == LightingMethod.SpatialHashGi) {
+                // Spatial hash GI: enable keyword and publish hash buffers
+                Shader.EnableKeyword("SPATIAL_HASH_GI");
+#if LOTEC_URP
+                SpatialHashGiRenderPass.SetActive(true);
+#endif
+                _spatialHashGi?.SetShaderGlobals(Volume);
+                Shader.SetGlobalTexture(s_distanceField, SurfaceDistanceFieldLowRes);
+            } else {
+                Shader.DisableKeyword("SPATIAL_HASH_GI");
+#if LOTEC_URP
+                SpatialHashGiRenderPass.SetActive(false);
+#endif
+                // LPV uses the direct ping-pong output (no blur).
+                // PathTracing uses the separate blurred irradiance texture.
+                Shader.SetGlobalTexture(s_irradianceFieldFinal, _lightingMethod == LightingMethod.LPV ? IrradianceFinal : _irradianceFieldFinal);
+                Shader.SetGlobalTexture(s_distanceField, SurfaceDistanceFieldLowRes);
+            }
 
             // Update these every frame in case the volume moves
-            // The runtime GI include samples the irradiance volume, so use the GI grid
-            // spacing here as well. A different material-field resolution should not
-            // change the surface read offset in SampleVoxelGI.
             float voxelSize = GetGiGridVoxelSize();
             Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector3.one);
 

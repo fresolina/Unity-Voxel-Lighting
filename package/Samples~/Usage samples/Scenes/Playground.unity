@@ -3966,7 +3966,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0ee8e7b592a45e7439418da0b98ac895, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelLightingBaker
-  LowresDownscaleFactor: 2
+  LowresDownscaleFactor: 6
   _sdfBaker:
     sdfBakeCompute: {fileID: 7200000, guid: b69a1acfc8ae8044384411949a5b3e0b, type: 3}
   _occlusionBitmaskBaker:
@@ -3998,7 +3998,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.GiFieldUpdater
   _giComputeShader: {fileID: 7200000, guid: 02f9a08ea0218754cac3ba8d03fd4a99, type: 3}
   _continuousGi: 0
-  _maxSamples: 420
+  _maxSamples: 10
   _raysPerFrame: 1
   _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
   _exposure: 0
@@ -4011,6 +4011,8 @@ MonoBehaviour:
   _lpvDecay: 0.99
   _raymarchMaxSteps: 64
   _raymarchSoftness: 1
+  _spatialHashComputeShader: {fileID: 7200000, guid: 4983b7400b9dce94eb62c41bb4be4ca1, type: 3}
+  _spatialHashMaxVoxels: 32768
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0

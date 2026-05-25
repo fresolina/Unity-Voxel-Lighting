@@ -1,0 +1,247 @@
+// Surface-Based Spatial Hash GI - Screen-Space Passes
+// Pass 3.1: Voxel lookup at half resolution using depth + normals
+// Pass 3.2: Separable bilateral Gaussian blur (denoiser)
+
+#pragma kernel CSResolveGi
+#pragma kernel CSBilateralBlurH
+#pragma kernel CSBilateralBlurV
+
+#define SPATIAL_HASH_GRID_SIZE 64
+
+// --- VoxelGI struct (mirrors SpatialHashGi.hlsl) ---
+
+struct VoxelGI
+{
+    uint voxelPackedPos;
+    uint colorAmbient;
+    uint colorModifiers;
+};
+
+inline uint3 UnpackPosition10(uint packed)
+{
+    return uint3(packed & 0x3FF, (packed >> 10) & 0x3FF, (packed >> 20) & 0x3FF);
+}
+
+inline float4 UnpackR8G8B8A8(uint packed)
+{
+    float r = ((packed >> 24) & 0xFF) / 255.0;
+    float g = ((packed >> 16) & 0xFF) / 255.0;
+    float b = ((packed >> 8) & 0xFF) / 255.0;
+    float a = (packed & 0xFF) / 255.0;
+    return float4(r, g, b, a);
+}
+
+inline int SpatialHashLinearIndex(uint3 voxelPos)
+{
+    return (int)(voxelPos.x + (voxelPos.y * SPATIAL_HASH_GRID_SIZE) + (voxelPos.z * SPATIAL_HASH_GRID_SIZE * SPATIAL_HASH_GRID_SIZE));
+}
+
+// --- Buffers ---
+StructuredBuffer<VoxelGI> _SpatialHashVoxelData;
+StructuredBuffer<int> _SpatialHashGrid;
+
+// --- Camera / Screen ---
+Texture2D<float> _CameraDepthTexture;
+Texture2D<float4> _CameraNormalsTexture;
+SamplerState sampler_CameraDepthTexture;
+SamplerState sampler_CameraNormalsTexture;
+
+float4x4 _InverseViewProjection;
+float4 _HalfResolution; // (width, height, 1/width, 1/height)
+float _SpatialHashVoxelSize;
+float _SpatialHashOneOverVoxelSize;
+float3 _VolumePosition;
+
+// GI output (half resolution)
+RWTexture2D<float4> _GiOutput;
+
+// Bilateral blur
+Texture2D<float4> _BlurInput;
+RWTexture2D<float4> _BlurOutput;
+SamplerState sampler_BlurInput;
+
+float _BilateralDepthThreshold;
+int _BlurKernelRadius;
+
+// --- Helpers ---
+
+float3 ReconstructWorldPos(float2 screenUV, float depth)
+{
+    // Reconstruct clip-space position
+    float4 clipPos = float4(screenUV * 2.0 - 1.0, depth, 1.0);
+    // Flip Y for platforms that need it
+    #if UNITY_UV_STARTS_AT_TOP
+        clipPos.y = -clipPos.y;
+    #endif
+    float4 worldPos = mul(_InverseViewProjection, clipPos);
+    return worldPos.xyz / worldPos.w;
+}
+
+float3 DecodeNormal(float4 normalSample)
+{
+    return normalize(normalSample.xyz * 2.0 - 1.0);
+}
+
+// ============================================================
+// KERNEL: Resolve GI at half resolution
+// Reads depth/normals from camera, looks up spatial hash grid,
+// writes raw GI to half-res render target.
+// ============================================================
+[numthreads(8, 8, 1)]
+void CSResolveGi(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_HalfResolution.x || id.y >= (uint)_HalfResolution.y)
+        return;
+
+    float2 uv = (float2(id.xy) + 0.5) * _HalfResolution.zw;
+
+    // Read depth and reconstruct world position
+    float depth = _CameraDepthTexture.SampleLevel(sampler_CameraDepthTexture, uv, 0).r;
+
+    // Skip sky pixels (depth = 0 or 1 depending on platform)
+    #if UNITY_REVERSED_Z
+        if (depth <= 0.0)
+    #else
+        if (depth >= 1.0)
+    #endif
+    {
+        _GiOutput[id.xy] = float4(0, 0, 0, 0);
+        return;
+    }
+
+    float3 worldPos = ReconstructWorldPos(uv, depth);
+
+    // Read normal
+    float3 worldNormal = DecodeNormal(_CameraNormalsTexture.SampleLevel(sampler_CameraNormalsTexture, uv, 0));
+
+    // Normal bias trick
+    worldPos += worldNormal * (_SpatialHashVoxelSize * 0.5);
+
+    // Hash lookup
+    float3 localPos = (worldPos - _VolumePosition) * _SpatialHashOneOverVoxelSize;
+    int3 voxelPos = (int3)floor(localPos);
+
+    float3 gi = float3(0, 0, 0);
+
+    if (all(voxelPos >= 0) && all(voxelPos < (int)SPATIAL_HASH_GRID_SIZE))
+    {
+        uint3 uVoxelPos = (uint3)voxelPos;
+        int linearIndex = SpatialHashLinearIndex(uVoxelPos);
+        int dataIndex = _SpatialHashGrid[linearIndex];
+
+        if (dataIndex >= 0)
+        {
+            VoxelGI data = _SpatialHashVoxelData[dataIndex];
+            float3 ambient = UnpackR8G8B8A8(data.colorAmbient).rgb;
+            float3 sh = UnpackR8G8B8A8(data.colorModifiers).rgb;
+            sh = sh * 2.0 - 1.0;
+
+            gi = ambient + (sh.x * worldNormal.x + sh.y * worldNormal.y + sh.z * worldNormal.z);
+            gi = max(gi, 0);
+        }
+    }
+
+    _GiOutput[id.xy] = float4(gi, 1.0);
+}
+
+// ============================================================
+// Bilateral Gaussian weights (7-tap kernel)
+// ============================================================
+static const float s_gaussWeights[4] = { 0.3829, 0.2417, 0.0606, 0.0060 };
+
+float BilateralWeight(float centerDepth, float sampleDepth, float gaussW)
+{
+    float depthDiff = abs(centerDepth - sampleDepth);
+    float depthWeight = depthDiff < _BilateralDepthThreshold ? 1.0 : 0.0;
+    return gaussW * depthWeight;
+}
+
+// ============================================================
+// KERNEL: Bilateral Blur - Horizontal
+// ============================================================
+[numthreads(8, 8, 1)]
+void CSBilateralBlurH(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_HalfResolution.x || id.y >= (uint)_HalfResolution.y)
+        return;
+
+    float2 uv = (float2(id.xy) + 0.5) * _HalfResolution.zw;
+    float2 texelSize = _HalfResolution.zw;
+
+    float centerDepth = _CameraDepthTexture.SampleLevel(sampler_CameraDepthTexture, uv, 0).r;
+    float4 centerColor = _BlurInput.SampleLevel(sampler_BlurInput, uv, 0);
+
+    float4 result = centerColor * s_gaussWeights[0];
+    float totalWeight = s_gaussWeights[0];
+
+    int radius = min(_BlurKernelRadius, 3);
+
+    [unroll]
+    for (int i = 1; i <= 3; i++)
+    {
+        if (i > radius) break;
+
+        float2 offset = float2(float(i) * texelSize.x, 0.0);
+
+        // Positive direction
+        float2 uvP = uv + offset;
+        float depthP = _CameraDepthTexture.SampleLevel(sampler_CameraDepthTexture, uvP, 0).r;
+        float wP = BilateralWeight(centerDepth, depthP, s_gaussWeights[i]);
+        result += _BlurInput.SampleLevel(sampler_BlurInput, uvP, 0) * wP;
+        totalWeight += wP;
+
+        // Negative direction
+        float2 uvN = uv - offset;
+        float depthN = _CameraDepthTexture.SampleLevel(sampler_CameraDepthTexture, uvN, 0).r;
+        float wN = BilateralWeight(centerDepth, depthN, s_gaussWeights[i]);
+        result += _BlurInput.SampleLevel(sampler_BlurInput, uvN, 0) * wN;
+        totalWeight += wN;
+    }
+
+    _BlurOutput[id.xy] = result / max(totalWeight, 1e-6);
+}
+
+// ============================================================
+// KERNEL: Bilateral Blur - Vertical
+// ============================================================
+[numthreads(8, 8, 1)]
+void CSBilateralBlurV(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_HalfResolution.x || id.y >= (uint)_HalfResolution.y)
+        return;
+
+    float2 uv = (float2(id.xy) + 0.5) * _HalfResolution.zw;
+    float2 texelSize = _HalfResolution.zw;
+
+    float centerDepth = _CameraDepthTexture.SampleLevel(sampler_CameraDepthTexture, uv, 0).r;
+    float4 centerColor = _BlurInput.SampleLevel(sampler_BlurInput, uv, 0);
+
+    float4 result = centerColor * s_gaussWeights[0];
+    float totalWeight = s_gaussWeights[0];
+
+    int radius = min(_BlurKernelRadius, 3);
+
+    [unroll]
+    for (int i = 1; i <= 3; i++)
+    {
+        if (i > radius) break;
+
+        float2 offset = float2(0.0, float(i) * texelSize.y);
+
+        // Positive direction
+        float2 uvP = uv + offset;
+        float depthP = _CameraDepthTexture.SampleLevel(sampler_CameraDepthTexture, uvP, 0).r;
+        float wP = BilateralWeight(centerDepth, depthP, s_gaussWeights[i]);
+        result += _BlurInput.SampleLevel(sampler_BlurInput, uvP, 0) * wP;
+        totalWeight += wP;
+
+        // Negative direction
+        float2 uvN = uv - offset;
+        float depthN = _CameraDepthTexture.SampleLevel(sampler_CameraDepthTexture, uvN, 0).r;
+        float wN = BilateralWeight(centerDepth, depthN, s_gaussWeights[i]);
+        result += _BlurInput.SampleLevel(sampler_BlurInput, uvN, 0) * wN;
+        totalWeight += wN;
+    }
+
+    _BlurOutput[id.xy] = result / max(totalWeight, 1e-6);
+}

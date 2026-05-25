@@ -38,11 +38,14 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             // Lotec Voxel Lighting per-direction occlusion field (hardware-interpolated)
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionField.hlsl"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelGi.hlsl"
+            // Lotec Spatial Hash GI (flat StructuredBuffer, no Texture3D)
+            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/SpatialHashGi.hlsl"
 
             // Choose shadow implementation at compile-time only.
             // Keywords: SDF_ONLY, BITMASK_POINT (single bit), BITMASK_8TAP (trilinear 2x2x2), OCC_FIELD (per-direction field)
             #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_8TAP OCC_FIELD
             #pragma multi_compile SDF_AO_OFF SDF_AO_LQ SDF_AO_HQ
+            #pragma multi_compile __ SPATIAL_HASH_GI
 
             #define MAX_POINT_LIGHTS 4
             #define MAX_SPOT_LIGHTS 4
@@ -246,7 +249,11 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 // float spec = pow(saturate(dot(N, H)), specPower) * (1.0 - saturate(_Roughness));
                 
                 // Global Illumination from Voxel GI field
-                float3 gi = SampleVoxelGI(IN.positionWS, N);
+                #if defined(SPATIAL_HASH_GI)
+                    float3 gi = SampleSpatialHashGi(IN.positionWS, N);
+                #else
+                    float3 gi = SampleVoxelGI(IN.positionWS, N);
+                #endif
                 float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
                 half3 directLighting = GetMainDirectLighting(light, IN.positionWS, N, albedo);
                 directLighting += GetPointLightDirect(IN.positionWS, N, albedo);

@@ -1,7 +1,10 @@
 {
     "name": "Lotec.Lighting",
     "rootNamespace": "Lotec.Lighting",
-    "references": [],
+    "references": [
+        "Unity.RenderPipelines.Universal.Runtime",
+        "Unity.RenderPipelines.Core.Runtime"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
@@ -9,6 +12,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.render-pipelines.universal",
+            "expression": "",
+            "define": "LOTEC_URP"
+        }
+    ],
     "noEngineReferences": false
 }
