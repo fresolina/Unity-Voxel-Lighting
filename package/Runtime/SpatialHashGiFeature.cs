@@ -120,6 +120,7 @@ namespace Lotec.Lighting {
             }
         }
 
+        [System.Obsolete]
         public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData) {
             var desc = renderingData.cameraData.cameraTargetDescriptor;
             int halfW = Mathf.Max(1, desc.width / 2);
@@ -149,6 +150,7 @@ namespace Lotec.Lighting {
             ConfigureInput(ScriptableRenderPassInput.Depth | ScriptableRenderPassInput.Normal);
         }
 
+        [System.Obsolete]
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData) {
             if (_settings.screenSpaceCompute == null) return;
 
@@ -242,6 +244,7 @@ namespace Lotec.Lighting {
                 && Application.platform == RuntimePlatform.Android;
         }
 
+        [System.Obsolete]
         public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData) {
             var desc = renderingData.cameraData.cameraTargetDescriptor;
             int halfW = Mathf.Max(1, desc.width / 2);
@@ -277,6 +280,7 @@ namespace Lotec.Lighting {
             ConfigureInput(ScriptableRenderPassInput.Depth | ScriptableRenderPassInput.Normal);
         }
 
+        [System.Obsolete]
         public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData) {
             if (!IsReady) return;
 

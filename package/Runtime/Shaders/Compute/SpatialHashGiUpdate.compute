@@ -35,9 +35,8 @@ float RaymarchSDF(float3 voxelCenter, float3 rayDir, float startOffset, float ma
 
 struct VoxelGI
 {
-    uint voxelPackedPos;
-    uint colorAmbient;
-    uint colorModifiers;
+    uint voxelPackedPos;  // X (10 bits), Y (10 bits), Z (10 bits), Padding (2 bits)
+    uint packedLighting;  // R(5) G(6) B(5) M(2) axisX(4) axisY(4) axisZ(4) pad(2)
 };
 
 inline uint PackPosition10(uint3 pos)
@@ -50,22 +49,29 @@ inline uint3 UnpackPosition10(uint packed)
     return uint3(packed & 0x3FF, (packed >> 10) & 0x3FF, (packed >> 20) & 0x3FF);
 }
 
-inline uint PackR8G8B8A8(float4 color)
+inline uint PackLighting(float3 hdrColor, float3 axisModifiers)
 {
-    uint r = (uint)(saturate(color.r) * 255.0);
-    uint g = (uint)(saturate(color.g) * 255.0);
-    uint b = (uint)(saturate(color.b) * 255.0);
-    uint a = (uint)(saturate(color.a) * 255.0);
-    return (r << 24) | (g << 16) | (b << 8) | a;
-}
+    float maxChannel = max(max(hdrColor.r, hdrColor.g), hdrColor.b);
+    uint m;
+    float multiplier;
+    if      (maxChannel > 4.0) { m = 3; multiplier = 8.0; }
+    else if (maxChannel > 2.0) { m = 2; multiplier = 4.0; }
+    else if (maxChannel > 1.0) { m = 1; multiplier = 2.0; }
+    else                       { m = 0; multiplier = 1.0; }
 
-inline float4 UnpackR8G8B8A8(uint packed)
-{
-    float r = ((packed >> 24) & 0xFF) / 255.0;
-    float g = ((packed >> 16) & 0xFF) / 255.0;
-    float b = ((packed >> 8) & 0xFF) / 255.0;
-    float a = (packed & 0xFF) / 255.0;
-    return float4(r, g, b, a);
+    float3 baseColor = saturate(hdrColor / multiplier);
+
+    uint r = (uint)(baseColor.r * 31.0 + 0.5);
+    uint g = (uint)(baseColor.g * 63.0 + 0.5);
+    uint b = (uint)(baseColor.b * 31.0 + 0.5);
+
+    uint ax = (uint)(saturate(axisModifiers.x * 0.5 + 0.5) * 15.0 + 0.5);
+    uint ay = (uint)(saturate(axisModifiers.y * 0.5 + 0.5) * 15.0 + 0.5);
+    uint az = (uint)(saturate(axisModifiers.z * 0.5 + 0.5) * 15.0 + 0.5);
+
+    return (r & 0x1F) | ((g & 0x3F) << 5) | ((b & 0x1F) << 11)
+         | ((m & 0x3) << 16)
+         | ((ax & 0xF) << 18) | ((ay & 0xF) << 22) | ((az & 0xF) << 26);
 }
 
 inline int SpatialHashLinearIndex(uint3 voxelPos)
@@ -222,8 +228,7 @@ void CSVoxelizeSurfaces(uint3 id : SV_DispatchThreadID)
 
     VoxelGI voxel;
     voxel.voxelPackedPos = packedPos;
-    voxel.colorAmbient = 0;
-    voxel.colorModifiers = PackR8G8B8A8(float4(0.5, 0.5, 0.5, 0.0)); // neutral SH
+    voxel.packedLighting = PackLighting(float3(0, 0, 0), float3(0, 0, 0)); // neutral
 
     _VoxelDataBuffer[dataIndex] = voxel;
     _VoxelHashGrid[linearIndex] = (int)dataIndex;
@@ -278,26 +283,20 @@ void CSInjectLight(uint3 id : SV_DispatchThreadID)
     float3 directLight = sunLight * sunNdotL + pointLight + spotLight;
     float3 totalLight = (directLight + skyLight) * albedoIntensity.rgb + emissiveLight;
 
-    // --- L1 SH Encoding ---
-    // Ambient (DC band): average incoming light
-    float3 ambient = totalLight;
-
-    // Directional (L1 bands): weighted by dominant light direction.
+    // --- Directional Axis Encoding ---
+    // Compute axis directional modifiers from dominant light direction.
     // Sun contributes along its direction proportional to visibility.
-    // Local lights contribute along their aggregate direction.
-    float3 shDir = _DirectLightDir * sunVisibility * sunNdotL;
-    // Scale the SH directional term relative to ambient intensity
-    float3 shCoeffs = shDir * length(sunLight) * albedoIntensity.rgb;
+    float3 dominantDir = _DirectLightDir * sunVisibility * sunNdotL;
+    float dominantStrength = length(dominantDir);
+    float3 axisModifiers = dominantStrength > 1e-6 ? (dominantDir / dominantStrength) : float3(0, 0, 0);
 
-    // Bias SH from [-1,1] to [0,1] for R8G8B8A8 packing
-    // Normalize SH relative to ambient magnitude to keep within range
-    float ambientLum = max(dot(ambient, float3(0.333, 0.334, 0.333)), 1e-6);
-    float3 shNormalized = clamp(shCoeffs / ambientLum, -1.0, 1.0);
-    float3 shBiased = shNormalized * 0.5 + 0.5;
+    // Scale axis modifiers by relative directional strength vs total illumination
+    float totalLum = max(dot(totalLight, float3(0.333, 0.334, 0.333)), 1e-6);
+    float directionalRatio = saturate(dominantStrength * dot(sunLight, float3(0.333, 0.334, 0.333)) / totalLum);
+    axisModifiers *= directionalRatio;
 
-    // Pack into VoxelGI
-    voxel.colorAmbient = PackR8G8B8A8(float4(saturate(ambient), 0.0));
-    voxel.colorModifiers = PackR8G8B8A8(float4(saturate(shBiased), 0.0));
+    // Pack into VoxelGI (RGB565 + RGBM + 4-bit axis modifiers)
+    voxel.packedLighting = PackLighting(totalLight, axisModifiers);
 
     _VoxelDataBuffer[voxelIndex] = voxel;
 }

@@ -73,8 +73,8 @@ namespace Lotec.Lighting {
         }
 
         void CreateBuffers() {
-            // VoxelGI: 3 uints = 12 bytes per element
-            _voxelDataBuffer = new ComputeBuffer(_maxVoxelCount, 12, ComputeBufferType.Structured);
+            // VoxelGI: 2 uints = 8 bytes per element (dwordx2 aligned for Adreno 740)
+            _voxelDataBuffer = new ComputeBuffer(_maxVoxelCount, 8, ComputeBufferType.Structured);
             // Hash grid: 1 int per cell
             _hashGridBuffer = new ComputeBuffer(HashGridTotal, sizeof(int), ComputeBufferType.Structured);
             // Counter: single uint

@@ -33,18 +33,23 @@ Shader "Hidden/Lotec/SpatialHashGiResolve"
 
             struct VoxelGI
             {
-                uint voxelPackedPos;
-                uint colorAmbient;
-                uint colorModifiers;
+                uint voxelPackedPos;  // X (10 bits), Y (10 bits), Z (10 bits), Padding (2 bits)
+                uint packedLighting;  // R(5) G(6) B(5) M(2) axisX(4) axisY(4) axisZ(4) pad(2)
             };
 
-            inline float4 UnpackR8G8B8A8(uint packed)
+            inline void UnpackLighting(uint pL, out half3 hdrColor, out half3 axisModifiers)
             {
-                float r = ((packed >> 24) & 0xFF) / 255.0;
-                float g = ((packed >> 16) & 0xFF) / 255.0;
-                float b = ((packed >> 8) & 0xFF) / 255.0;
-                float a = (packed & 0xFF) / 255.0;
-                return float4(r, g, b, a);
+                half3 baseColor = half3(
+                    (pL & 0x1F) / 31.0h,
+                    ((pL >> 5) & 0x3F) / 63.0h,
+                    ((pL >> 11) & 0x1F) / 31.0h
+                );
+                half multiplier = (half)(1u << ((pL >> 16) & 0x3));
+                hdrColor = baseColor * multiplier;
+
+                axisModifiers.x = (((pL >> 18) & 0xF) / 15.0h) * 2.0h - 1.0h;
+                axisModifiers.y = (((pL >> 22) & 0xF) / 15.0h) * 2.0h - 1.0h;
+                axisModifiers.z = (((pL >> 26) & 0xF) / 15.0h) * 2.0h - 1.0h;
             }
 
             inline int SpatialHashLinearIndex(uint3 voxelPos)
@@ -145,10 +150,12 @@ Shader "Hidden/Lotec/SpatialHashGiResolve"
                     if (dataIndex >= 0)
                     {
                         VoxelGI data = _SpatialHashVoxelData[dataIndex];
-                        half3 ambient = (half3)UnpackR8G8B8A8(data.colorAmbient).rgb;
-                        half3 sh = (half3)(UnpackR8G8B8A8(data.colorModifiers).rgb * 2.0 - 1.0);
-                        gi = ambient + (sh.x * worldNormal.x + sh.y * worldNormal.y + sh.z * worldNormal.z);
-                        gi = max(gi, half3(0, 0, 0));
+                        half3 hdrColor;
+                        half3 axisModifiers;
+                        UnpackLighting(data.packedLighting, hdrColor, axisModifiers);
+
+                        half directionalWeight = dot((half3)worldNormal, axisModifiers);
+                        gi = max(half3(0, 0, 0), hdrColor + (hdrColor * directionalWeight));
                     }
                 }
 

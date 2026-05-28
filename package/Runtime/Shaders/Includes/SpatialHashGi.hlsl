@@ -11,12 +11,11 @@
 #define SPATIAL_HASH_GRID_SIZE 64
 #define SPATIAL_HASH_GRID_TOTAL (SPATIAL_HASH_GRID_SIZE * SPATIAL_HASH_GRID_SIZE * SPATIAL_HASH_GRID_SIZE)
 
-// Size: 12 bytes (Perfect alignment for GPU cache lines)
+// Size: 8 bytes (64 bits) — dwordx2 single-cycle read on Adreno 740
 struct VoxelGI
 {
-    uint voxelPackedPos; // X, Y, Z coordinates packed (10 bits each: 0-1023)
-    uint colorAmbient;   // RGB base light (Ambient) packed as R8G8B8A8
-    uint colorModifiers; // L1 SH coefficients (X, Y, Z) packed as R8G8B8A8
+    uint voxelPackedPos;  // X (10 bits), Y (10 bits), Z (10 bits), Padding (2 bits)
+    uint packedLighting;  // R(5) G(6) B(5) M(2) axisX(4) axisY(4) axisZ(4) pad(2)
 };
 
 // --- Packing / Unpacking Utilities ---
@@ -31,22 +30,51 @@ inline uint3 UnpackPosition10(uint packed)
     return uint3(packed & 0x3FF, (packed >> 10) & 0x3FF, (packed >> 20) & 0x3FF);
 }
 
-inline uint PackR8G8B8A8(float4 color)
+// Pack HDR color (RGB565 + 2-bit RGBM multiplier) and 3 axis directional modifiers
+// into a single 32-bit uint.
+//   hdrColor: linear HDR irradiance (range 0..8)
+//   axisModifiers: signed directional weights in [-1, +1]
+inline uint PackLighting(float3 hdrColor, float3 axisModifiers)
 {
-    uint r = (uint)(saturate(color.r) * 255.0);
-    uint g = (uint)(saturate(color.g) * 255.0);
-    uint b = (uint)(saturate(color.b) * 255.0);
-    uint a = (uint)(saturate(color.a) * 255.0);
-    return (r << 24) | (g << 16) | (b << 8) | a;
+    // Determine RGBM multiplier: 1x, 2x, 4x, or 8x
+    float maxChannel = max(max(hdrColor.r, hdrColor.g), hdrColor.b);
+    uint m;
+    float multiplier;
+    if      (maxChannel > 4.0) { m = 3; multiplier = 8.0; }
+    else if (maxChannel > 2.0) { m = 2; multiplier = 4.0; }
+    else if (maxChannel > 1.0) { m = 1; multiplier = 2.0; }
+    else                       { m = 0; multiplier = 1.0; }
+
+    float3 baseColor = saturate(hdrColor / multiplier);
+
+    uint r = (uint)(baseColor.r * 31.0 + 0.5);
+    uint g = (uint)(baseColor.g * 63.0 + 0.5);
+    uint b = (uint)(baseColor.b * 31.0 + 0.5);
+
+    // Axis modifiers: remap [-1,1] to [0,15] unorm
+    uint ax = (uint)(saturate(axisModifiers.x * 0.5 + 0.5) * 15.0 + 0.5);
+    uint ay = (uint)(saturate(axisModifiers.y * 0.5 + 0.5) * 15.0 + 0.5);
+    uint az = (uint)(saturate(axisModifiers.z * 0.5 + 0.5) * 15.0 + 0.5);
+
+    return (r & 0x1F) | ((g & 0x3F) << 5) | ((b & 0x1F) << 11)
+         | ((m & 0x3) << 16)
+         | ((ax & 0xF) << 18) | ((ay & 0xF) << 22) | ((az & 0xF) << 26);
 }
 
-inline float4 UnpackR8G8B8A8(uint packed)
+// Unpack the 32-bit packedLighting field into HDR color and axis modifiers.
+inline void UnpackLighting(uint pL, out float3 hdrColor, out float3 axisModifiers)
 {
-    float r = ((packed >> 24) & 0xFF) / 255.0;
-    float g = ((packed >> 16) & 0xFF) / 255.0;
-    float b = ((packed >> 8) & 0xFF) / 255.0;
-    float a = (packed & 0xFF) / 255.0;
-    return float4(r, g, b, a);
+    float3 baseColor = float3(
+        (pL & 0x1F) / 31.0,
+        ((pL >> 5) & 0x3F) / 63.0,
+        ((pL >> 11) & 0x1F) / 31.0
+    );
+    float multiplier = (float)(1u << ((pL >> 16) & 0x3)); // 1, 2, 4, or 8
+    hdrColor = baseColor * multiplier;
+
+    axisModifiers.x = (((pL >> 18) & 0xF) / 15.0) * 2.0 - 1.0;
+    axisModifiers.y = (((pL >> 22) & 0xF) / 15.0) * 2.0 - 1.0;
+    axisModifiers.z = (((pL >> 26) & 0xF) / 15.0) * 2.0 - 1.0;
 }
 
 inline int SpatialHashLinearIndex(uint3 voxelPos)
@@ -89,18 +117,17 @@ float3 SampleSpatialHashGi(float3 worldPos, float3 worldNormal)
     if (dataIndex >= 0)
     {
         VoxelGI data = _SpatialHashVoxelData[dataIndex];
-        float3 ambient = UnpackR8G8B8A8(data.colorAmbient).rgb;
-        float3 sh = UnpackR8G8B8A8(data.colorModifiers).rgb;
 
-        // Decode SH from [0,1] bias encoding back to [-1,1]
-        sh = sh * 2.0 - 1.0;
+        float3 hdrColor;
+        float3 axisModifiers;
+        UnpackLighting(data.packedLighting, hdrColor, axisModifiers);
 
-        // Anisotropic L1 reconstruction: protects house interiors
-        // based on the surface normal direction.
-        finalIrradiance = ambient + (sh.x * worldNormal.x + sh.y * worldNormal.y + sh.z * worldNormal.z);
+        // Anisotropic reconstruction via vector projection
+        float directionalWeight = dot(worldNormal, axisModifiers);
+        finalIrradiance = max(0.0, hdrColor + (hdrColor * directionalWeight));
     }
 
-    return max(finalIrradiance, 0);
+    return finalIrradiance;
 }
 
 #endif // LOTEC_SPATIAL_HASH_GI_INCLUDED

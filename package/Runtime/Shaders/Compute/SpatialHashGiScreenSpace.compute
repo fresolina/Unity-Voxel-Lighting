@@ -12,23 +12,23 @@
 
 struct VoxelGI
 {
-    uint voxelPackedPos;
-    uint colorAmbient;
-    uint colorModifiers;
+    uint voxelPackedPos;  // X (10 bits), Y (10 bits), Z (10 bits), Padding (2 bits)
+    uint packedLighting;  // R(5) G(6) B(5) M(2) axisX(4) axisY(4) axisZ(4) pad(2)
 };
 
-inline uint3 UnpackPosition10(uint packed)
+inline void UnpackLighting(uint pL, out float3 hdrColor, out float3 axisModifiers)
 {
-    return uint3(packed & 0x3FF, (packed >> 10) & 0x3FF, (packed >> 20) & 0x3FF);
-}
+    float3 baseColor = float3(
+        (pL & 0x1F) / 31.0,
+        ((pL >> 5) & 0x3F) / 63.0,
+        ((pL >> 11) & 0x1F) / 31.0
+    );
+    float multiplier = (float)(1u << ((pL >> 16) & 0x3));
+    hdrColor = baseColor * multiplier;
 
-inline float4 UnpackR8G8B8A8(uint packed)
-{
-    float r = ((packed >> 24) & 0xFF) / 255.0;
-    float g = ((packed >> 16) & 0xFF) / 255.0;
-    float b = ((packed >> 8) & 0xFF) / 255.0;
-    float a = (packed & 0xFF) / 255.0;
-    return float4(r, g, b, a);
+    axisModifiers.x = (((pL >> 18) & 0xF) / 15.0) * 2.0 - 1.0;
+    axisModifiers.y = (((pL >> 22) & 0xF) / 15.0) * 2.0 - 1.0;
+    axisModifiers.z = (((pL >> 26) & 0xF) / 15.0) * 2.0 - 1.0;
 }
 
 inline int SpatialHashLinearIndex(uint3 voxelPos)
@@ -132,12 +132,12 @@ void CSResolveGi(uint3 id : SV_DispatchThreadID)
         if (dataIndex >= 0)
         {
             VoxelGI data = _SpatialHashVoxelData[dataIndex];
-            float3 ambient = UnpackR8G8B8A8(data.colorAmbient).rgb;
-            float3 sh = UnpackR8G8B8A8(data.colorModifiers).rgb;
-            sh = sh * 2.0 - 1.0;
+            float3 hdrColor;
+            float3 axisModifiers;
+            UnpackLighting(data.packedLighting, hdrColor, axisModifiers);
 
-            gi = ambient + (sh.x * worldNormal.x + sh.y * worldNormal.y + sh.z * worldNormal.z);
-            gi = max(gi, 0);
+            float directionalWeight = dot(worldNormal, axisModifiers);
+            gi = max(0.0, hdrColor + (hdrColor * directionalWeight));
         }
     }
 
