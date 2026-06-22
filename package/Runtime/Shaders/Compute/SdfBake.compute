@@ -7,10 +7,19 @@
 
 // Inputs
 StructuredBuffer<float3> _TriVerts; // 3 float3 per triangle
-int _TriCount;
 float3 _BoundsMin;
 float3 _BoundsSize;
 int3 _Resolution;
+
+// Uniform-grid acceleration structure (built on the CPU, see SdfBaker.cs).
+// The grid lets each voxel test only triangles in nearby cells instead of the
+// whole mesh. It produces the exact same nearest triangle as a brute-force scan
+// (an expanding shell search only skips cells that provably cannot be closer),
+// so the baked distance and sign are identical - just far cheaper.
+StructuredBuffer<uint> _CellStart;  // _CellCount + 1 prefix-sum offsets (CSR)
+StructuredBuffer<uint> _TriIndices; // triangle indices grouped by cell
+int3 _GridDim;                      // grid cell counts per axis
+float _CellSize;                    // cubic cell edge length, world units
 
 // Output
 // NOTE: Using `half` in UAV buffers is not guaranteed to be 16-bit on all backends.
@@ -101,6 +110,32 @@ float PointTriangleDistanceSq(float3 p, float3 a, float3 b, float3 c) {
     return (dist * dist) * invLenSq;
 }
 
+// Tests every triangle registered in one grid cell against point p, keeping the
+// nearest. No-op when the cell is outside the grid. Cells may share a triangle, so
+// a triangle can be retested across cells - harmless, it only affects the minimum.
+void ScanCell(int3 cell, float3 p, inout float minDistSq, inout int bestTri) {
+    if (any(cell < 0) || any(cell >= _GridDim))
+        return;
+
+    int cellIndex = cell.x + cell.y * _GridDim.x + cell.z * _GridDim.x * _GridDim.y;
+    uint start = _CellStart[cellIndex];
+    uint end = _CellStart[cellIndex + 1];
+
+    for (uint k = start; k < end; k++) {
+        int tri = (int)_TriIndices[k];
+        int baseIndex = tri * 3;
+        float3 a = _TriVerts[baseIndex + 0];
+        float3 b = _TriVerts[baseIndex + 1];
+        float3 c = _TriVerts[baseIndex + 2];
+
+        float d2 = PointTriangleDistanceSq(p, a, b, c);
+        if (d2 < minDistSq) {
+            minDistSq = d2;
+            bestTri = tri;
+        }
+    }
+}
+
 [numthreads(4, 4, 4)]
 void CSMain(uint3 id : SV_DispatchThreadID) {
     if (id.x >= (uint)_Resolution.x || id.y >= (uint)_Resolution.y || id.z >= (uint)_Resolution.z)
@@ -115,17 +150,41 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     int bestTri = 0;
     float backfaceExtrusionDistance = length(size / max(float3(_Resolution), 1.0));
 
-    [loop]
-    for (int tri = 0; tri < _TriCount; tri++) {
-        int baseIndex = tri * 3;
-        float3 a = _TriVerts[baseIndex + 0];
-        float3 b = _TriVerts[baseIndex + 1];
-        float3 c = _TriVerts[baseIndex + 2];
+    // Cell containing p, then search outward in Chebyshev shells. A triangle whose
+    // nearest point is within distance d has its AABB - and therefore a grid
+    // registration - in a cell within d of p, so once the closest possible point of
+    // the next shell is farther than the best distance found, no closer triangle can
+    // remain. lowerBound = (r - 1) * cellSize is the exact minimum distance from p to
+    // any cell in shell r, making the early-out conservative and the result exact.
+    int3 home = clamp(int3(floor((p - _BoundsMin) / _CellSize)), int3(0, 0, 0), _GridDim - int3(1, 1, 1));
+    int maxRadius = max(_GridDim.x, max(_GridDim.y, _GridDim.z));
 
-        float d2 = PointTriangleDistanceSq(p, a, b, c);
-        if (d2 < minDistSq) {
-            minDistSq = d2;
-            bestTri = tri;
+    [loop]
+    for (int r = 0; r <= maxRadius; r++) {
+        if (r > 0) {
+            float lowerBound = (r - 1) * _CellSize;
+            if (lowerBound * lowerBound >= minDistSq)
+                break;
+        }
+
+        int3 lo = home - r;
+        int3 hi = home + r;
+
+        // Visit only the shell at Chebyshev distance r: full rows on the z/y faces,
+        // and just the two x endpoints on interior rows.
+        for (int z = lo.z; z <= hi.z; z++) {
+            bool zFace = (z == lo.z || z == hi.z);
+            for (int y = lo.y; y <= hi.y; y++) {
+                bool yFace = (y == lo.y || y == hi.y);
+                if (zFace || yFace) {
+                    for (int x = lo.x; x <= hi.x; x++)
+                        ScanCell(int3(x, y, z), p, minDistSq, bestTri);
+                } else {
+                    ScanCell(int3(lo.x, y, z), p, minDistSq, bestTri);
+                    if (hi.x != lo.x)
+                        ScanCell(int3(hi.x, y, z), p, minDistSq, bestTri);
+                }
+            }
         }
     }
 

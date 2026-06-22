@@ -1,0 +1,292 @@
+#pragma kernel Seed
+#pragma kernel JumpFlood
+#pragma kernel Resolve
+#pragma target 5.0
+
+#include "../Includes/Math.hlsl"
+
+// 3D SDF bake via Jump Flooding Algorithm (JFA).
+//
+// This is an *approximate* alternative to the exact grid baker (SdfBake.compute),
+// provided for evaluation. Pipeline:
+//   1) Seed      - voxels in a thin band around the surface store their nearest
+//                  triangle index (found with the same uniform grid the exact baker
+//                  uses). Voxels outside the band store NO_SEED.
+//   2) JumpFlood - log2(N) ping-pong passes propagate triangle indices outward. Each
+//                  voxel samples neighbours at decreasing power-of-two steps and keeps
+//                  whichever propagated triangle is actually closest to it.
+//   3) Resolve   - distance and sign are computed exactly against the propagated
+//                  nearest triangle, then packed to a 16-bit half.
+//
+// Cost is independent of triangle count after seeding. The approximation: in the far
+// field JFA may propagate a triangle that is not the globally nearest, so some distant
+// voxels can be slightly off. Distance/sign math is kept identical to the exact baker
+// so the two can be compared directly.
+
+// Geometry + uniform grid (identical layout to SdfBaker.BuildUniformGrid).
+StructuredBuffer<float3> _TriVerts;
+StructuredBuffer<uint> _CellStart;
+StructuredBuffer<uint> _TriIndices;
+int3 _GridDim;
+float _CellSize;
+
+float3 _BoundsMin;
+float3 _BoundsSize;
+int3 _Resolution;
+
+// JFA state: nearest triangle index per voxel (NO_SEED = none). Ping-ponged.
+RWStructuredBuffer<uint> _SeedIn;
+RWStructuredBuffer<uint> _SeedOut;
+int _JfaStep;          // current jump distance in voxels
+int _BandCellRadius;   // seed search radius, in grid cells
+
+// Output: lower 16 bits contain IEEE-754 half bits (matches SdfBake.compute).
+RWStructuredBuffer<uint> _OutSdf;
+
+static const float EPS = 1e-7;
+static const uint NO_SEED = 0xFFFFFFFFu;
+
+// --- shared math, kept identical to SdfBake.compute for a fair comparison ---
+
+bool PointProjectedInsideTriangle(float3 p, float3 a, float3 b, float3 c, float3 triNormal) {
+    float3 edge0 = b - a;
+    float3 edge1 = c - b;
+    float3 edge2 = a - c;
+
+    float side0 = dot(triNormal, cross(edge0, p - a));
+    float side1 = dot(triNormal, cross(edge1, p - b));
+    float side2 = dot(triNormal, cross(edge2, p - c));
+
+    return side0 >= -EPS && side1 >= -EPS && side2 >= -EPS;
+}
+
+bool IsInsideVirtualBackfaceExtrusion(float3 p, float3 a, float3 b, float3 c, float extrusionDistance) {
+    float3 triNormal = cross(b - a, c - a);
+    float normalLenSq = dot(triNormal, triNormal);
+    if (normalLenSq <= EPS)
+        return false;
+
+    float3 normal = triNormal * rsqrt(normalLenSq);
+    float3 closestPoint = ClosestPointOnTriangle(p, a, b, c);
+    float3 closestOffset = p - closestPoint;
+
+    if (dot(closestOffset, closestOffset) > extrusionDistance * extrusionDistance)
+        return false;
+
+    float signedDistance = dot(normal, closestOffset);
+    if (signedDistance > 0.0 || signedDistance < -extrusionDistance)
+        return false;
+
+    float3 projectedPoint = p - signedDistance * normal;
+    return PointProjectedInsideTriangle(projectedPoint, a, b, c, triNormal);
+}
+
+float PointTriangleDistanceSq(float3 p, float3 a, float3 b, float3 c) {
+    float3 ab = b - a;
+    float3 ac = c - a;
+    float3 ap = p - a;
+
+    float d1 = dot(ab, ap);
+    float d2 = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0) return dot(ap, ap);
+
+    float3 bp = p - b;
+    float d3 = dot(ab, bp);
+    float d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3) return dot(bp, bp);
+
+    float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+        float v = d1 / max(d1 - d3, EPS);
+        float3 q = a + v * ab;
+        float3 d = p - q;
+        return dot(d, d);
+    }
+
+    float3 cp = p - c;
+    float d5 = dot(ab, cp);
+    float d6 = dot(ac, cp);
+    if (d6 >= 0.0 && d5 <= d6) return dot(cp, cp);
+
+    float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+        float w = d2 / max(d2 - d6, EPS);
+        float3 q = a + w * ac;
+        float3 d = p - q;
+        return dot(d, d);
+    }
+
+    float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+        float w = (d4 - d3) / max((d4 - d3) + (d5 - d6), EPS);
+        float3 q = b + w * (c - b);
+        float3 d = p - q;
+        return dot(d, d);
+    }
+
+    float3 n = cross(ab, ac);
+    float invLenSq = 1.0 / max(dot(n, n), EPS);
+    float dist = dot(ap, n);
+    return (dist * dist) * invLenSq;
+}
+
+// Squared distance from p to triangle `tri` (index into _TriVerts triples).
+float TriDistSq(float3 p, uint tri) {
+    int baseIndex = (int)tri * 3;
+    return PointTriangleDistanceSq(p, _TriVerts[baseIndex + 0], _TriVerts[baseIndex + 1], _TriVerts[baseIndex + 2]);
+}
+
+// Tests every triangle in one grid cell, keeping the nearest. No-op out of bounds.
+void ScanCell(int3 cell, float3 p, inout float minDistSq, inout int bestTri) {
+    if (any(cell < 0) || any(cell >= _GridDim))
+        return;
+
+    int cellIndex = cell.x + cell.y * _GridDim.x + cell.z * _GridDim.x * _GridDim.y;
+    uint start = _CellStart[cellIndex];
+    uint end = _CellStart[cellIndex + 1];
+
+    for (uint k = start; k < end; k++) {
+        int tri = (int)_TriIndices[k];
+        int baseIndex = tri * 3;
+        float d2 = PointTriangleDistanceSq(p, _TriVerts[baseIndex + 0], _TriVerts[baseIndex + 1], _TriVerts[baseIndex + 2]);
+        if (d2 < minDistSq) {
+            minDistSq = d2;
+            bestTri = tri;
+        }
+    }
+}
+
+int VoxelIndex(int3 c) {
+    return c.x + c.y * _Resolution.x + c.z * _Resolution.x * _Resolution.y;
+}
+
+float3 VoxelToWorld(uint3 id) {
+    float3 size = max(_BoundsSize, 1e-6);
+    float3 uvw = (float3(id) + 0.5) / float3(_Resolution);
+    return _BoundsMin + uvw * size;
+}
+
+bool InsideResolution(uint3 id) {
+    return id.x < (uint)_Resolution.x && id.y < (uint)_Resolution.y && id.z < (uint)_Resolution.z;
+}
+
+// --- Pass 1: seed the narrow band with nearest triangle indices ---
+[numthreads(4, 4, 4)]
+void Seed(uint3 id : SV_DispatchThreadID) {
+    if (!InsideResolution(id))
+        return;
+
+    float3 p = VoxelToWorld(id);
+
+    float minDistSq = 1e30;
+    int bestTri = -1;
+    int3 home = clamp(int3(floor((p - _BoundsMin) / _CellSize)), int3(0, 0, 0), _GridDim - int3(1, 1, 1));
+    int limit = _BandCellRadius;
+
+    [loop]
+    for (int r = 0; r <= limit; r++) {
+        if (r > 0) {
+            float lowerBound = (r - 1) * _CellSize;
+            if (lowerBound * lowerBound >= minDistSq)
+                break;
+        }
+
+        int3 lo = home - r;
+        int3 hi = home + r;
+        for (int z = lo.z; z <= hi.z; z++) {
+            bool zFace = (z == lo.z || z == hi.z);
+            for (int y = lo.y; y <= hi.y; y++) {
+                bool yFace = (y == lo.y || y == hi.y);
+                if (zFace || yFace) {
+                    for (int x = lo.x; x <= hi.x; x++)
+                        ScanCell(int3(x, y, z), p, minDistSq, bestTri);
+                } else {
+                    ScanCell(int3(lo.x, y, z), p, minDistSq, bestTri);
+                    if (hi.x != lo.x)
+                        ScanCell(int3(hi.x, y, z), p, minDistSq, bestTri);
+                }
+            }
+        }
+    }
+
+    // Only keep voxels that are genuinely near the surface as seeds.
+    uint seed = NO_SEED;
+    if (bestTri >= 0) {
+        float bandDist = _BandCellRadius * _CellSize;
+        if (minDistSq <= bandDist * bandDist)
+            seed = (uint)bestTri;
+    }
+
+    _SeedOut[VoxelIndex(int3(id))] = seed;
+}
+
+// --- Pass 2: one jump-flood step ---
+[numthreads(4, 4, 4)]
+void JumpFlood(uint3 id : SV_DispatchThreadID) {
+    if (!InsideResolution(id))
+        return;
+
+    int vidx = VoxelIndex(int3(id));
+    float3 p = VoxelToWorld(id);
+
+    uint best = _SeedIn[vidx];
+    float bestDistSq = (best == NO_SEED) ? 1e30 : TriDistSq(p, best);
+
+    [unroll]
+    for (int dz = -1; dz <= 1; dz++) {
+        [unroll]
+        for (int dy = -1; dy <= 1; dy++) {
+            [unroll]
+            for (int dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0 && dz == 0)
+                    continue;
+
+                int3 n = int3(id) + int3(dx, dy, dz) * _JfaStep;
+                if (any(n < 0) || any(n >= _Resolution))
+                    continue;
+
+                uint cand = _SeedIn[VoxelIndex(n)];
+                if (cand == NO_SEED)
+                    continue;
+
+                float d2 = TriDistSq(p, cand);
+                if (d2 < bestDistSq) {
+                    bestDistSq = d2;
+                    best = cand;
+                }
+            }
+        }
+    }
+
+    _SeedOut[vidx] = best;
+}
+
+// --- Pass 3: exact distance + sign against the propagated nearest triangle ---
+[numthreads(4, 4, 4)]
+void Resolve(uint3 id : SV_DispatchThreadID) {
+    if (!InsideResolution(id))
+        return;
+
+    int vidx = VoxelIndex(int3(id));
+    float3 p = VoxelToWorld(id);
+    uint tri = _SeedIn[vidx];
+
+    float sdf;
+    if (tri == NO_SEED) {
+        // No seed ever reached this voxel (only possible for an empty mesh).
+        sdf = 1e4;
+    } else {
+        int baseIndex = (int)tri * 3;
+        float3 a = _TriVerts[baseIndex + 0];
+        float3 b = _TriVerts[baseIndex + 1];
+        float3 c = _TriVerts[baseIndex + 2];
+
+        float dist = sqrt(max(PointTriangleDistanceSq(p, a, b, c), 0.0));
+        float3 size = max(_BoundsSize, 1e-6);
+        float backfaceExtrusionDistance = length(size / max(float3(_Resolution), 1.0));
+        bool inside = IsInsideVirtualBackfaceExtrusion(p, a, b, c, backfaceExtrusionDistance);
+        sdf = inside ? -dist : dist;
+    }
+
+    _OutSdf[vidx] = f32tof16(sdf);
+}

@@ -10,7 +10,7 @@ namespace Lotec.Lighting {
     /// Bakes signed distance fields (SDF).
     /// </summary>
     [Serializable]
-    public class SdfBaker {
+    public class SdfBaker : ISdfBaker {
         public ComputeShader sdfBakeCompute;
 
         // Hard-invalid triangles are excluded from the bake. A degenerate triangle has
@@ -21,9 +21,17 @@ namespace Lotec.Lighting {
         const float DegenerateEdgeEpsilon = 1e-5f;
         const float OversizedEdgeBoundsFactor = 0.75f;
 
+        // Largest grid dimension allowed per axis when binning triangles into cells.
+        // Caps the acceleration-structure memory for skewed bounds; the grid is sized
+        // to roughly one triangle per cell, so typical scenes stay well under this.
+        const int MaxGridDim = 128;
+
         // Variables the SDF compute shader needs.
         static readonly int sTriVerts = Shader.PropertyToID("_TriVerts");
-        static readonly int sTriCount = Shader.PropertyToID("_TriCount");
+        static readonly int sCellStart = Shader.PropertyToID("_CellStart");
+        static readonly int sTriIndices = Shader.PropertyToID("_TriIndices");
+        static readonly int sGridDim = Shader.PropertyToID("_GridDim");
+        static readonly int sCellSize = Shader.PropertyToID("_CellSize");
         static readonly int sBoundsMin = Shader.PropertyToID("_BoundsMin");
         static readonly int sBoundsSize = Shader.PropertyToID("_BoundsSize");
         static readonly int sResolution = Shader.PropertyToID("_Resolution");
@@ -38,7 +46,8 @@ namespace Lotec.Lighting {
             out string error
         ) {
             bakedSdf = null;
-            Debug.Log($"Starting SDF bake with resolution {resolution} for volume '{volume.name}'", volume);
+            Debug.Log($"Starting SDF bake (exact) with resolution {resolution} for volume '{volume.name}'", volume);
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             if (volume == null) {
                 error = "Target SdfVolume is null.";
                 return false;
@@ -71,14 +80,29 @@ namespace Lotec.Lighting {
                 return false;
             }
 
+            // Bin triangles into a uniform grid so each voxel only tests nearby
+            // triangles. The grid yields the exact same nearest triangle as a full
+            // scan, so the bake result is unchanged - only faster.
+            BuildUniformGrid(triVerts, volume.Bounds, out Vector3Int gridDim, out float cellSize, out uint[] cellStart, out uint[] triIndices);
+
             // Output is packed half bits in the low 16 bits of a uint (see SdfBake.compute).
             var sdfBuffer = new ComputeBuffer(voxelCount, sizeof(uint), ComputeBufferType.Structured);
             var triBuffer = new ComputeBuffer(triVerts.Length, sizeof(float) * 3, ComputeBufferType.Structured);
+            var cellStartBuffer = new ComputeBuffer(cellStart.Length, sizeof(uint), ComputeBufferType.Structured);
+            // ComputeBuffer requires a positive count; an empty grid still needs a valid (dummy) buffer.
+            var triIndicesBuffer = new ComputeBuffer(Mathf.Max(1, triIndices.Length), sizeof(uint), ComputeBufferType.Structured);
 
             try {
                 triBuffer.SetData(triVerts);
+                cellStartBuffer.SetData(cellStart);
+                if (triIndices.Length > 0)
+                    triIndicesBuffer.SetData(triIndices);
+
                 sdfBakeCompute.SetBuffer(_kernel, sTriVerts, triBuffer);
-                sdfBakeCompute.SetInt(sTriCount, triCount);
+                sdfBakeCompute.SetBuffer(_kernel, sCellStart, cellStartBuffer);
+                sdfBakeCompute.SetBuffer(_kernel, sTriIndices, triIndicesBuffer);
+                sdfBakeCompute.SetInts(sGridDim, gridDim.x, gridDim.y, gridDim.z);
+                sdfBakeCompute.SetFloat(sCellSize, cellSize);
 
                 Vector3 bmin = volume.Bounds.min;
                 Vector3 bsize = volume.Bounds.size;
@@ -122,11 +146,122 @@ namespace Lotec.Lighting {
                 bakedSdf.SetPixelData(packed, 0);
                 bakedSdf.Apply(false, false);
 
+                Debug.Log($"SDF bake (exact) completed in {stopwatch.ElapsedMilliseconds} ms for resolution {resolution} ({triCount} triangles)", volume);
                 return true;
             } finally {
                 triBuffer.Release();
                 sdfBuffer.Release();
+                cellStartBuffer.Release();
+                triIndicesBuffer.Release();
             }
+        }
+
+        // Builds a uniform grid over the bake bounds and registers every triangle in
+        // the cells its AABB overlaps. The result is a CSR layout: cellStart[i]..
+        // cellStart[i+1] are the slots in triIndices that belong to cell i. The grid
+        // is sized to roughly one triangle per cell so the compute shader's expanding
+        // shell search touches only a handful of triangles per voxel, while still
+        // finding the exact nearest triangle (triangles outside the bounds clamp into
+        // border cells, where they remain reachable by edge voxels).
+        // Internal so alternative bakers (e.g. JfaSdfBaker) can share the grid build.
+        internal static void BuildUniformGrid(
+            Vector3[] triVerts,
+            Bounds bounds,
+            out Vector3Int gridDim,
+            out float cellSize,
+            out uint[] cellStart,
+            out uint[] triIndices
+        ) {
+            int triCount = triVerts.Length / 3;
+            Vector3 bmin = bounds.min;
+            Vector3 bsize = Vector3.Max(bounds.size, new Vector3(1e-6f, 1e-6f, 1e-6f));
+
+            // Target ~one triangle per cell, then derive a cubic cell size from the
+            // bounds volume. The product of the per-axis cell counts is ~triCount.
+            int targetCells = Mathf.Max(1, triCount);
+            double volume = (double)bsize.x * bsize.y * bsize.z;
+            cellSize = (float)System.Math.Cbrt(volume / targetCells);
+
+            gridDim = new Vector3Int(
+                Mathf.Clamp(Mathf.CeilToInt(bsize.x / cellSize), 1, MaxGridDim),
+                Mathf.Clamp(Mathf.CeilToInt(bsize.y / cellSize), 1, MaxGridDim),
+                Mathf.Clamp(Mathf.CeilToInt(bsize.z / cellSize), 1, MaxGridDim)
+            );
+
+            // Re-derive cellSize so cubic cells fully cover the bounds even after the
+            // per-axis clamp, then trim any axis that ended up with spare cells.
+            cellSize = Mathf.Max(bsize.x / gridDim.x, Mathf.Max(bsize.y / gridDim.y, bsize.z / gridDim.z));
+            gridDim = new Vector3Int(
+                Mathf.Clamp(Mathf.CeilToInt(bsize.x / cellSize), 1, MaxGridDim),
+                Mathf.Clamp(Mathf.CeilToInt(bsize.y / cellSize), 1, MaxGridDim),
+                Mathf.Clamp(Mathf.CeilToInt(bsize.z / cellSize), 1, MaxGridDim)
+            );
+
+            int cellCount = gridDim.x * gridDim.y * gridDim.z;
+            float invCellSize = 1f / cellSize;
+
+            // Pass 1: count triangles per cell.
+            int[] counts = new int[cellCount];
+            for (int tri = 0; tri < triCount; tri++) {
+                CellRange(triVerts, tri, bmin, invCellSize, gridDim, out Vector3Int cmin, out Vector3Int cmax);
+                for (int z = cmin.z; z <= cmax.z; z++)
+                    for (int y = cmin.y; y <= cmax.y; y++)
+                        for (int x = cmin.x; x <= cmax.x; x++)
+                            counts[x + y * gridDim.x + z * gridDim.x * gridDim.y]++;
+            }
+
+            // Prefix sum into CSR offsets.
+            cellStart = new uint[cellCount + 1];
+            uint running = 0;
+            for (int i = 0; i < cellCount; i++) {
+                cellStart[i] = running;
+                running += (uint)counts[i];
+            }
+            cellStart[cellCount] = running;
+
+            // Pass 2: scatter triangle indices into their cells.
+            triIndices = new uint[running];
+            uint[] cursor = new uint[cellCount];
+            Array.Copy(cellStart, cursor, cellCount);
+            for (int tri = 0; tri < triCount; tri++) {
+                CellRange(triVerts, tri, bmin, invCellSize, gridDim, out Vector3Int cmin, out Vector3Int cmax);
+                for (int z = cmin.z; z <= cmax.z; z++)
+                    for (int y = cmin.y; y <= cmax.y; y++)
+                        for (int x = cmin.x; x <= cmax.x; x++) {
+                            int cell = x + y * gridDim.x + z * gridDim.x * gridDim.y;
+                            triIndices[cursor[cell]++] = (uint)tri;
+                        }
+            }
+        }
+
+        // Computes the inclusive grid-cell range covered by triangle `tri`'s AABB,
+        // clamped to the grid so out-of-bounds geometry registers in border cells.
+        static void CellRange(
+            Vector3[] triVerts,
+            int tri,
+            Vector3 bmin,
+            float invCellSize,
+            Vector3Int gridDim,
+            out Vector3Int cmin,
+            out Vector3Int cmax
+        ) {
+            int b = tri * 3;
+            Vector3 a = triVerts[b + 0];
+            Vector3 c1 = triVerts[b + 1];
+            Vector3 c2 = triVerts[b + 2];
+
+            Vector3 lo = Vector3.Min(a, Vector3.Min(c1, c2));
+            Vector3 hi = Vector3.Max(a, Vector3.Max(c1, c2));
+
+            cmin = ClampCell(lo, bmin, invCellSize, gridDim);
+            cmax = ClampCell(hi, bmin, invCellSize, gridDim);
+        }
+
+        static Vector3Int ClampCell(Vector3 worldPos, Vector3 bmin, float invCellSize, Vector3Int gridDim) {
+            int x = Mathf.Clamp(Mathf.FloorToInt((worldPos.x - bmin.x) * invCellSize), 0, gridDim.x - 1);
+            int y = Mathf.Clamp(Mathf.FloorToInt((worldPos.y - bmin.y) * invCellSize), 0, gridDim.y - 1);
+            int z = Mathf.Clamp(Mathf.FloorToInt((worldPos.z - bmin.z) * invCellSize), 0, gridDim.z - 1);
+            return new Vector3Int(x, y, z);
         }
 
         struct MeshTriangleDiagnostics {
@@ -141,7 +276,8 @@ namespace Lotec.Lighting {
 
         // Builds the world-space triangle list used by the compute shader and gathers
         // per-mesh diagnostics so problematic imported geometry can be identified.
-        static bool TryBuildTriangleListWorld(
+        // Internal so alternative bakers (e.g. JfaSdfBaker) can share triangle gathering.
+        internal static bool TryBuildTriangleListWorld(
             Transform root,
             Bounds bakeBounds,
             out Vector3[] triVerts,
