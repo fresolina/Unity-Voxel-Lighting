@@ -3949,6 +3949,8 @@ MonoBehaviour:
   _sdfShadow:
     <MaxSteps>k__BackingField: 32
     <Softness>k__BackingField: 20
+    <StartOffset>k__BackingField: 0.8
+    <MinStep>k__BackingField: 0.4
   _sdfAo:
     <Step>k__BackingField: 0.08
     <Intensity>k__BackingField: 1.95
