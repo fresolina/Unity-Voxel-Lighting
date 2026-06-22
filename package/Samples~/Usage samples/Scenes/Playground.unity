@@ -3967,8 +3967,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelLightingBaker
   LowresDownscaleFactor: 2
+  sdfBakerMode: 0
   _sdfBaker:
     sdfBakeCompute: {fileID: 7200000, guid: b69a1acfc8ae8044384411949a5b3e0b, type: 3}
+  _sdfBakerJfa:
+    sdfBakeJfaCompute: {fileID: 7200000, guid: bd28af57c48881d449ab7ad2ab6e6288, type: 3}
+    bandCellRadius: 2
+    extraStep1Passes: 2
   _occlusionBitmaskBaker:
     directionCount: 8
     hemisphereOnly: 1

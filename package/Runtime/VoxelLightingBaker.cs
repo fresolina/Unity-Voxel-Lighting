@@ -11,8 +11,17 @@ namespace Lotec.Lighting {
         [Tooltip("Downscale factor to produce lower-res voxel field for material and GI")]
         [Range(1, 6)]
         public int LowresDownscaleFactor = 2;
+        public enum SdfBakerMode {
+            Exact, // SdfBaker: uniform-grid exact nearest-triangle search
+            Jfa,   // JfaSdfBaker: approximate jump-flooding (for evaluation)
+        }
+
         [Header("Bakers")]
+        [Tooltip("Which SDF baker to use. Exact is the reference; JFA is an approximate " +
+                 "alternative kept for evaluation.")]
+        public SdfBakerMode sdfBakerMode = SdfBakerMode.Exact;
         [SerializeField] SdfBaker _sdfBaker = new SdfBaker();
+        [SerializeField] JfaSdfBaker _sdfBakerJfa = new JfaSdfBaker();
         [SerializeField] OcclusionBitmaskBaker _occlusionBitmaskBaker = new OcclusionBitmaskBaker();
         [SerializeField] OcclusionFieldBaker _occlusionFieldBaker = new OcclusionFieldBaker();
         [SerializeField] MaterialBaker _materialBaker = new MaterialBaker();
@@ -78,14 +87,23 @@ namespace Lotec.Lighting {
                     Debug.LogWarning("Could not find MaterialBake compute shader in project. Please assign it manually to the VoxelLightingBaker.");
                 }
             }
+            // Exact-name match: "SdfBake" must not pick up "SdfBakeJfa" and vice versa.
             if (_sdfBaker.sdfBakeCompute == null) {
-                string[] guids = AssetDatabase.FindAssets("SdfBake t:ComputeShader");
-                if (guids.Length > 0) {
-                    string path = AssetDatabase.GUIDToAssetPath(guids[0]);
-                    _sdfBaker.sdfBakeCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                ComputeShader cs = FindComputeShaderByExactName("SdfBake");
+                if (cs != null) {
+                    _sdfBaker.sdfBakeCompute = cs;
                     EditorUtility.SetDirty(this);
                 } else {
                     Debug.LogWarning("Could not find SdfBake compute shader in project. Please assign it manually to the VoxelLightingBaker.");
+                }
+            }
+            if (_sdfBakerJfa.sdfBakeJfaCompute == null) {
+                ComputeShader cs = FindComputeShaderByExactName("SdfBakeJfa");
+                if (cs != null) {
+                    _sdfBakerJfa.sdfBakeJfaCompute = cs;
+                    EditorUtility.SetDirty(this);
+                } else {
+                    Debug.LogWarning("Could not find SdfBakeJfa compute shader in project. Please assign it manually to the VoxelLightingBaker.");
                 }
             }
             if (_occlusionFieldBaker.occlusionFieldBakeCompute == null) {
@@ -98,6 +116,17 @@ namespace Lotec.Lighting {
                     Debug.LogWarning("Could not find OcclusionFieldBake compute shader in project. Please assign it manually to the VoxelLightingBaker.");
                 }
             }
+        }
+
+        // FindAssets does substring matching, so "SdfBake" also returns "SdfBakeJfa".
+        // Resolve to the asset whose file name (without extension) matches exactly.
+        static ComputeShader FindComputeShaderByExactName(string exactName) {
+            foreach (string guid in AssetDatabase.FindAssets($"{exactName} t:ComputeShader")) {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (System.IO.Path.GetFileNameWithoutExtension(path) == exactName)
+                    return AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+            }
+            return null;
         }
 #endif
 
@@ -114,13 +143,14 @@ namespace Lotec.Lighting {
 
             volume.RecomputeBoundsAndResolution();
 
-            // Bake SDF fields.
-            if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution, volume.BakeRoot.name, out Texture3D bakedSdf, out error)) {
+            // Bake SDF fields. Baker selectable for evaluation (exact vs. JFA).
+            ISdfBaker sdfBaker = sdfBakerMode == SdfBakerMode.Jfa ? _sdfBakerJfa : (ISdfBaker)_sdfBaker;
+            if (!sdfBaker.TryBake(volume, volume.TrimmedMaxResolution, volume.BakeRoot.name, out Texture3D bakedSdf, out error)) {
                 Debug.LogError("SDF Bake failed: " + error, this);
                 return;
             }
             volume.sdfHiresTexture = bakedSdf;
-            if (!_sdfBaker.TryBake(volume, volume.TrimmedMaxResolution / LowresDownscaleFactor, volume.BakeRoot.name + "_Lowres", out bakedSdf, out error)) {
+            if (!sdfBaker.TryBake(volume, volume.TrimmedMaxResolution / LowresDownscaleFactor, volume.BakeRoot.name + "_Lowres", out bakedSdf, out error)) {
                 Debug.LogError("SDF Bake failed: " + error, this);
                 return;
             }
