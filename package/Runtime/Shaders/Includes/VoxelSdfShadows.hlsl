@@ -18,7 +18,7 @@ float3 _InverseVoxelSize; // inverse of voxel size in world units (set from C#)
 
 float _RaymarchEpsilon;
 float _RaymarchMinStep;
-float _RaymarchStartOffset;
+float _RaymarchStartOffset; // world units; skips the ray forward along the light direction
 int _RaymarchMaxSteps;
 float _RaymarchSoftness;
 
@@ -29,17 +29,13 @@ inline bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
     return all(uvw >= 0.0) && all(uvw <= 1.0);
 }
 
-// Returns 0..1: fully shadowed to fully lit..
-inline float GetShadowFromSdf(float3 dir, float3 worldPos, float startOffset, float maxDistance)
-{
-    half lit = RayMarchTex3D(_SdfTex, sampler_SdfTex, worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, startOffset, maxDistance, _RaymarchEpsilon, _RaymarchMinStep, _RaymarchMaxSteps, _RaymarchSoftness);
-    return lit;
-}
-
+// Returns 0..1: fully shadowed to fully lit. The start offset skips the ray forward
+// along the light direction past the near-surface band before sampling begins, which
+// is what prevents the surface from self-shadowing.
 inline float GetShadowFromSdf(float3 dir, float3 worldPos, float maxDistance)
 {
     float startOffset = min(_RaymarchStartOffset, maxDistance * 0.5);
-    return GetShadowFromSdf(dir, worldPos, startOffset, maxDistance);
+    return RayMarchTex3D(_SdfTex, sampler_SdfTex, worldPos, dir, _SdfBoundsMin, _SdfBoundsSize, startOffset, maxDistance, _RaymarchEpsilon, _RaymarchMinStep, _RaymarchMaxSteps, _RaymarchSoftness);
 }
 
 #endif
