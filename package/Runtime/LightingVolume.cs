@@ -36,12 +36,8 @@ namespace Lotec.Lighting {
         public Texture3D occlusionBitmaskTexture;
         [Tooltip("Lower-resolution material property: albedo.rgb + emissionIntensity (a)")]
         public Texture3D materialAlbedoIntensityTexture;
-        [Tooltip("RGBA32 textures storing per-direction lit values. 4 directions per texture.")]
-        public Texture3D[] occlusionFieldTextures;
         [HideInInspector]
         public Vector3[] occlusionBitmaskDirections;
-        [HideInInspector]
-        public Vector3[] occlusionFieldDirections;
 
         Vector3 _voxelSize;
 

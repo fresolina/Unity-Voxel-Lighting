@@ -37,13 +37,15 @@ namespace Lotec.Lighting.Editor {
                 string path = System.IO.Path.Combine(basePath, $"{volume.occlusionBitmaskTexture.name}.asset");
                 volume.occlusionBitmaskTexture = SaveAsset(volume.occlusionBitmaskTexture, path, "Occlusion Bitmask");
             }
-            if (volume.occlusionFieldTextures != null) {
-                for (int i = 0; i < volume.occlusionFieldTextures.Length; i++) {
-                    Texture3D tex = volume.occlusionFieldTextures[i];
+            VoxelOcclusionField occField = volume.GetComponent<VoxelOcclusionField>();
+            if (occField != null && occField.occlusionFieldTextures != null) {
+                for (int i = 0; i < occField.occlusionFieldTextures.Length; i++) {
+                    Texture3D tex = occField.occlusionFieldTextures[i];
                     if (tex == null) continue;
                     string path = System.IO.Path.Combine(basePath, $"{tex.name}.asset");
-                    volume.occlusionFieldTextures[i] = SaveAsset(tex, path, "Occlusion Field");
+                    occField.occlusionFieldTextures[i] = SaveAsset(tex, path, "Occlusion Field");
                 }
+                EditorUtility.SetDirty(occField);
             }
             if (volume.materialAlbedoIntensityTexture != null) {
                 string path = System.IO.Path.Combine(basePath, $"{volume.materialAlbedoIntensityTexture.name}.asset");

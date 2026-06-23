@@ -14,6 +14,11 @@ namespace Lotec.Lighting {
     [RequireComponent(typeof(LightingVolume))]
     [AddComponentMenu("Lotec/Voxel Lighting/Binders/Voxel Occlusion Field")]
     public class VoxelOcclusionField : MonoBehaviour {
+        [Tooltip("RGBA32 textures storing per-direction lit values. 4 directions per texture. Written by VoxelOcclusionFieldBaker.")]
+        public Texture3D[] occlusionFieldTextures;
+        [HideInInspector]
+        public Vector3[] occlusionFieldDirections;
+
         static readonly int s_sdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
         static readonly int s_sdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
         static readonly int s_inverseVoxelSize = Shader.PropertyToID("_InverseVoxelSize");
@@ -29,14 +34,9 @@ namespace Lotec.Lighting {
         }
 
         /// <summary>True when there is baked occlusion-field data to publish.</summary>
-        public bool HasData {
-            get {
-                LightingVolume v = Volume;
-                return v != null
-                    && v.occlusionFieldTextures != null && v.occlusionFieldTextures.Length > 0
-                    && v.occlusionFieldDirections != null && v.occlusionFieldDirections.Length > 0;
-            }
-        }
+        public bool HasData =>
+            occlusionFieldTextures != null && occlusionFieldTextures.Length > 0
+            && occlusionFieldDirections != null && occlusionFieldDirections.Length > 0;
 
         void Update() {
             // Shader globals are singular, so only the active volume's binder publishes.
@@ -65,7 +65,7 @@ namespace Lotec.Lighting {
                 1f / Mathf.Max(1e-9f, voxelSize.y),
                 1f / Mathf.Max(1e-9f, voxelSize.z)));
 
-            _query.Initialize(v.occlusionFieldDirections, v.occlusionFieldTextures);
+            _query.Initialize(occlusionFieldDirections, occlusionFieldTextures);
             _query.ApplyShaderGlobals();
         }
     }

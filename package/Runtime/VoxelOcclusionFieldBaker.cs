@@ -19,13 +19,13 @@ namespace Lotec.Lighting {
         public override bool Bake(LightingVolume volume, out string error) {
             if (!_baker.TryBake(volume, out Texture3D[] fieldTextures, out Vector3[] fieldDirections, out error))
                 return false;
-            volume.occlusionFieldTextures = fieldTextures;
-            volume.occlusionFieldDirections = fieldDirections;
 
-            // Ensure the runtime binder that publishes this field exists on the volume, so
-            // the field "just works" at runtime without manual wiring.
-            if (volume.GetComponent<VoxelOcclusionField>() == null)
-                volume.gameObject.AddComponent<VoxelOcclusionField>();
+            // Store the baked field on its runtime binder (added if missing), so the field
+            // data lives on the component that uses it and "just works" without manual wiring.
+            if (!volume.TryGetComponent(out VoxelOcclusionField binder))
+                binder = volume.gameObject.AddComponent<VoxelOcclusionField>();
+            binder.occlusionFieldTextures = fieldTextures;
+            binder.occlusionFieldDirections = fieldDirections;
 
             return true;
         }
@@ -48,9 +48,11 @@ namespace Lotec.Lighting {
             }
             if (_lastHemisphereOnly != _baker.hemisphereOnly) {
                 LightingVolume volume = ResolveVolume();
-                bool hasBake = volume != null && volume.occlusionFieldTextures != null && volume.occlusionFieldTextures.Length > 0;
-                if (hasBake) {
-                    Debug.LogWarning("VoxelOcclusionFieldBaker: hemisphere-only changed; existing baked field no longer matches the runtime direction set. Rebake.", this);
+                if (volume != null && volume.TryGetComponent(out VoxelOcclusionField binder)) {
+                    bool hasBake = binder != null && binder.HasData;
+                    if (hasBake) {
+                        Debug.LogWarning("VoxelOcclusionFieldBaker: hemisphere-only changed; existing baked field no longer matches the runtime direction set. Rebake.", this);
+                    }
                 }
                 _lastHemisphereOnly = _baker.hemisphereOnly;
             }
