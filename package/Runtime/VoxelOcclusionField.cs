@@ -22,9 +22,11 @@ namespace Lotec.Lighting {
         static readonly int s_sdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
         static readonly int s_sdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
         static readonly int s_inverseVoxelSize = Shader.PropertyToID("_InverseVoxelSize");
+        static readonly int s_occFieldSunDir = Shader.PropertyToID("_OccFieldSunDir");
+        static readonly int s_occFieldSunChannel = Shader.PropertyToID("_OccFieldSunChannel");
+        static readonly int s_occFieldTex = Shader.PropertyToID("_OccFieldTex");
 
         LightingVolume _volume;
-        readonly OcclusionFieldQuery _query = new OcclusionFieldQuery();
 
         LightingVolume Volume {
             get {
@@ -65,8 +67,24 @@ namespace Lotec.Lighting {
                 1f / Mathf.Max(1e-9f, voxelSize.y),
                 1f / Mathf.Max(1e-9f, voxelSize.z)));
 
-            _query.Initialize(occlusionFieldDirections, occlusionFieldTextures);
-            _query.ApplyShaderGlobals();
+            PublishSunField();
+        }
+
+        // Map the current sun direction to the nearest baked direction, then bind that
+        // direction's texture + RGBA channel for the shader to sample.
+        void PublishSunField() {
+            if (occlusionFieldDirections == null || occlusionFieldDirections.Length == 0 || occlusionFieldTextures == null)
+                return;
+
+            Vector3 sunDir = OcclusionFieldQuery.GetSunDirection();
+            int bestIndex = OcclusionFieldQuery.FindNearestDirection(sunDir, occlusionFieldDirections, occlusionFieldDirections.Length);
+            int texIndex = bestIndex / 4;
+            int channel = bestIndex % 4;
+
+            Shader.SetGlobalVector(s_occFieldSunDir, sunDir);
+            Shader.SetGlobalInt(s_occFieldSunChannel, channel);
+            if (texIndex >= 0 && texIndex < occlusionFieldTextures.Length && occlusionFieldTextures[texIndex] != null)
+                Shader.SetGlobalTexture(s_occFieldTex, occlusionFieldTextures[texIndex]);
         }
     }
 }
