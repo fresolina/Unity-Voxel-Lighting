@@ -18,20 +18,26 @@ If you want the demo project to use the in-repo package samples directly, or you
 
 ## Features
 
-* Realtime shadows on static and dynamic objects.
-  a) SDF Shadows: (Accuracy) Ray marching from every pixel.
-  b) Occlusion direction field (1bit): (Performance) 64 directions in one texture, hard blocky voxel shadows.
-  c) Occlusion direction field (8bit): (Performance + Accuracy) 4 directions per texture, interpolated smoother voxel shadows.
+### Realtime shadows
 
-* Global illumination (GI) from static and dynamic objects.
-  a) Path tracing: Ray trace from voxel towards light each frame. Requires longer temporal accumulation for stable results.
-  b) Light propagation volume: Simpler more performant approximation where light propagates through a voxel grid.
+Static objects can cast shadows on dynamic objects. Reacts in realtime to lighting changes.
+Dynamic objects can only receive shadows.
+
+3 modes:
+* SDF Shadows: (Accuracy) Ray marching from every pixel. Always used for additional lights.
+* Occlusion direction field (1bit): (Performance) 8-64 directions in one texture, hard blocky voxel shadows.
+* Occlusion direction field (8bit): (Performance + Accuracy) 4 directions per texture, interpolated smoother voxel shadows. Supports 256 directions (64 textures).
+
+### Global illumination
+
+Global illumination (GI) from static and dynamic objects, 2 modes.
+* Path tracing: Ray trace from voxel towards light each frame. Requires longer temporal accumulation for stable results.
+* Light propagation volume: Simpler more performant approximation where light propagates through a voxel grid.
 
 ## Platform notes
 
 * Runtime GI in this package depends on compute shaders and 3D textures.
 * Web builds are expected to run with the WebGPU graphics backend. The sample web build script explicitly requests WebGPU for BuildTarget.WebGL.
-* If the player starts on a non-WebGPU web backend, runtime GI now fails fast instead of falling back to a black GI volume.
 
 ## Web preview builds
 
