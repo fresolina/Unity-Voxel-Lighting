@@ -20,6 +20,10 @@ namespace Lotec.Lighting {
     public class LightingManager : MonoBehaviour {
         public static LightingManager Instance { get; private set; }
 
+        static readonly int s_sdfTex = Shader.PropertyToID("_SdfTex");
+        static readonly int s_sdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
+        static readonly int s_sdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
+
         // Keep in sync with MAX_POINT_LIGHTS and MAX_SPOT_LIGHTS in VoxelGiUpdate.compute.
         internal const int MaxPointLights = 4;
         internal const int MaxSpotLights = 4;
@@ -114,7 +118,7 @@ namespace Lotec.Lighting {
         private void ApplyShaderGlobals() {
             ApplyShadowModeKeywords();
             if (Volume != null) {
-                Volume.ApplyShaderGlobals();
+                PublishVolumeCore(Volume);
                 _sdfShadow.ApplyShaderGlobals(Volume.VoxelSize);
             }
             _sdfAo.ApplyShaderGlobals();
@@ -124,6 +128,16 @@ namespace Lotec.Lighting {
             _localLights.Collect(_additionalLights);
             _localLights.ApplyGlobals();
             ApplyGiKeyword();
+        }
+
+        // Publish the volume's core shader globals: the SDF texture (when baked) and the
+        // bounds. Bounds are published unconditionally because the occlusion-field/bitmask
+        // paths map world->uvw with them even when no SDF is bound at runtime.
+        void PublishVolumeCore(LightingVolume volume) {
+            Shader.SetGlobalVector(s_sdfBoundsMin, volume.Bounds.min);
+            Shader.SetGlobalVector(s_sdfBoundsSize, volume.Bounds.size);
+            if (volume.sdfHiresTexture != null)
+                Shader.SetGlobalTexture(s_sdfTex, volume.sdfHiresTexture);
         }
 
         // GI_ON when an active GI updater is driving the irradiance field; GI_OFF lets the
@@ -199,12 +213,30 @@ namespace Lotec.Lighting {
                 && binder.HasData;
         }
 
+        bool HasActiveBitmaskBinder(out VoxelOcclusionBitmask binder) {
+            binder = null;
+            return Volume != null
+                && Volume.TryGetComponent(out binder)
+                && binder.enabled
+                && binder.HasData;
+        }
+
         void ApplyShadowModeKeywords() {
+            // Binders on the active volume take precedence over the serialized ShadowMode
+            // (presence = intent). Shadow sources are mutually exclusive; occlusion field wins.
             if (HasActiveOcclusionFieldBinder()) {
                 Shader.DisableKeyword("SDF_ONLY");
                 Shader.DisableKeyword("BITMASK_POINT");
                 Shader.DisableKeyword("BITMASK_8TAP");
                 Shader.EnableKeyword("OCC_FIELD");
+                return;
+            }
+            if (HasActiveBitmaskBinder(out VoxelOcclusionBitmask bitmask)) {
+                Shader.DisableKeyword("SDF_ONLY");
+                Shader.DisableKeyword("OCC_FIELD");
+                bool point = bitmask.sampling == VoxelOcclusionBitmask.Sampling.Point;
+                if (point) { Shader.EnableKeyword("BITMASK_POINT"); Shader.DisableKeyword("BITMASK_8TAP"); }
+                else { Shader.DisableKeyword("BITMASK_POINT"); Shader.EnableKeyword("BITMASK_8TAP"); }
                 return;
             }
             switch (_shadowMode) {

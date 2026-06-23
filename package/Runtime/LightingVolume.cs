@@ -1,18 +1,13 @@
 using UnityEngine;
 
 namespace Lotec.Lighting {
+    /// <summary>
+    /// Pure data container for a baked lighting volume: bake input, computed bounds/
+    /// resolution, and the baked SDF/material textures. Does not publish shader globals -
+    /// the LightingManager publishes the SDF core, GiFieldUpdater the GI volume globals,
+    /// and the per-feature binders (VoxelOcclusionField / VoxelOcclusionBitmask) the rest.
+    /// </summary>
     public class LightingVolume : MonoBehaviour {
-        static readonly int s_sSdfTex = Shader.PropertyToID("_SdfTex");
-        static readonly int s_sBitmaskTex = Shader.PropertyToID("_BitmaskTex");
-        static readonly int s_sSdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
-        static readonly int s_sSdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
-        static readonly int s_sInverseVoxelSize = Shader.PropertyToID("_InverseVoxelSize");
-        static readonly int s_sVoxelResolution = Shader.PropertyToID("_VoxelResolution");
-        static readonly int s_sVolumeSize = Shader.PropertyToID("_VolumeSize");
-        static readonly int s_sVolumePosition = Shader.PropertyToID("_VolumePosition");
-        static readonly int s_sBitmaskSunFibIndex = Shader.PropertyToID("_BitmaskSunFibIndex");
-        static readonly int s_sBitmaskDirCount = Shader.PropertyToID("_BitmaskDirCount");
-
         [Header("Bake Input")]
         [SerializeField] Transform _root;
 
@@ -33,11 +28,8 @@ namespace Lotec.Lighting {
         [Header("Baked static fields")]
         public Texture3D sdfHiresTexture;
         public Texture3D sdfLowresTexture;
-        public Texture3D occlusionBitmaskTexture;
         [Tooltip("Lower-resolution material property: albedo.rgb + emissionIntensity (a)")]
         public Texture3D materialAlbedoIntensityTexture;
-        [HideInInspector]
-        public Vector3[] occlusionBitmaskDirections;
 
         Vector3 _voxelSize;
 
@@ -77,45 +69,6 @@ namespace Lotec.Lighting {
 
             ComputeBounds();
             ComputeMaxResolutionForBounds();
-        }
-
-        public void ApplyShaderGlobals() {
-            if (sdfHiresTexture == null) return;
-
-            Shader.SetGlobalTexture(s_sSdfTex, sdfHiresTexture);
-
-            if (occlusionBitmaskTexture != null) {
-                Shader.SetGlobalTexture(s_sBitmaskTex, occlusionBitmaskTexture);
-                Shader.SetGlobalVector(s_sVoxelResolution,
-                    new Vector3(TrimmedMaxResolution.x, TrimmedMaxResolution.y, TrimmedMaxResolution.z));
-            }
-
-            Shader.SetGlobalVector(s_sVolumeSize, Bounds.size);
-            Shader.SetGlobalVector(s_sVolumePosition, Bounds.min);
-            Shader.SetGlobalVector(s_sSdfBoundsMin, Bounds.min);
-            Shader.SetGlobalVector(s_sSdfBoundsSize, Bounds.size);
-
-            Vector3 voxelSize = new Vector3(
-                Bounds.size.x / Mathf.Max(1, TrimmedMaxResolution.x),
-                Bounds.size.y / Mathf.Max(1, TrimmedMaxResolution.y),
-                Bounds.size.z / Mathf.Max(1, TrimmedMaxResolution.z));
-            Vector3 inverseVoxelSize = new Vector3(
-                1.0f / Mathf.Max(1e-9f, voxelSize.x),
-                1.0f / Mathf.Max(1e-9f, voxelSize.y),
-                1.0f / Mathf.Max(1e-9f, voxelSize.z));
-            Shader.SetGlobalVector(s_sInverseVoxelSize, inverseVoxelSize);
-
-            ApplyBitmaskSunDirection();
-        }
-
-        void ApplyBitmaskSunDirection() {
-            if (occlusionBitmaskTexture == null) return;
-            if (occlusionBitmaskDirections == null || occlusionBitmaskDirections.Length == 0) return;
-
-            Vector3 sunDir = OcclusionFieldQuery.GetSunDirection();
-            int bestIndex = OcclusionFieldQuery.FindNearestDirection(sunDir, occlusionBitmaskDirections, occlusionBitmaskDirections.Length);
-            Shader.SetGlobalInt(s_sBitmaskSunFibIndex, bestIndex);
-            Shader.SetGlobalInt(s_sBitmaskDirCount, occlusionBitmaskDirections.Length);
         }
 
         /// <summary>

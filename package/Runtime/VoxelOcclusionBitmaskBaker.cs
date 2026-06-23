@@ -18,8 +18,12 @@ namespace Lotec.Lighting {
         public override bool Bake(LightingVolume volume, out string error) {
             if (!_baker.TryBake(volume, out Texture3D baked, out Vector3[] directions, out error))
                 return false;
-            volume.occlusionBitmaskTexture = baked;
-            volume.occlusionBitmaskDirections = directions;
+
+            // Store the baked bitmask on its runtime binder (added if missing).
+            if (!volume.TryGetComponent(out VoxelOcclusionBitmask binder))
+                binder = volume.gameObject.AddComponent<VoxelOcclusionBitmask>();
+            binder.occlusionBitmaskTexture = baked;
+            binder.occlusionBitmaskDirections = directions;
             return true;
         }
 
@@ -41,7 +45,7 @@ namespace Lotec.Lighting {
             }
             if (_lastHemisphereOnly != _baker.hemisphereOnly) {
                 LightingVolume volume = ResolveVolume();
-                if (volume != null && volume.occlusionBitmaskTexture != null) {
+                if (volume != null && volume.TryGetComponent(out VoxelOcclusionBitmask binder) && binder.HasData) {
                     Debug.LogWarning("VoxelOcclusionBitmaskBaker: hemisphere-only changed; existing baked bitmask no longer matches the runtime direction set. Rebake.", this);
                 }
                 _lastHemisphereOnly = _baker.hemisphereOnly;

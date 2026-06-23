@@ -126,6 +126,8 @@ namespace Lotec.Lighting {
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
         static readonly int s_exposure = Shader.PropertyToID("_Exposure");
+        static readonly int s_volumePosition = Shader.PropertyToID("_VolumePosition");
+        static readonly int s_volumeSize = Shader.PropertyToID("_VolumeSize");
         #endregion
 
         public RenderTexture RadianceField => _radianceField;
@@ -245,8 +247,7 @@ namespace Lotec.Lighting {
                     string matName = Volume != null && Volume.materialAlbedoIntensityTexture != null ? Volume.materialAlbedoIntensityTexture.name : "null";
                     string sdfHires = Volume != null && Volume.sdfHiresTexture != null ? Volume.sdfHiresTexture.name : "null";
                     string sdfLow = Volume != null && Volume.sdfLowresTexture != null ? Volume.sdfLowresTexture.name : "null";
-                    string occlName = Volume != null && Volume.occlusionBitmaskTexture != null ? Volume.occlusionBitmaskTexture.name : "null";
-                    Debug.LogWarning($"GI Field Updater is missing required references: {missingReason}. Volume={volName}, materialAlbedoIntensityTexture={matName}, sdfHiresTexture={sdfHires}, sdfLowresTexture={sdfLow}, occlusionBitmaskTexture={occlName}. Waiting for runtime GI initialization.", this);
+                    Debug.LogWarning($"GI Field Updater is missing required references: {missingReason}. Volume={volName}, materialAlbedoIntensityTexture={matName}, sdfHiresTexture={sdfHires}, sdfLowresTexture={sdfLow}. Waiting for runtime GI initialization.", this);
                 }
                 return;
             }
@@ -737,6 +738,11 @@ namespace Lotec.Lighting {
             // change the surface read offset in SampleVoxelGI.
             float voxelSize = GetGiGridVoxelSize();
             Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector3.one);
+
+            // Volume bounds for the GI fragment read (Volume.hlsl WorldToVoxelUV). These are
+            // GI-only globals, so the GI updater owns them now (the volume is pure data).
+            Shader.SetGlobalVector(s_volumePosition, Volume.Bounds.min);
+            Shader.SetGlobalVector(s_volumeSize, Volume.Bounds.size);
 
             // The point/spot light globals for fragment direct lighting are published by
             // LightingManager (so local lights work without the GI updater running).

@@ -33,9 +33,12 @@ namespace Lotec.Lighting.Editor {
                 string path = System.IO.Path.Combine(basePath, $"{volume.sdfLowresTexture.name}.asset");
                 volume.sdfLowresTexture = SaveAsset(volume.sdfLowresTexture, path, "SDF");
             }
-            if (volume.occlusionBitmaskTexture != null) {
-                string path = System.IO.Path.Combine(basePath, $"{volume.occlusionBitmaskTexture.name}.asset");
-                volume.occlusionBitmaskTexture = SaveAsset(volume.occlusionBitmaskTexture, path, "Occlusion Bitmask");
+            // Bitmask texture lives on the VoxelOcclusionBitmask binder, not the volume.
+            VoxelOcclusionBitmask bitmask = volume.GetComponent<VoxelOcclusionBitmask>();
+            if (bitmask != null && bitmask.occlusionBitmaskTexture != null) {
+                string path = System.IO.Path.Combine(basePath, $"{bitmask.occlusionBitmaskTexture.name}.asset");
+                bitmask.occlusionBitmaskTexture = SaveAsset(bitmask.occlusionBitmaskTexture, path, "Occlusion Bitmask");
+                EditorUtility.SetDirty(bitmask);
             }
             VoxelOcclusionField occField = volume.GetComponent<VoxelOcclusionField>();
             if (occField != null && occField.occlusionFieldTextures != null) {

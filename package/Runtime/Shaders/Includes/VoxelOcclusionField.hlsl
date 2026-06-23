@@ -8,7 +8,7 @@
 //   float3 _SdfBoundsSize;
 //   float3 _InverseVoxelSize;
 //
-// Shader globals set by OcclusionFieldQuery.ApplyShaderGlobals():
+// Shader globals published by the VoxelOcclusionField binder each frame:
 //   float3 _OccFieldSunDir     - normalized sun direction
 //   int    _OccFieldSunChannel  - which RGBA channel (index % 4)
 //   Texture3D _OccFieldTex      - the active occlusion field texture for the current sun direction
