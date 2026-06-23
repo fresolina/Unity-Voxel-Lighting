@@ -27,7 +27,11 @@ namespace Lotec.Lighting {
         // Keep in sync with MAX_POINT_LIGHTS and MAX_SPOT_LIGHTS in VoxelGiUpdate.compute.
         internal const int MaxPointLights = 4;
         internal const int MaxSpotLights = 4;
-        public enum ShadowModeType { SDF = 0, BitmaskPoint = 1, Bitmask8Tap = 4, OcclusionField = 5 }
+
+        /// <summary>Runtime shadow-source selector (for UI). Derived from, and applied to, the
+        /// binder components on the active volume - it is not serialized; the binders are the
+        /// source of truth. Selecting a source whose binder is absent falls back to SDF.</summary>
+        public enum ShadowSource { SDF, BitmaskPoint, Bitmask8Tap, OcclusionField }
 
         [Header("Source")]
         [SerializeField] LightingVolume _volume;
@@ -44,7 +48,6 @@ namespace Lotec.Lighting {
         [SerializeField] List<Light> _additionalLights = new List<Light>();
 
         [Header("Shadows")]
-        [SerializeField] ShadowModeType _shadowMode = ShadowModeType.SDF;
         [SerializeField] SdfShadowConfig _sdfShadow = new SdfShadowConfig();
 
         [Header("Ambient Occlusion")]
@@ -52,16 +55,18 @@ namespace Lotec.Lighting {
 
         [SerializeField] bool _updateInEditor = true;
 
-        public ShadowModeType ShadowMode {
-            get => _shadowMode;
-            set {
-                if (_shadowMode != value) {
-                    _shadowMode = value;
-                    ApplyShadowModeKeywords();
-                }
-            }
-        }
         public SdfShadowConfig SdfShadow => _sdfShadow;
+
+        /// <summary>The active shadow source, read from / written to the volume's binder components.</summary>
+        public ShadowSource ShadowMode {
+            get {
+                if (HasActiveOcclusionFieldBinder()) return ShadowSource.OcclusionField;
+                if (HasActiveBitmaskBinder(out VoxelOcclusionBitmask bitmask))
+                    return bitmask.sampling == VoxelOcclusionBitmask.Sampling.Point ? ShadowSource.BitmaskPoint : ShadowSource.Bitmask8Tap;
+                return ShadowSource.SDF;
+            }
+            set => SetShadowMode(value);
+        }
         /// <summary>The currently active volume. Returns the runtime override if set, otherwise the serialized default.</summary>
         public LightingVolume Volume => _activeVolume != null ? _activeVolume : _volume;
         public GiFieldUpdater GiUpdater => _giUpdater;
@@ -204,8 +209,7 @@ namespace Lotec.Lighting {
         }
 
         // An enabled VoxelOcclusionField binder with baked data on the active volume drives
-        // the OCC_FIELD path (it publishes the field + bounds, no SDF needed at runtime),
-        // overriding the serialized ShadowMode. This is the "presence = intent" migration.
+        // the OCC_FIELD path (it publishes the field + bounds, no SDF needed at runtime).
         bool HasActiveOcclusionFieldBinder() {
             return Volume != null
                 && Volume.TryGetComponent(out VoxelOcclusionField binder)
@@ -221,9 +225,31 @@ namespace Lotec.Lighting {
                 && binder.HasData;
         }
 
+        // Switch the shadow source at runtime by toggling the binder components on the active
+        // volume. A source whose binder is absent (or has no baked data) falls back to SDF.
+        void SetShadowMode(ShadowSource source) {
+            LightingVolume volume = Volume;
+            if (volume == null) return;
+
+            bool wantOcc = source == ShadowSource.OcclusionField;
+            bool wantBitmask = source == ShadowSource.BitmaskPoint || source == ShadowSource.Bitmask8Tap;
+
+            if (volume.TryGetComponent(out VoxelOcclusionField occ))
+                occ.enabled = wantOcc;
+            if (volume.TryGetComponent(out VoxelOcclusionBitmask bitmask)) {
+                if (wantBitmask)
+                    bitmask.sampling = source == ShadowSource.BitmaskPoint
+                        ? VoxelOcclusionBitmask.Sampling.Point
+                        : VoxelOcclusionBitmask.Sampling.TrilinearEightTap;
+                bitmask.enabled = wantBitmask;
+            }
+            ApplyShadowModeKeywords();
+        }
+
+        // The shadow source is selected by which binder is present + enabled on the active
+        // volume (presence = intent). Sources are mutually exclusive (occlusion field wins);
+        // with no shadow binder, the default SDF path is used.
         void ApplyShadowModeKeywords() {
-            // Binders on the active volume take precedence over the serialized ShadowMode
-            // (presence = intent). Shadow sources are mutually exclusive; occlusion field wins.
             if (HasActiveOcclusionFieldBinder()) {
                 Shader.DisableKeyword("SDF_ONLY");
                 Shader.DisableKeyword("BITMASK_POINT");
@@ -235,36 +261,14 @@ namespace Lotec.Lighting {
                 Shader.DisableKeyword("SDF_ONLY");
                 Shader.DisableKeyword("OCC_FIELD");
                 bool point = bitmask.sampling == VoxelOcclusionBitmask.Sampling.Point;
-                if (point) { Shader.EnableKeyword("BITMASK_POINT"); Shader.DisableKeyword("BITMASK_8TAP"); }
-                else { Shader.DisableKeyword("BITMASK_POINT"); Shader.EnableKeyword("BITMASK_8TAP"); }
+                if (point) { Shader.EnableKeyword("BITMASK_POINT"); Shader.DisableKeyword("BITMASK_8TAP"); } else { Shader.DisableKeyword("BITMASK_POINT"); Shader.EnableKeyword("BITMASK_8TAP"); }
                 return;
             }
-            switch (_shadowMode) {
-                case ShadowModeType.SDF:
-                    Shader.EnableKeyword("SDF_ONLY");
-                    Shader.DisableKeyword("BITMASK_POINT");
-                    Shader.DisableKeyword("BITMASK_8TAP");
-                    Shader.DisableKeyword("OCC_FIELD");
-                    break;
-                case ShadowModeType.BitmaskPoint:
-                    Shader.DisableKeyword("SDF_ONLY");
-                    Shader.EnableKeyword("BITMASK_POINT");
-                    Shader.DisableKeyword("BITMASK_8TAP");
-                    Shader.DisableKeyword("OCC_FIELD");
-                    break;
-                case ShadowModeType.Bitmask8Tap:
-                    Shader.DisableKeyword("SDF_ONLY");
-                    Shader.DisableKeyword("BITMASK_POINT");
-                    Shader.EnableKeyword("BITMASK_8TAP");
-                    Shader.DisableKeyword("OCC_FIELD");
-                    break;
-                case ShadowModeType.OcclusionField:
-                    Shader.DisableKeyword("SDF_ONLY");
-                    Shader.DisableKeyword("BITMASK_POINT");
-                    Shader.DisableKeyword("BITMASK_8TAP");
-                    Shader.EnableKeyword("OCC_FIELD");
-                    break;
-            }
+            // Default: SDF.
+            Shader.EnableKeyword("SDF_ONLY");
+            Shader.DisableKeyword("BITMASK_POINT");
+            Shader.DisableKeyword("BITMASK_8TAP");
+            Shader.DisableKeyword("OCC_FIELD");
         }
 
     }

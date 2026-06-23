@@ -38,16 +38,17 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
-            // Shadow providers. SDF is the default; the occlusion field is an alternative
-            // that needs no SDF texture bound at runtime (selected by the OCC_FIELD keyword,
-            // published by the VoxelOcclusionField binder on the volume).
+            // Shadow providers, selected at runtime by keyword (published by the matching
+            // binder on the volume): default = SDF, BITMASK_POINT / BITMASK_8TAP = directional
+            // bitmask, OCC_FIELD = occlusion field (no SDF texture needed at runtime).
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelSdfShadows.hlsl"
+            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionDirection.hlsl"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionField.hlsl"
             // Direct lighting (sun + local lights) + keyword-gated shadow dispatch.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelDirectLighting.hlsl"
 
-            // Shadow source: default (no keyword) = SDF; OCC_FIELD = baked occlusion field.
-            #pragma multi_compile __ OCC_FIELD
+            // Shadow source (default = SDF): directional bitmask (point / 8-tap) or occlusion field.
+            #pragma multi_compile __ BITMASK_POINT BITMASK_8TAP OCC_FIELD
 
             CBUFFER_START(UnityPerMaterial)
                 TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
