@@ -50,9 +50,12 @@ namespace Lotec.Lighting.Editor {
                 }
                 EditorUtility.SetDirty(occField);
             }
-            if (volume.materialAlbedoIntensityTexture != null) {
-                string path = System.IO.Path.Combine(basePath, $"{volume.materialAlbedoIntensityTexture.name}.asset");
-                volume.materialAlbedoIntensityTexture = SaveAsset(volume.materialAlbedoIntensityTexture, path, "Material AlbedoIntensity");
+            // Material field lives on the VoxelMaterial component, not the volume.
+            VoxelMaterial material = volume.GetComponent<VoxelMaterial>();
+            if (material != null && material.materialAlbedoIntensityTexture != null) {
+                string path = System.IO.Path.Combine(basePath, $"{material.materialAlbedoIntensityTexture.name}.asset");
+                material.materialAlbedoIntensityTexture = SaveAsset(material.materialAlbedoIntensityTexture, path, "Material AlbedoIntensity");
+                EditorUtility.SetDirty(material);
             }
 
             EditorUtility.SetDirty(volume);

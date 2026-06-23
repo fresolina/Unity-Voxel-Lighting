@@ -64,7 +64,8 @@ namespace Lotec.Lighting {
             LPV = 1,
         }
 
-        public Texture3D MaterialFieldAlbedoIntensity => Volume.materialAlbedoIntensityTexture;
+        public Texture3D MaterialFieldAlbedoIntensity =>
+            Volume != null && Volume.TryGetComponent(out VoxelMaterial material) ? material.materialAlbedoIntensityTexture : null;
         public Texture3D SurfaceDistanceFieldHighRes => Volume.sdfHiresTexture;
         public Texture3D SurfaceDistanceFieldLowRes => Volume.sdfLowresTexture;
         public ComputeShader GiComputeShader { get => _giComputeShader; set => _giComputeShader = value; }
@@ -244,7 +245,7 @@ namespace Lotec.Lighting {
                 if (!_hasLoggedMissingReferences) {
                     _hasLoggedMissingReferences = true;
                     string volName = Volume != null ? Volume.gameObject.name : "null";
-                    string matName = Volume != null && Volume.materialAlbedoIntensityTexture != null ? Volume.materialAlbedoIntensityTexture.name : "null";
+                    string matName = MaterialFieldAlbedoIntensity != null ? MaterialFieldAlbedoIntensity.name : "null";
                     string sdfHires = Volume != null && Volume.sdfHiresTexture != null ? Volume.sdfHiresTexture.name : "null";
                     string sdfLow = Volume != null && Volume.sdfLowresTexture != null ? Volume.sdfLowresTexture.name : "null";
                     Debug.LogWarning($"GI Field Updater is missing required references: {missingReason}. Volume={volName}, materialAlbedoIntensityTexture={matName}, sdfHiresTexture={sdfHires}, sdfLowresTexture={sdfLow}. Waiting for runtime GI initialization.", this);
@@ -299,7 +300,7 @@ namespace Lotec.Lighting {
             }
 
             if (MaterialFieldAlbedoIntensity == null) {
-                reason = $"LightingVolume.materialAlbedoIntensityTexture";
+                reason = "VoxelMaterial.materialAlbedoIntensityTexture (run the Material baker)";
                 return false;
             }
 

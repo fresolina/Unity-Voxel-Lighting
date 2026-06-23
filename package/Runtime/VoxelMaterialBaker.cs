@@ -21,7 +21,11 @@ namespace Lotec.Lighting {
             error = _baker.Bake(volume, out Texture3D bakedAlbedoIntensity, LowresDownscaleFactor);
             if (!string.IsNullOrEmpty(error))
                 return false;
-            volume.materialAlbedoIntensityTexture = bakedAlbedoIntensity;
+
+            // Store the baked material field on its component (added if missing).
+            if (!volume.TryGetComponent(out VoxelMaterial material))
+                material = volume.gameObject.AddComponent<VoxelMaterial>();
+            material.materialAlbedoIntensityTexture = bakedAlbedoIntensity;
             return true;
         }
 

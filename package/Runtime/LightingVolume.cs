@@ -28,8 +28,6 @@ namespace Lotec.Lighting {
         [Header("Baked static fields")]
         public Texture3D sdfHiresTexture;
         public Texture3D sdfLowresTexture;
-        [Tooltip("Lower-resolution material property: albedo.rgb + emissionIntensity (a)")]
-        public Texture3D materialAlbedoIntensityTexture;
 
         Vector3 _voxelSize;
 
@@ -49,11 +47,6 @@ namespace Lotec.Lighting {
 
         void OnEnable() {
             LightingManager.Instance?.RegisterVolume(this);
-            if (materialAlbedoIntensityTexture == null) {
-                Debug.LogWarning("LightingVolume: materialAlbedoIntensityTexture is null at runtime (scene reference may be unresolved).", this);
-            } else {
-                Debug.Log($"LightingVolume: materialAlbedoIntensityTexture loaded: {materialAlbedoIntensityTexture.name}", this);
-            }
         }
 
         void Start() {

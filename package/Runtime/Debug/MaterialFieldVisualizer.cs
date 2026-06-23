@@ -7,7 +7,7 @@ namespace Lotec.Lighting {
 
         protected override Texture GetTexture() {
             if (Volume == null) return null;
-            return Volume.materialAlbedoIntensityTexture;
+            return Volume.TryGetComponent(out VoxelMaterial material) ? material.materialAlbedoIntensityTexture : null;
         }
 
         protected override bool TryGetBounds(out Bounds bounds) {
