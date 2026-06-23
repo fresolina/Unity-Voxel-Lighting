@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.4.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.3.0...v1.4.0) (2026-06-23)
+
+
+### Features
+
+* autocalculate raymarch values and let out of steps mean hit (fixes some light leak in corners) ([89eb892](https://github.com/fresolina/Unity-Voxel-Lighting/commit/89eb89241b4ab207c4e272f1bed54700dc84f71e))
+* Optimize SDF baker and add alternative Jumpflooding algorithm ([93a29ca](https://github.com/fresolina/Unity-Voxel-Lighting/commit/93a29cab3ccf91b956c094ab98ad32aa7e9353a5))
+* Support baking only sun direction, and 8 dir ([1495f41](https://github.com/fresolina/Unity-Voxel-Lighting/commit/1495f416efd7dddbfba8068c69f35b3d01b5663d))
+* Support multiple volumes ([5b25003](https://github.com/fresolina/Unity-Voxel-Lighting/commit/5b25003b6a7f0eb09d5f7904094d1d6b7914d7b6))
+* **UI:** select shadowmode and toggle UI ([ce919e3](https://github.com/fresolina/Unity-Voxel-Lighting/commit/ce919e38c19f69256358e10562d562856e4d0d09))
+
+
+### Bug Fixes
+
+* sdf shadow corner never got lit ([d7315bc](https://github.com/fresolina/Unity-Voxel-Lighting/commit/d7315bc4da6e1ccdc873451803b1c852a74f2000))
+* sdf shadow corner never got lit ([bb4602c](https://github.com/fresolina/Unity-Voxel-Lighting/commit/bb4602c561f178aa2cf04fb4e6f6000f58c01896))
+
 ## [1.3.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.2.0...v1.3.0) (2026-05-23)
 
 
