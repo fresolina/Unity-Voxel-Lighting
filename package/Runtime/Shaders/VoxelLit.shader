@@ -14,6 +14,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
         _EmissionMap ("Emission Map", 2D) = "white" {}
         [HDR] _EmissionColor ("Emission Color", Color) = (1,1,1,1)
         _Exposure ("Exposure (EV stops)", Float) = 0.0
+        [ToggleOff(_RECEIVE_LOCAL_SHADOWS_OFF)] _ReceiveLocalShadows ("Receive Local Shadows", Float) = 1.0
     }
 
     SubShader
@@ -30,14 +31,23 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             #pragma vertex vert
             #pragma fragment frag
             #pragma shader_feature _NORMALMAP
+            // Per-material: skip the per-light SDF march for local (point/spot) shadows.
+            #pragma shader_feature_local _RECEIVE_LOCAL_SHADOWS_OFF
 
             // URP
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
-            // Direct lighting (sun + local lights) + SDF ray-marched shadows. This pulls in
-            // VoxelSdfShadows.hlsl; no other voxel includes are needed for direct-only.
+            // Shadow providers. SDF is the default; the occlusion field is an alternative
+            // that needs no SDF texture bound at runtime (selected by the OCC_FIELD keyword,
+            // published by the VoxelOcclusionField binder on the volume).
+            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelSdfShadows.hlsl"
+            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionField.hlsl"
+            // Direct lighting (sun + local lights) + keyword-gated shadow dispatch.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelDirectLighting.hlsl"
+
+            // Shadow source: default (no keyword) = SDF; OCC_FIELD = baked occlusion field.
+            #pragma multi_compile __ OCC_FIELD
 
             CBUFFER_START(UnityPerMaterial)
                 TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
@@ -48,6 +58,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
                 float4 _EmissionColor;
                 float _Exposure;
+                float _ReceiveLocalShadows;
             CBUFFER_END
 
             struct v {

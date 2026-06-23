@@ -9,6 +9,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
         [Toggle] _Emission ("Emission", Float) = 0.0
         _EmissionMap ("Emission Map", 2D) = "white" {}
         [HDR] _EmissionColor ("Emission Color", Color) = (1,1,1,1)
+        [ToggleOff(_RECEIVE_LOCAL_SHADOWS_OFF)] _ReceiveLocalShadows ("Receive Local Shadows", Float) = 1.0
     }
 
     SubShader
@@ -25,6 +26,8 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             #pragma vertex vert
             #pragma fragment frag
             #pragma shader_feature _NORMALMAP
+            // Per-material: skip the per-light SDF march for local (point/spot) shadows.
+            #pragma shader_feature_local _RECEIVE_LOCAL_SHADOWS_OFF
 
             // URP
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
@@ -57,6 +60,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 float _Emission;
                 TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
                 float4 _EmissionColor;
+                float _ReceiveLocalShadows;
             CBUFFER_END
 
             // Published by GiFieldUpdater (auto-exposure) when GI is active.

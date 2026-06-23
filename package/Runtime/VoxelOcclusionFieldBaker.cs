@@ -21,6 +21,12 @@ namespace Lotec.Lighting {
                 return false;
             volume.occlusionFieldTextures = fieldTextures;
             volume.occlusionFieldDirections = fieldDirections;
+
+            // Ensure the runtime binder that publishes this field exists on the volume, so
+            // the field "just works" at runtime without manual wiring.
+            if (volume.GetComponent<VoxelOcclusionField>() == null)
+                volume.gameObject.AddComponent<VoxelOcclusionField>();
+
             return true;
         }
 

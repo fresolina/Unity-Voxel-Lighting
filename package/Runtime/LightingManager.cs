@@ -189,7 +189,24 @@ namespace Lotec.Lighting {
                 SetActiveVolume(closest);
         }
 
+        // An enabled VoxelOcclusionField binder with baked data on the active volume drives
+        // the OCC_FIELD path (it publishes the field + bounds, no SDF needed at runtime),
+        // overriding the serialized ShadowMode. This is the "presence = intent" migration.
+        bool HasActiveOcclusionFieldBinder() {
+            return Volume != null
+                && Volume.TryGetComponent(out VoxelOcclusionField binder)
+                && binder.enabled
+                && binder.HasData;
+        }
+
         void ApplyShadowModeKeywords() {
+            if (HasActiveOcclusionFieldBinder()) {
+                Shader.DisableKeyword("SDF_ONLY");
+                Shader.DisableKeyword("BITMASK_POINT");
+                Shader.DisableKeyword("BITMASK_8TAP");
+                Shader.EnableKeyword("OCC_FIELD");
+                return;
+            }
             switch (_shadowMode) {
                 case ShadowModeType.SDF:
                     Shader.EnableKeyword("SDF_ONLY");

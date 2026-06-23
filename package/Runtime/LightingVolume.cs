@@ -44,7 +44,6 @@ namespace Lotec.Lighting {
         public Vector3[] occlusionFieldDirections;
 
         Vector3 _voxelSize;
-        OcclusionFieldQuery _occlusionFieldQuery;
 
         /// <summary>Cubic voxel edge length in world units, derived from Bounds and TrimmedMaxResolution.</summary>
         public float VoxelSize => Bounds.size.x / Mathf.Max(1, TrimmedMaxResolution.x);
@@ -111,7 +110,6 @@ namespace Lotec.Lighting {
             Shader.SetGlobalVector(s_sInverseVoxelSize, inverseVoxelSize);
 
             ApplyBitmaskSunDirection();
-            ApplyOcclusionFieldGlobals();
         }
 
         void ApplyBitmaskSunDirection() {
@@ -122,17 +120,6 @@ namespace Lotec.Lighting {
             int bestIndex = OcclusionFieldQuery.FindNearestDirection(sunDir, occlusionBitmaskDirections, occlusionBitmaskDirections.Length);
             Shader.SetGlobalInt(s_sBitmaskSunFibIndex, bestIndex);
             Shader.SetGlobalInt(s_sBitmaskDirCount, occlusionBitmaskDirections.Length);
-        }
-
-        void ApplyOcclusionFieldGlobals() {
-            if (occlusionFieldDirections == null || occlusionFieldDirections.Length == 0) return;
-            if (occlusionFieldTextures == null || occlusionFieldTextures.Length == 0) return;
-
-            if (_occlusionFieldQuery == null)
-                _occlusionFieldQuery = new OcclusionFieldQuery();
-
-            _occlusionFieldQuery.Initialize(occlusionFieldDirections, occlusionFieldTextures);
-            _occlusionFieldQuery.ApplyShaderGlobals();
         }
 
         /// <summary>

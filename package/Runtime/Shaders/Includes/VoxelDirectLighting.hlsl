@@ -41,10 +41,15 @@ inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal) {
     #endif
 }
 
-// Finite-distance shadow for local lights: always SDF, so a blocker behind the light
-// does not shadow the surface (the bitmask field stores occlusion to infinity).
+// Finite-distance shadow for local (point/spot) lights: always SDF, so a blocker behind
+// the light does not shadow the surface (the bitmask field stores occlusion to infinity).
+// Per-material opt-out: _RECEIVE_LOCAL_SHADOWS_OFF compiles out the per-light SDF march.
 inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal, float maxDistance) {
-    return GetShadowFromSdf(normalize(lightDir), worldPos, maxDistance);
+    #if defined(_RECEIVE_LOCAL_SHADOWS_OFF)
+        return 1.0h;
+    #else
+        return GetShadowFromSdf(normalize(lightDir), worldPos, maxDistance);
+    #endif
 }
 
 inline float GetLocalLightRangeAttenuation(float distSq, float rangeSq) {
