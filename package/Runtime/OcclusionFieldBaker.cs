@@ -28,7 +28,7 @@ namespace Lotec.Lighting {
         public DirectionCount directionCount = DirectionCount.Dir64;
 
         [Tooltip("Use only upper hemisphere directions (Y >= 0). Useful when the sun never goes below the horizon.")]
-        public bool hemisphereOnly;
+        public bool hemisphereOnly = true;
 
         [Tooltip("Softness of shadow penumbra. Higher = sharper. 0 = binary.")]
         [Range(1f, 128f)]

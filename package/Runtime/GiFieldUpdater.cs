@@ -93,13 +93,7 @@ namespace Lotec.Lighting {
         int _irradianceFieldSampleCount;
         GraphicsFormat _giTextureFormat;
         LightSettings _prevLightSettings;
-        int _currentPointLightCount;
-        int _currentSpotLightCount;
-        readonly Vector4[] _pointLightPositionRanges = new Vector4[LightingManager.MaxPointLights];
-        readonly Vector4[] _pointLightColors = new Vector4[LightingManager.MaxPointLights];
-        readonly Vector4[] _spotLightPositionRanges = new Vector4[LightingManager.MaxSpotLights];
-        readonly Vector4[] _spotLightDirectionAngleScales = new Vector4[LightingManager.MaxSpotLights];
-        readonly Vector4[] _spotLightColorAngleOffsets = new Vector4[LightingManager.MaxSpotLights];
+        readonly LocalLightArrays _localLights = new LocalLightArrays();
 
         #region Shader Property IDs
         // Property IDs local to gi update compute shader
@@ -119,13 +113,6 @@ namespace Lotec.Lighting {
         static readonly int s_temporalBlendWeight = Shader.PropertyToID("_TemporalBlendWeight");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
-        static readonly int s_pointLightCount = Shader.PropertyToID("_PointLightCount");
-        static readonly int s_pointLightPositionRange = Shader.PropertyToID("_PointLightPositionRange");
-        static readonly int s_pointLightColor = Shader.PropertyToID("_PointLightColor");
-        static readonly int s_spotLightCount = Shader.PropertyToID("_SpotLightCount");
-        static readonly int s_spotLightPositionRange = Shader.PropertyToID("_SpotLightPositionRange");
-        static readonly int s_spotLightDirectionAngleScale = Shader.PropertyToID("_SpotLightDirectionAngleScale");
-        static readonly int s_spotLightColorAngleOffset = Shader.PropertyToID("_SpotLightColorAngleOffset");
         static readonly int s_skyColor = Shader.PropertyToID("_SkyColor");
         static readonly int s_blueNoiseTex = Shader.PropertyToID("_BlueNoiseTex");
         static readonly int s_injectLpvSky = Shader.PropertyToID("_InjectLpvSky");
@@ -273,8 +260,8 @@ namespace Lotec.Lighting {
 
             EnsureInitialized();
             if (!isStable || _continuousGi) {
-                SetPointLightShaderUniforms();
-                SetSpotLightShaderUniforms();
+                _localLights.Collect(Manager != null ? Manager.AdditionalLights : null);
+                _localLights.ApplyToCompute(_giComputeShader);
                 SetDirectionalLightUniforms();
                 DispatchGIUpdate();
                 _irradianceFieldSampleCount++;
@@ -390,7 +377,7 @@ namespace Lotec.Lighting {
 
                 for (int i = 0; i < additionalLights.Count; i++) {
                     Light light = additionalLights[i];
-                    if (IsSupportedPointLight(light) && pointLightCount < LightingManager.MaxPointLights) {
+                    if (LocalLightArrays.IsSupportedPointLight(light) && pointLightCount < LightingManager.MaxPointLights) {
                         Vector3 position = light.transform.position;
                         Color color = light.color;
                         hash = (hash * 31) + ((int)light.type);
@@ -403,7 +390,7 @@ namespace Lotec.Lighting {
                         hash = (hash * 31) + light.range.GetHashCode();
                         hash = (hash * 31) + light.intensity.GetHashCode();
                         pointLightCount++;
-                    } else if (IsSupportedSpotLight(light) && spotLightCount < LightingManager.MaxSpotLights) {
+                    } else if (LocalLightArrays.IsSupportedSpotLight(light) && spotLightCount < LightingManager.MaxSpotLights) {
                         Vector3 position = light.transform.position;
                         Vector3 direction = light.transform.forward;
                         Color color = light.color;
@@ -738,94 +725,6 @@ namespace Lotec.Lighting {
             _giComputeShader.SetVector(s_skyColor, GetSkyEnvironmentColor());
         }
 
-        void SetPointLightShaderUniforms() {
-            if (_giComputeShader == null) {
-                return;
-            }
-
-            int pointLightCount = 0;
-            var additionalLights = Manager != null ? Manager.AdditionalLights : null;
-            if (additionalLights != null) {
-                for (int i = 0; i < additionalLights.Count; i++) {
-                    Light light = additionalLights[i];
-                    if (!IsSupportedPointLight(light)) {
-                        continue;
-                    }
-
-                    Vector3 position = light.transform.position;
-                    _pointLightPositionRanges[pointLightCount] = new Vector4(position.x, position.y, position.z, light.range);
-                    _pointLightColors[pointLightCount] = (Vector4)light.color * light.intensity;
-                    pointLightCount++;
-
-                    if (pointLightCount >= LightingManager.MaxPointLights) {
-                        break;
-                    }
-                }
-            }
-
-            _currentPointLightCount = pointLightCount;
-            _giComputeShader.SetInt(s_pointLightCount, pointLightCount);
-            _giComputeShader.SetVectorArray(s_pointLightPositionRange, _pointLightPositionRanges);
-            _giComputeShader.SetVectorArray(s_pointLightColor, _pointLightColors);
-        }
-
-        void SetSpotLightShaderUniforms() {
-            if (_giComputeShader == null) {
-                return;
-            }
-
-            int spotLightCount = 0;
-            var additionalLights = Manager != null ? Manager.AdditionalLights : null;
-            if (additionalLights != null) {
-                for (int i = 0; i < additionalLights.Count; i++) {
-                    Light light = additionalLights[i];
-                    if (!IsSupportedSpotLight(light)) {
-                        continue;
-                    }
-
-                    Vector3 position = light.transform.position;
-                    Vector3 direction = light.transform.forward;
-                    float outerCos = Mathf.Cos(light.spotAngle * Mathf.Deg2Rad * 0.5f);
-                    float innerCos = Mathf.Cos(light.innerSpotAngle * Mathf.Deg2Rad * 0.5f);
-                    float angleRange = Mathf.Max(innerCos - outerCos, 1e-4f);
-                    float angleScale = 1f / angleRange;
-                    float angleOffset = -outerCos * angleScale;
-
-                    _spotLightPositionRanges[spotLightCount] = new Vector4(position.x, position.y, position.z, light.range);
-                    _spotLightDirectionAngleScales[spotLightCount] = new Vector4(direction.x, direction.y, direction.z, angleScale);
-                    _spotLightColorAngleOffsets[spotLightCount] = new Vector4(light.color.r * light.intensity, light.color.g * light.intensity, light.color.b * light.intensity, angleOffset);
-                    spotLightCount++;
-
-                    if (spotLightCount >= LightingManager.MaxSpotLights) {
-                        break;
-                    }
-                }
-            }
-
-            _currentSpotLightCount = spotLightCount;
-            _giComputeShader.SetInt(s_spotLightCount, spotLightCount);
-            _giComputeShader.SetVectorArray(s_spotLightPositionRange, _spotLightPositionRanges);
-            _giComputeShader.SetVectorArray(s_spotLightDirectionAngleScale, _spotLightDirectionAngleScales);
-            _giComputeShader.SetVectorArray(s_spotLightColorAngleOffset, _spotLightColorAngleOffsets);
-        }
-
-        static bool IsSupportedPointLight(Light light) {
-            return light != null &&
-                   light.isActiveAndEnabled &&
-                   light.type == LightType.Point &&
-                   light.range > 0f &&
-                   light.intensity > 0f;
-        }
-
-        static bool IsSupportedSpotLight(Light light) {
-            return light != null &&
-                   light.isActiveAndEnabled &&
-                   light.type == LightType.Spot &&
-                   light.range > 0f &&
-                   light.intensity > 0f &&
-                   light.spotAngle > 0f;
-        }
-
         void SetGlobalShaderVariables() {
             // LPV uses the direct ping-pong output (no blur).
             // PathTracing uses the separate blurred irradiance texture.
@@ -839,15 +738,8 @@ namespace Lotec.Lighting {
             float voxelSize = GetGiGridVoxelSize();
             Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector3.one);
 
-            // Visible local-light direct shading now runs in the fragment shader,
-            // so publish the curated point/spot light arrays there as globals too.
-            Shader.SetGlobalInt(s_pointLightCount, _currentPointLightCount);
-            Shader.SetGlobalVectorArray(s_pointLightPositionRange, _pointLightPositionRanges);
-            Shader.SetGlobalVectorArray(s_pointLightColor, _pointLightColors);
-            Shader.SetGlobalInt(s_spotLightCount, _currentSpotLightCount);
-            Shader.SetGlobalVectorArray(s_spotLightPositionRange, _spotLightPositionRanges);
-            Shader.SetGlobalVectorArray(s_spotLightDirectionAngleScale, _spotLightDirectionAngleScales);
-            Shader.SetGlobalVectorArray(s_spotLightColorAngleOffset, _spotLightColorAngleOffsets);
+            // The point/spot light globals for fragment direct lighting are published by
+            // LightingManager (so local lights work without the GI updater running).
             if (!_autoExposure) {
                 Shader.SetGlobalFloat(s_exposure, _exposure);
             }

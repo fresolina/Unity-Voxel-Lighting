@@ -1,5 +1,9 @@
-Shader "Lotec/Voxel Lighting/SDF Shadow Test"
+Shader "Lotec/Voxel Lighting/Voxel Lit"
 {
+    // Direct lighting + SDF ray-marched shadows only. No GI, no AO - so it needs only the
+    // SDF bake (VoxelSdfBaker) and a LightingManager to publish lights and shadow params.
+    // Exposure is a per-material property here (no GI auto-exposure), so it can be cranked
+    // up to match boosted light intensities.
     Properties
     {
         _BaseMap ("Base Map", 2D) = "white" {}
@@ -9,6 +13,7 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
         [Toggle] _Emission ("Emission", Float) = 0.0
         _EmissionMap ("Emission Map", 2D) = "white" {}
         [HDR] _EmissionColor ("Emission Color", Color) = (1,1,1,1)
+        _Exposure ("Exposure (EV stops)", Float) = 0.0
     }
 
     SubShader
@@ -30,24 +35,9 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
-            // Lotec Voxel Lighting SDF ray marching shadows
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelSdfShadows.hlsl"
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelSdfAo.hlsl"
-            // Lotec Voxel Lighting occlusion direction bitmask shadows
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionDirection.hlsl"
-            // Lotec Voxel Lighting per-direction occlusion field (hardware-interpolated)
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionField.hlsl"
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelGi.hlsl"
-            // Direct lighting (sun + local lights) + shadow dispatch. Included last so its
-            // keyword-gated GetShadow can see the bitmask / occlusion-field helpers above.
+            // Direct lighting (sun + local lights) + SDF ray-marched shadows. This pulls in
+            // VoxelSdfShadows.hlsl; no other voxel includes are needed for direct-only.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelDirectLighting.hlsl"
-
-            // Choose shadow implementation at compile-time only.
-            // Keywords: SDF_ONLY, BITMASK_POINT (single bit), BITMASK_8TAP (trilinear 2x2x2), OCC_FIELD (per-direction field)
-            #pragma multi_compile __ SDF_ONLY BITMASK_POINT BITMASK_8TAP OCC_FIELD
-            #pragma multi_compile SDF_AO_OFF SDF_AO_LQ SDF_AO_HQ
-            // GI_ON: sample the runtime irradiance field + AO. GI_OFF: direct lighting only.
-            #pragma multi_compile GI_ON GI_OFF
 
             CBUFFER_START(UnityPerMaterial)
                 TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
@@ -57,10 +47,8 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 float _Emission;
                 TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
                 float4 _EmissionColor;
+                float _Exposure;
             CBUFFER_END
-
-            // Published by GiFieldUpdater (auto-exposure) when GI is active.
-            float _Exposure;
 
             struct v {
                 float4 positionOS : POSITION;
@@ -104,7 +92,6 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
             // Get pixel normal, either from normal map or interpolated vertex normal if no normal map is used.
             half3 GetNormal(v2f input) {
                 #ifdef _NORMALMAP
-                    // Convert tangent space normal from normal map to world space.
                     half4 normSample = SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, input.uv);
                     half3 normTex = UnpackNormal(normSample);
                     half3x3 TBN = half3x3(normalize(input.tangent),
@@ -121,23 +108,14 @@ Shader "Lotec/Voxel Lighting/SDF Shadow Test"
                 Light light = GetMainLight();
                 half3 N = GetNormal(IN);
 
-                // Albedo: texture modulated by base color
                 half3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
                 half3 albedo = _BaseColor.rgb * texAlbedo;
 
-                half3 directLighting = GetMainDirectLighting(light, IN.positionWS, N, albedo);
-                directLighting += GetPointLightDirect(IN.positionWS, N, albedo);
-                directLighting += GetSpotLightDirect(IN.positionWS, N, albedo);
+                half3 lit = GetMainDirectLighting(light, IN.positionWS, N, albedo);
+                lit += GetPointLightDirect(IN.positionWS, N, albedo);
+                lit += GetSpotLightDirect(IN.positionWS, N, albedo);
 
-                half3 lit = directLighting;
-                #if defined(GI_ON)
-                    // Indirect lit (Voxel GI field) modulated by SDF ambient occlusion.
-                    float3 gi = SampleVoxelGI(IN.positionWS, N);
-                    float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
-                    lit += albedo * gi * ao;
-                #endif
-
-                // Exposure (EV stops) + Reinhard tonemapping
+                // Manual exposure (material property) + Reinhard tonemapping.
                 lit *= exp2(_Exposure);
                 lit = lit / (1.0h + lit);
 

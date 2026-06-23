@@ -17,7 +17,6 @@ namespace Lotec.Lighting {
     }
 
     [ExecuteInEditMode]
-    [RequireComponent(typeof(GiFieldUpdater))]
     public class LightingManager : MonoBehaviour {
         public static LightingManager Instance { get; private set; }
 
@@ -34,6 +33,7 @@ namespace Lotec.Lighting {
 
         readonly List<LightingVolume> _registeredVolumes = new List<LightingVolume>();
         LightingVolume _activeVolume;
+        readonly LocalLightArrays _localLights = new LocalLightArrays();
 
         [Header("Additional Lights")]
         [Tooltip("Extra runtime GI lights. The first 4 supported point lights and the first 4 supported spot lights are injected.")]
@@ -118,6 +118,25 @@ namespace Lotec.Lighting {
                 _sdfShadow.ApplyShaderGlobals(Volume.VoxelSize);
             }
             _sdfAo.ApplyShaderGlobals();
+
+            // Publish point/spot light globals for fragment-shader direct lighting here,
+            // independent of GI, so direct lights work without a GiFieldUpdater present.
+            _localLights.Collect(_additionalLights);
+            _localLights.ApplyGlobals();
+            ApplyGiKeyword();
+        }
+
+        // GI_ON when an active GI updater is driving the irradiance field; GI_OFF lets the
+        // shader compile out the GI/AO path for direct-lighting-only setups.
+        void ApplyGiKeyword() {
+            bool giOn = _giUpdater != null && _giUpdater.isActiveAndEnabled;
+            if (giOn) {
+                Shader.EnableKeyword("GI_ON");
+                Shader.DisableKeyword("GI_OFF");
+            } else {
+                Shader.DisableKeyword("GI_ON");
+                Shader.EnableKeyword("GI_OFF");
+            }
         }
 
         // Update is called once per frame
