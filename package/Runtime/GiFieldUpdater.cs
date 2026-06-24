@@ -73,7 +73,7 @@ namespace Lotec.Lighting {
         }
 
         public Texture3D MaterialFieldAlbedoIntensity =>
-            Volume != null && Volume.TryGetComponent(out VoxelMaterial material) ? material.materialAlbedoIntensityTexture : null;
+            Volume != null && Volume.TryGetComponent(out VoxelMaterialField material) ? material.materialAlbedoIntensityTexture : null;
         public Texture3D SurfaceDistanceFieldHighRes => Volume.sdfHiresTexture;
         public Texture3D SurfaceDistanceFieldLowRes => Volume.sdfLowresTexture;
         public ComputeShader GiComputeShader { get => _giComputeShader; set => _giComputeShader = value; }
@@ -324,7 +324,7 @@ namespace Lotec.Lighting {
             }
 
             if (MaterialFieldAlbedoIntensity == null) {
-                reason = "VoxelMaterial.materialAlbedoIntensityTexture (run the Material baker)";
+                reason = "VoxelMaterialField.materialAlbedoIntensityTexture (run the Material baker)";
                 return false;
             }
 

@@ -8,8 +8,8 @@ namespace Lotec.Lighting {
     /// shadow binders - this component publishes no fragment globals; it is a data holder.
     /// </summary>
     [RequireComponent(typeof(LightingVolume))]
-    [AddComponentMenu("Lotec/Voxel Lighting/Binders/Voxel Material")]
-    public class VoxelMaterial : MonoBehaviour {
+    [AddComponentMenu("Lotec/Voxel Lighting/Binders/Voxel Material Field")]
+    public class VoxelMaterialField : MonoBehaviour {
         [Tooltip("Lower-resolution packed material: albedo.rgb + emissionIntensity (a). Written by VoxelMaterialBaker, consumed by GI.")]
         public Texture3D materialAlbedoIntensityTexture;
     }

@@ -23,8 +23,8 @@ namespace Lotec.Lighting {
                 return false;
 
             // Store the baked material field on its component (added if missing).
-            if (!volume.TryGetComponent(out VoxelMaterial material))
-                material = volume.gameObject.AddComponent<VoxelMaterial>();
+            if (!volume.TryGetComponent(out VoxelMaterialField material))
+                material = volume.gameObject.AddComponent<VoxelMaterialField>();
             material.materialAlbedoIntensityTexture = bakedAlbedoIntensity;
             return true;
         }
