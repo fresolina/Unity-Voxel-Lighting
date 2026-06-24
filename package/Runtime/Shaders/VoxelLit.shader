@@ -1,9 +1,8 @@
 Shader "Lotec/Voxel Lighting/Voxel Lit"
 {
-    // Direct lighting + SDF ray-marched shadows only. No GI, no AO - so it needs only the
-    // SDF bake (VoxelSdfBaker) and a LightingManager to publish lights and shadow params.
-    // Exposure is a per-material property here (no GI auto-exposure), so it can be cranked
-    // up to match boosted light intensities.
+    // Per-feature lit shader: direct lighting + selectable shadow source (SDF / bitmask /
+    // occlusion field) + optional GI and AO. Exposure is a scene-wide global (set by the
+    // GiFieldUpdater - auto or manual).
     Properties
     {
         _BaseMap ("Base Map", 2D) = "white" {}
@@ -13,7 +12,6 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
         [Toggle] _Emission ("Emission", Float) = 0.0
         _EmissionMap ("Emission Map", 2D) = "white" {}
         [HDR] _EmissionColor ("Emission Color", Color) = (1,1,1,1)
-        _Exposure ("Exposure (EV stops)", Float) = 0.0
         [ToggleOff(_RECEIVE_LOCAL_SHADOWS_OFF)] _ReceiveLocalShadows ("Receive Local Shadows", Float) = 1.0
     }
 
@@ -42,13 +40,24 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // binder on the volume): default = SDF, BITMASK_POINT / BITMASK_8TAP = directional
             // bitmask, OCC_FIELD = occlusion field (no SDF texture needed at runtime).
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelSdfShadows.hlsl"
+            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelSdfAo.hlsl"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionDirection.hlsl"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionField.hlsl"
+            // Runtime GI (irradiance field).
+            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelGi.hlsl"
             // Direct lighting (sun + local lights) + keyword-gated shadow dispatch.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelDirectLighting.hlsl"
 
             // Shadow source (default = SDF): directional bitmask (point / 8-tap) or occlusion field.
             #pragma multi_compile __ BITMASK_POINT BITMASK_8TAP OCC_FIELD
+            // Ambient occlusion quality (off / low / high), modulates the GI term.
+            #pragma multi_compile SDF_AO_OFF SDF_AO_LQ SDF_AO_HQ
+            // GI_OFF (default): direct lighting only. GI_ON: add the irradiance field + AO.
+            // Enabled by the GiFieldUpdater on the active volume while it is running.
+            #pragma multi_compile GI_OFF GI_ON
+            // Global (set by GiFieldUpdater): the in-shader display transform = exposure +
+            // tonemap. TONEMAP_OFF outputs linear HDR for a post-processing stack instead.
+            #pragma multi_compile _ TONEMAP_OFF
 
             CBUFFER_START(UnityPerMaterial)
                 TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
@@ -58,9 +67,11 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 float _Emission;
                 TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
                 float4 _EmissionColor;
-                float _Exposure;
                 float _ReceiveLocalShadows;
             CBUFFER_END
+
+            // Scene-wide exposure (EV stops), published as a global by the GiFieldUpdater (auto or manual).
+            float _Exposure;
 
             struct v {
                 float4 positionOS : POSITION;
@@ -127,9 +138,21 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 lit += GetPointLightDirect(IN.positionWS, N, albedo);
                 lit += GetSpotLightDirect(IN.positionWS, N, albedo);
 
-                // Manual exposure (material property) + Reinhard tonemapping.
-                lit *= exp2(_Exposure);
-                lit = lit / (1.0h + lit);
+                #if defined(GI_ON)
+                    // Indirect lit (Voxel GI field) modulated by SDF ambient occlusion.
+                    float3 gi = SampleVoxelGI(IN.positionWS, N);
+                    float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
+                    lit += albedo * gi * ao;
+                #endif
+
+                // In-shader display transform (exposure + Reinhard tonemap). Skipped when a
+                // post-processing stack does it on the composited HDR (GiFieldUpdater toggle).
+                #if !defined(TONEMAP_OFF)
+                    #if defined(GI_ON)
+                        lit *= exp2(_Exposure);   // exposure only meaningful when GI drives it
+                    #endif
+                    lit = lit / (1.0h + lit);
+                #endif
 
                 return half4(lit, _BaseColor.a);
             }

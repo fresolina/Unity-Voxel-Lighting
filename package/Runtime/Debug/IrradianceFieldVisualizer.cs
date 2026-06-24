@@ -22,7 +22,8 @@ namespace Lotec.Lighting
                 if (source == null) { LogStatus("GetTexture: no LightingManager found"); return null; }
             }
 
-            RenderTexture rt = source.GiUpdater != null ? source.GiUpdater.IrradianceFinal : null;
+            GiFieldUpdater gi = GiFieldUpdater.Instance;
+            RenderTexture rt = gi != null ? gi.IrradianceFinal : null;
             if (rt == null) { LogStatus("GetTexture: irradiance RT is null"); return null; }
             if (!rt.IsCreated()) rt.Create();
             if (rt.width == 0 || rt.height == 0 || rt.volumeDepth == 0) { LogStatus($"GetTexture: RT has invalid dims {rt.width}x{rt.height}x{rt.volumeDepth}"); return null; }
@@ -82,7 +83,7 @@ namespace Lotec.Lighting
         [ContextMenu("Log Irradiance Center Pixel")]
         void LogRadianceCenter()
         {
-            var tex = source.GiUpdater.IrradianceFinal as Texture;
+            var tex = GiFieldUpdater.Instance?.IrradianceFinal as Texture;
             Texture3DReadback.ReadbackRGBAAsync(tex, "Hidden/Unpack3D", (ok, pixels, w, h, d) =>
             {
                 if (!ok) { Debug.Log("readback failed"); return; }

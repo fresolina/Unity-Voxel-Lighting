@@ -1198,7 +1198,7 @@ Light:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 333063934}
-  m_Enabled: 0
+  m_Enabled: 1
   serializedVersion: 12
   m_Type: 0
   m_Color: {r: 0.89622635, g: 1, b: 0.995467, a: 1}
@@ -2163,7 +2163,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 2147483647
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &772833387
 Transform:
   m_ObjectHideFlags: 0
@@ -2203,27 +2203,12 @@ MonoBehaviour:
   _root: {fileID: 772833387}
   _paddingWorld: 0.25
   _maxResolution: 128
-  TrimmedMaxResolution: {x: 80, y: 77, z: 128}
+  TrimmedMaxResolution: {x: 128, y: 128, z: 128}
   Bounds:
-    m_Center: {x: -11.24, y: 1.7320002, z: -0.26000023}
-    m_Extent: {x: 3.28125, y: 3.1582031, z: 5.25}
+    m_Center: {x: 0, y: 0, z: 0}
+    m_Extent: {x: 0.25, y: 0.25, z: 0.25}
   sdfHiresTexture: {fileID: 11700000, guid: ae780469d95a1ed48ba496ba0dce3966, type: 2}
   sdfLowresTexture: {fileID: 11700000, guid: 66de412f06a354148a79f985619d526f, type: 2}
-  occlusionBitmaskTexture: {fileID: 11700000, guid: f6ea547a7010c7f4abc701800abd4889, type: 2}
-  materialAlbedoIntensityTexture: {fileID: 11700000, guid: 42dad9bc8bd6aae4c929164069f90695, type: 2}
-  occlusionFieldTextures:
-  - {fileID: 11700000, guid: f253887f4c3f8c241b21b5e134da95c3, type: 2}
-  occlusionBitmaskDirections:
-  - {x: 0.34798527, y: 0.9375, z: 0}
-  - {x: -0.4298574, y: 0.8125, z: 0.39378467}
-  - {x: 0.06348706, y: 0.6875, z: -0.7234039}
-  - {x: 0.50305593, y: 0.5625, z: 0.6561467}
-  - {x: -0.8854726, y: 0.4375, z: -0.1566273}
-  - {x: 0.801498, y: 0.3125, z: -0.50984764}
-  - {x: -0.25499916, y: 0.1875, z: 0.94858795}
-  - {x: -0.46000668, y: 0.0625, z: -0.88571304}
-  occlusionFieldDirections:
-  - {x: -0, y: 0.9848078, z: -0.17364824}
 --- !u!1 &784264324
 GameObject:
   m_ObjectHideFlags: 0
@@ -2973,7 +2958,7 @@ Transform:
   m_GameObject: {fileID: 1033441895}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 7.06, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -2992,6 +2977,9 @@ GameObject:
   m_Component:
   - component: {fileID: 1127919669}
   - component: {fileID: 1127919670}
+  - component: {fileID: 1127919671}
+  - component: {fileID: 1127919672}
+  - component: {fileID: 1127919673}
   m_Layer: 0
   m_Name: Room_dark
   m_TagString: Untagged
@@ -3042,10 +3030,35 @@ MonoBehaviour:
     m_Extent: {x: 3.28125, y: 3.1582031, z: 5.25}
   sdfHiresTexture: {fileID: 11700000, guid: d6dcbc66995615d4893d7bce504d994b, type: 2}
   sdfLowresTexture: {fileID: 11700000, guid: e5e23bb3192c6b646993f319ba33e653, type: 2}
-  occlusionBitmaskTexture: {fileID: 11700000, guid: 6e0dac05ebcd3354e8823d73c4e17876, type: 2}
-  materialAlbedoIntensityTexture: {fileID: 11700000, guid: 8e71d14e8a43f724b88f99914f6e705d, type: 2}
+--- !u!114 &1127919671
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1127919668}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 82756e4c53a5250448bd5340c704fdc8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionField
   occlusionFieldTextures:
   - {fileID: 11700000, guid: 1069c9bf2755a364f8f6760a99577d7e, type: 2}
+  occlusionFieldDirections:
+  - {x: -0, y: 0.9848078, z: -0.17364824}
+--- !u!114 &1127919672
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1127919668}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ab66d466b2e7aec43941ef7eeaa2cc0f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionBitmask
+  occlusionBitmaskTexture: {fileID: 11700000, guid: 6e0dac05ebcd3354e8823d73c4e17876, type: 2}
   occlusionBitmaskDirections:
   - {x: 0.34798527, y: 0.9375, z: 0}
   - {x: -0.4298574, y: 0.8125, z: 0.39378467}
@@ -3055,8 +3068,20 @@ MonoBehaviour:
   - {x: 0.801498, y: 0.3125, z: -0.50984764}
   - {x: -0.25499916, y: 0.1875, z: 0.94858795}
   - {x: -0.46000668, y: 0.0625, z: -0.88571304}
-  occlusionFieldDirections:
-  - {x: -0, y: 0.9848078, z: -0.17364824}
+  sampling: 0
+--- !u!114 &1127919673
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1127919668}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1134c2de4dbd4b942a474b7f33ce0b1d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelMaterial
+  materialAlbedoIntensityTexture: {fileID: 11700000, guid: 8e71d14e8a43f724b88f99914f6e705d, type: 2}
 --- !u!1 &1170044008
 GameObject:
   m_ObjectHideFlags: 0
@@ -3902,9 +3927,8 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1437948842}
-  - component: {fileID: 1437948844}
   - component: {fileID: 1437948843}
-  - component: {fileID: 1437948845}
+  - component: {fileID: 1437948844}
   m_Layer: 0
   m_Name: Lighting manager
   m_TagString: Untagged
@@ -3941,11 +3965,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.LightingManager
   _volume: {fileID: 1127919670}
   _autoSwitchToClosestVolume: 1
-  _giUpdater: {fileID: 1437948845}
   _additionalLights:
   - {fileID: 1697248655}
   - {fileID: 333063937}
-  _shadowMode: 0
   _sdfShadow:
     <MaxSteps>k__BackingField: 32
     <Softness>k__BackingField: 20
@@ -3965,41 +3987,6 @@ MonoBehaviour:
   m_GameObject: {fileID: 1437948840}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 0ee8e7b592a45e7439418da0b98ac895, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelLightingBaker
-  LowresDownscaleFactor: 2
-  sdfBakerMode: 0
-  _sdfBaker:
-    sdfBakeCompute: {fileID: 7200000, guid: b69a1acfc8ae8044384411949a5b3e0b, type: 3}
-  _sdfBakerJfa:
-    sdfBakeJfaCompute: {fileID: 7200000, guid: bd28af57c48881d449ab7ad2ab6e6288, type: 3}
-    bandCellRadius: 2
-    extraStep1Passes: 2
-  _occlusionBitmaskBaker:
-    directionCount: 8
-    hemisphereOnly: 1
-    bitmaskBakeCompute: {fileID: 7200000, guid: e0f7c494ba521474e9fdbcaf190a0e90, type: 3}
-  _occlusionFieldBaker:
-    occlusionFieldBakeCompute: {fileID: 7200000, guid: 072dc532c95fd5040894f9193b6fad72, type: 3}
-    directionCount: 1
-    hemisphereOnly: 1
-    shadowSoftness: 3
-  _materialBaker:
-    MaterialBakeCompute: {fileID: 7200000, guid: 7f32bd09c6a495746a7840c188a184c4, type: 3}
-  _hemisphereFlagsInitialized: 1
-  _lastBitmaskHemisphereOnly: 1
-  _lastOcclusionFieldHemisphereOnly: 1
-  _targetVolume: {fileID: 772833388}
---- !u!114 &1437948845
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1437948840}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 511cad81882958d489e01a3d1e19706e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.GiFieldUpdater
@@ -4008,16 +3995,17 @@ MonoBehaviour:
   _maxSamples: 420
   _raysPerFrame: 1
   _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
+  _tonemapInShader: 1
   _exposure: 0
   _autoExposure: 1
   _autoExposureMin: -2
-  _autoExposureMax: 2
-  _adaptationSpeed: 5
+  _autoExposureMax: 4
+  _adaptationSpeed: 2
   _autoExposureRadius: 3
   _lightingMethod: 0
-  _lpvDecay: 0.99
+  _lpvDecay: 0.97
   _raymarchMaxSteps: 64
-  _raymarchSoftness: 1
+  _raymarchSoftness: 0.5
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0
@@ -4130,6 +4118,132 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1451824435}
   m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!1 &1500960146
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1500960147}
+  - component: {fileID: 1500960152}
+  - component: {fileID: 1500960151}
+  - component: {fileID: 1500960150}
+  - component: {fileID: 1500960149}
+  - component: {fileID: 1500960148}
+  m_Layer: 0
+  m_Name: Bakers
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1500960147
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1500960146}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1628000040}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1500960148
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1500960146}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 42e7201bd07ab1d4bb0f05b18e75ebbb, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelMaterialBaker
+  _targetVolume: {fileID: 1127919670}
+  LowresDownscaleFactor: 2
+  _baker:
+    MaterialBakeCompute: {fileID: 7200000, guid: 7f32bd09c6a495746a7840c188a184c4, type: 3}
+--- !u!114 &1500960149
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1500960146}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 98fca1dd38e7de247b9754d844d4b193, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionFieldBaker
+  _targetVolume: {fileID: 1127919670}
+  _baker:
+    occlusionFieldBakeCompute: {fileID: 7200000, guid: 072dc532c95fd5040894f9193b6fad72, type: 3}
+    directionCount: 1
+    hemisphereOnly: 1
+    shadowSoftness: 3
+  _hemisphereInitialized: 1
+  _lastHemisphereOnly: 1
+--- !u!114 &1500960150
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1500960146}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f1ca66c064226da428d740f80012b968, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionBitmaskBaker
+  _targetVolume: {fileID: 1127919670}
+  _baker:
+    directionCount: 8
+    hemisphereOnly: 1
+    bitmaskBakeCompute: {fileID: 7200000, guid: e0f7c494ba521474e9fdbcaf190a0e90, type: 3}
+  _hemisphereInitialized: 1
+  _lastHemisphereOnly: 1
+--- !u!114 &1500960151
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1500960146}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b0a41c06d3f9ad4094ebb6168426c97, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelSdfBaker
+  _targetVolume: {fileID: 1127919670}
+  sdfBakerMode: 0
+  bakeLowres: 0
+  LowresDownscaleFactor: 2
+  _sdfBaker:
+    sdfBakeCompute: {fileID: 7200000, guid: b69a1acfc8ae8044384411949a5b3e0b, type: 3}
+  _sdfBakerJfa:
+    sdfBakeJfaCompute: {fileID: 7200000, guid: bd28af57c48881d449ab7ad2ab6e6288, type: 3}
+    bandCellRadius: 2
+    extraStep1Passes: 2
+--- !u!114 &1500960152
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1500960146}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 771b009e0fdee72408af55f72c81627d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelLightingBaker
+  _targetVolume: {fileID: 1127919670}
 --- !u!1 &1522401955
 GameObject:
   m_ObjectHideFlags: 0
@@ -4354,6 +4468,38 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1588789276}
   m_Mesh: {fileID: 10207, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!1 &1628000039
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1628000040}
+  m_Layer: 0
+  m_Name: 'Editor '
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1628000040
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1628000039}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 2.59224, y: 3.03602, z: 1.687}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 1500960147}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1635818836
 GameObject:
   m_ObjectHideFlags: 0
@@ -5870,6 +6016,7 @@ MeshFilter:
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
+  - {fileID: 1628000040}
   - {fileID: 1170044009}
   - {fileID: 1200926433}
   - {fileID: 784264326}

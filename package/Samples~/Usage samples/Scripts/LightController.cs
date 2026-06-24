@@ -96,7 +96,7 @@ namespace Lotec.Lighting.Samples {
         }
 
         public void ToggleLightingMethod() {
-            LightingManager.Instance.ToggleLightingMethod();
+            GiFieldUpdater.Instance?.ToggleLightingMethod();
         }
 
         void ToggleFlashlight() {

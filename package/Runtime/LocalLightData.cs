@@ -7,7 +7,12 @@ namespace Lotec.Lighting {
     /// the GI compute solve and the fragment-shader direct lighting. Extracted so direct
     /// lighting can be published without the GI updater running.
     /// </summary>
-    public class LocalLightArrays {
+    public class LocalLightData {
+        // Keep in sync with MAX_POINT_LIGHTS / MAX_SPOT_LIGHTS in VoxelGiUpdate.compute and
+        // in the fragment shaders.
+        public const int MaxPointLights = 4;
+        public const int MaxSpotLights = 4;
+
         static readonly int s_pointLightCount = Shader.PropertyToID("_PointLightCount");
         static readonly int s_pointLightPositionRange = Shader.PropertyToID("_PointLightPositionRange");
         static readonly int s_pointLightColor = Shader.PropertyToID("_PointLightColor");
@@ -18,47 +23,45 @@ namespace Lotec.Lighting {
 
         public int PointLightCount { get; private set; }
         public int SpotLightCount { get; private set; }
-        public readonly Vector4[] PointLightPositionRanges = new Vector4[LightingManager.MaxPointLights];
-        public readonly Vector4[] PointLightColors = new Vector4[LightingManager.MaxPointLights];
-        public readonly Vector4[] SpotLightPositionRanges = new Vector4[LightingManager.MaxSpotLights];
-        public readonly Vector4[] SpotLightDirectionAngleScales = new Vector4[LightingManager.MaxSpotLights];
-        public readonly Vector4[] SpotLightColorAngleOffsets = new Vector4[LightingManager.MaxSpotLights];
+        public readonly Vector4[] PointLightPositionRanges = new Vector4[MaxPointLights];
+        public readonly Vector4[] PointLightColors = new Vector4[MaxPointLights];
+        public readonly Vector4[] SpotLightPositionRanges = new Vector4[MaxSpotLights];
+        public readonly Vector4[] SpotLightDirectionAngleScales = new Vector4[MaxSpotLights];
+        public readonly Vector4[] SpotLightColorAngleOffsets = new Vector4[MaxSpotLights];
 
         /// <summary>Fill the arrays from the supported point/spot lights in the list.</summary>
         public void Collect(IReadOnlyList<Light> lights) {
-            int pointCount = 0;
-            int spotCount = 0;
+            PointLightCount = 0;
+            SpotLightCount = 0;
 
-            if (lights != null) {
-                for (int i = 0; i < lights.Count; i++) {
-                    Light light = lights[i];
-                    if (IsSupportedPointLight(light) && pointCount < LightingManager.MaxPointLights) {
-                        Vector3 position = light.transform.position;
-                        PointLightPositionRanges[pointCount] = new Vector4(position.x, position.y, position.z, light.range);
-                        PointLightColors[pointCount] = (Vector4)light.color * light.intensity;
-                        pointCount++;
-                    } else if (IsSupportedSpotLight(light) && spotCount < LightingManager.MaxSpotLights) {
-                        Vector3 position = light.transform.position;
-                        Vector3 direction = light.transform.forward;
-                        float outerCos = Mathf.Cos(light.spotAngle * Mathf.Deg2Rad * 0.5f);
-                        float innerCos = Mathf.Cos(light.innerSpotAngle * Mathf.Deg2Rad * 0.5f);
-                        float angleRange = Mathf.Max(innerCos - outerCos, 1e-4f);
-                        float angleScale = 1f / angleRange;
-                        float angleOffset = -outerCos * angleScale;
+            if (lights == null)
+                return;
 
-                        SpotLightPositionRanges[spotCount] = new Vector4(position.x, position.y, position.z, light.range);
-                        SpotLightDirectionAngleScales[spotCount] = new Vector4(direction.x, direction.y, direction.z, angleScale);
-                        SpotLightColorAngleOffsets[spotCount] = new Vector4(light.color.r * light.intensity, light.color.g * light.intensity, light.color.b * light.intensity, angleOffset);
-                        spotCount++;
-                    }
+            for (int i = 0; i < lights.Count; i++) {
+                Light light = lights[i];
+                if (IsSupportedPointLight(light) && PointLightCount < MaxPointLights) {
+                    Vector3 position = light.transform.position;
+                    PointLightPositionRanges[PointLightCount] = new Vector4(position.x, position.y, position.z, light.range);
+                    PointLightColors[PointLightCount] = (Vector4)light.color * light.intensity;
+                    PointLightCount++;
+                } else if (IsSupportedSpotLight(light) && SpotLightCount < MaxSpotLights) {
+                    Vector3 position = light.transform.position;
+                    Vector3 direction = light.transform.forward;
+                    float outerCos = Mathf.Cos(light.spotAngle * Mathf.Deg2Rad * 0.5f);
+                    float innerCos = Mathf.Cos(light.innerSpotAngle * Mathf.Deg2Rad * 0.5f);
+                    float angleRange = Mathf.Max(innerCos - outerCos, 1e-4f);
+                    float angleScale = 1f / angleRange;
+                    float angleOffset = -outerCos * angleScale;
 
-                    if (pointCount >= LightingManager.MaxPointLights && spotCount >= LightingManager.MaxSpotLights)
-                        break;
+                    SpotLightPositionRanges[SpotLightCount] = new Vector4(position.x, position.y, position.z, light.range);
+                    SpotLightDirectionAngleScales[SpotLightCount] = new Vector4(direction.x, direction.y, direction.z, angleScale);
+                    SpotLightColorAngleOffsets[SpotLightCount] = new Vector4(light.color.r * light.intensity, light.color.g * light.intensity, light.color.b * light.intensity, angleOffset);
+                    SpotLightCount++;
                 }
-            }
 
-            PointLightCount = pointCount;
-            SpotLightCount = spotCount;
+                if (PointLightCount >= MaxPointLights && SpotLightCount >= MaxSpotLights)
+                    break;
+            }
         }
 
         /// <summary>Publish the collected arrays as global shader uniforms (fragment direct lighting).</summary>

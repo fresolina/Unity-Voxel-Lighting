@@ -323,23 +323,13 @@ namespace Lotec.Lighting.Samples
         {
             get
             {
-                LightingManager manager = LightingManager.Instance;
-                if (manager == null || manager.GiUpdater == null)
-                {
-                    return GiFieldUpdater.LightingMethod.PathTracing;
-                }
-
-                return manager.LightingMethod;
+                GiFieldUpdater gi = GiFieldUpdater.Instance;
+                return gi != null ? gi.GiLightingMethod : GiFieldUpdater.LightingMethod.PathTracing;
             }
             set
             {
-                LightingManager manager = LightingManager.Instance;
-                if (manager == null || manager.GiUpdater == null)
-                {
-                    return;
-                }
-
-                if (!manager.GiUpdater.SetLightingMethod(value))
+                GiFieldUpdater gi = GiFieldUpdater.Instance;
+                if (gi == null || !gi.SetLightingMethod(value))
                 {
                     return;
                 }

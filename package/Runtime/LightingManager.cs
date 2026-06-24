@@ -16,6 +16,9 @@ namespace Lotec.Lighting {
         }
     }
 
+    // Run before GiFieldUpdater (default order 0): the manager collects the local lights and
+    // publishes the shared LocalLightData each frame, which GI then reads for its compute solve.
+    [DefaultExecutionOrder(-100)]
     [ExecuteInEditMode]
     public class LightingManager : MonoBehaviour {
         public static LightingManager Instance { get; private set; }
@@ -23,10 +26,6 @@ namespace Lotec.Lighting {
         static readonly int s_sdfTex = Shader.PropertyToID("_SdfTex");
         static readonly int s_sdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
         static readonly int s_sdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
-
-        // Keep in sync with MAX_POINT_LIGHTS and MAX_SPOT_LIGHTS in VoxelGiUpdate.compute.
-        internal const int MaxPointLights = 4;
-        internal const int MaxSpotLights = 4;
 
         /// <summary>Runtime shadow-source selector (for UI). Derived from, and applied to, the
         /// binder components on the active volume - it is not serialized; the binders are the
@@ -37,11 +36,10 @@ namespace Lotec.Lighting {
         [SerializeField] LightingVolume _volume;
         [Tooltip("Automatically activate the volume closest to the main camera.")]
         [SerializeField] bool _autoSwitchToClosestVolume;
-        [SerializeField] GiFieldUpdater _giUpdater;
 
         readonly List<LightingVolume> _registeredVolumes = new List<LightingVolume>();
         LightingVolume _activeVolume;
-        readonly LocalLightArrays _localLights = new LocalLightArrays();
+        readonly LocalLightData _localLights = new LocalLightData();
 
         [Header("Additional Lights")]
         [Tooltip("Extra runtime GI lights. The first 4 supported point lights and the first 4 supported spot lights are injected.")]
@@ -69,24 +67,20 @@ namespace Lotec.Lighting {
         }
         /// <summary>The currently active volume. Returns the runtime override if set, otherwise the serialized default.</summary>
         public LightingVolume Volume => _activeVolume != null ? _activeVolume : _volume;
-        public GiFieldUpdater GiUpdater => _giUpdater;
         /// <summary>All registered volumes in the scene.</summary>
         public IReadOnlyList<LightingVolume> Volumes => _registeredVolumes;
         public IReadOnlyList<Light> AdditionalLights => _additionalLights;
-        public GiFieldUpdater.LightingMethod LightingMethod => _giUpdater != null ? _giUpdater.GiLightingMethod : GiFieldUpdater.LightingMethod.PathTracing;
-
-        void OnValidate() {
-            EnsureFieldsAssigned();
-        }
+        /// <summary>The shared packed light data, collected once per frame for both fragment
+        /// direct lighting (globals) and the GI compute solve.</summary>
+        public LocalLightData LocalLights => _localLights;
 
         /// <summary>
-        /// Switch the active lighting volume at runtime. Pass null to revert to the serialized default.
-        /// Releases GI buffers and resets lighting history for a clean transition.
+        /// Switch the active lighting volume at runtime. Pass null to revert to the serialized
+        /// default. Each volume's own GI/binder components react to the active-volume change.
         /// </summary>
         public void SetActiveVolume(LightingVolume volume) {
             if (_activeVolume == volume) return;
             _activeVolume = volume;
-            EnsureFieldsAssigned();
             ApplyShaderGlobals();
         }
 
@@ -101,22 +95,11 @@ namespace Lotec.Lighting {
                 _activeVolume = null;
         }
 
-        public bool ToggleLightingMethod() {
-            EnsureFieldsAssigned();
-            if (_giUpdater == null) {
-                return false;
-            }
-
-            _giUpdater.ToggleLightingMethod();
-            return true;
-        }
-
         void Awake() {
             Instance = this;
         }
 
         void OnEnable() {
-            EnsureFieldsAssigned();
             ApplyShaderGlobals();
         }
 
@@ -128,11 +111,11 @@ namespace Lotec.Lighting {
             }
             _sdfAo.ApplyShaderGlobals();
 
-            // Publish point/spot light globals for fragment-shader direct lighting here,
-            // independent of GI, so direct lights work without a GiFieldUpdater present.
+            // Collect the local lights once per frame and publish them as globals for
+            // fragment-shader direct lighting (works without a GiFieldUpdater present). The
+            // GI updater reuses this same packed data for the compute solve (via LocalLights).
             _localLights.Collect(_additionalLights);
             _localLights.ApplyGlobals();
-            ApplyGiKeyword();
         }
 
         // Publish the volume's core shader globals: the SDF texture (when baked) and the
@@ -145,44 +128,14 @@ namespace Lotec.Lighting {
                 Shader.SetGlobalTexture(s_sdfTex, volume.sdfHiresTexture);
         }
 
-        // GI_ON when an active GI updater is driving the irradiance field; GI_OFF lets the
-        // shader compile out the GI/AO path for direct-lighting-only setups.
-        void ApplyGiKeyword() {
-            bool giOn = _giUpdater != null && _giUpdater.isActiveAndEnabled;
-            if (giOn) {
-                Shader.EnableKeyword("GI_ON");
-                Shader.DisableKeyword("GI_OFF");
-            } else {
-                Shader.DisableKeyword("GI_ON");
-                Shader.EnableKeyword("GI_OFF");
-            }
-        }
-
         // Update is called once per frame
         void Update() {
-            EnsureFieldsAssigned();
             if (_autoSwitchToClosestVolume) {
                 SwitchToClosestVolume();
             }
             if (Application.isPlaying || _updateInEditor) {
                 ApplyShaderGlobals();
             }
-        }
-
-        void EnsureFieldsAssigned() {
-            if (_giUpdater == null) {
-                _giUpdater = GetComponent<GiFieldUpdater>();
-                if (_giUpdater == null) return;
-            }
-
-            if (_giUpdater.Volume != Volume) {
-                _giUpdater.Volume = Volume;
-            }
-#if UNITY_EDITOR
-            if (!Application.isPlaying) {
-                _giUpdater.Volume = Volume;
-            }
-#endif
         }
 
         void SwitchToClosestVolume() {
