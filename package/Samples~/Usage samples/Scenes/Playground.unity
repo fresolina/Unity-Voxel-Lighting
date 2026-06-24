@@ -1198,7 +1198,7 @@ Light:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 333063934}
-  m_Enabled: 1
+  m_Enabled: 0
   serializedVersion: 12
   m_Type: 0
   m_Color: {r: 0.89622635, g: 1, b: 0.995467, a: 1}
@@ -2203,10 +2203,10 @@ MonoBehaviour:
   _root: {fileID: 772833387}
   _paddingWorld: 0.25
   _maxResolution: 128
-  TrimmedMaxResolution: {x: 128, y: 128, z: 128}
+  TrimmedMaxResolution: {x: 80, y: 77, z: 128}
   Bounds:
-    m_Center: {x: 0, y: 0, z: 0}
-    m_Extent: {x: 0.25, y: 0.25, z: 0.25}
+    m_Center: {x: -11.24, y: 1.7320002, z: -0.26000023}
+    m_Extent: {x: 3.28125, y: 3.1582031, z: 5.25}
   sdfHiresTexture: {fileID: 11700000, guid: ae780469d95a1ed48ba496ba0dce3966, type: 2}
   sdfLowresTexture: {fileID: 11700000, guid: 66de412f06a354148a79f985619d526f, type: 2}
 --- !u!1 &784264324

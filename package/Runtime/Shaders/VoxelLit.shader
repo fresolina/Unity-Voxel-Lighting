@@ -31,6 +31,8 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             #pragma shader_feature _NORMALMAP
             // Per-material: skip the per-light SDF march for local (point/spot) shadows.
             #pragma shader_feature_local _RECEIVE_LOCAL_SHADOWS_OFF
+            // Per-material: emissive contribution (the [Toggle] _Emission property).
+            #pragma shader_feature_local _EMISSION_ON
 
             // URP
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
@@ -143,6 +145,12 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     float3 gi = SampleVoxelGI(IN.positionWS, N);
                     float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
                     lit += albedo * gi * ao;
+                #endif
+
+                // Self-emission, added before the display transform so it is exposed/tonemapped
+                // with the rest of the HDR scene.
+                #if defined(_EMISSION_ON)
+                    lit += _EmissionColor.rgb * SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, IN.uv).rgb;
                 #endif
 
                 // In-shader display transform (exposure + Reinhard tonemap). Skipped when a
