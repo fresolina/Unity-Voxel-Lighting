@@ -108,13 +108,20 @@ float3 GetRandomDirectionFromNoise2(float2 noiseVal) {
 }
 
 float2 GetBlueNoise2(Texture2D<float> tex, uint3 id, uint frame, uint salt) {
-    uint2 baseCoord = uint2(id.x, id.y);
-    uint2 offset = uint2(frame * 17u + salt * 101u, frame * 23u + salt * 59u);
-    uint2 coord0 = (baseCoord + offset) & (BLUE_NOISE_SIZE - 1);
-    uint2 coord1 = (baseCoord + offset + uint2(37u, 61u)) & (BLUE_NOISE_SIZE - 1);
-    float n0 = tex.Load(int3(coord0, 0)).r;
-    float n1 = tex.Load(int3(coord1, 0)).r;
-    return float2(n0, n1);
+    // Spatial blue-noise value, decorrelated per ray (salt) but NOT per frame: the
+    // integer tile offset is taken mod BLUE_NOISE_SIZE, which would repeat exactly
+    // every BLUE_NOISE_SIZE frames and cap the effective sample count.
+    uint2 baseCoord = uint2(id.x, id.y) + uint2(salt * 101u, salt * 59u);
+    uint2 coord0 = baseCoord & (BLUE_NOISE_SIZE - 1);
+    uint2 coord1 = (baseCoord + uint2(37u, 61u)) & (BLUE_NOISE_SIZE - 1);
+    float2 blueNoise = float2(tex.Load(int3(coord0, 0)).r, tex.Load(int3(coord1, 0)).r);
+
+    // Animate over frames with a Cranley-Patterson rotation by the R2 low-discrepancy
+    // sequence (Roberts' generalized golden ratio). The irrational increments never
+    // repeat, so the cumulative temporal average keeps converging toward zero noise
+    // instead of plateauing - and each frame stays a well-distributed sample.
+    float2 r2 = frac(float(frame) * float2(0.7548776662, 0.5698402909));
+    return frac(blueNoise + r2);
 }
 
 float2 GetNoise2(uint3 id, uint frame, uint salt) {

@@ -34,6 +34,12 @@ namespace Lotec.Lighting {
         [Tooltip("Number of GI update frames before the solver stops. Also controls the temporal blend weight (1 / maxSamples).")]
         [SerializeField] int _maxSamples = 90;
         [SerializeField] int _raysPerFrame = 1;
+        [Tooltip("Luminance ceiling for a single GI bounce sample, to suppress fireflies from " +
+                 "bright/localized emitters (the only light the GI gathers stochastically). Hue is " +
+                 "preserved. Raise to keep bright emitter bounce, lower to suppress more noise. " +
+                 "0 disables clamping.")]
+        [Min(0f)]
+        [SerializeField] float _giFireflyClamp = 8f;
         [SerializeField] Texture2D _blueNoiseTexture;
 
         [Header("Lighting")]
@@ -92,6 +98,10 @@ namespace Lotec.Lighting {
         bool _luminanceReadbackPending;
         float _autoExposureEV;
         bool _isEvenFrame = true;
+        // Number of EMA time constants to keep solving after a light change. ~4 reaches >98% of
+        // the new lighting (1 - e^-4), so the transition visually completes before the solver idles.
+        const int SettleTimeConstants = 4;
+        int _transitionFramesRemaining;
         int _radianceKernel;
         int _irradiancePathTracingKernel;
         int _irradianceLpvKernel;
@@ -118,6 +128,7 @@ namespace Lotec.Lighting {
         static readonly int s_sdfLowres = Shader.PropertyToID("_SdfLowres");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_temporalBlendWeight = Shader.PropertyToID("_TemporalBlendWeight");
+        static readonly int s_giFireflyClamp = Shader.PropertyToID("_GiFireflyClamp");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
         static readonly int s_skyColor = Shader.PropertyToID("_SkyColor");
@@ -132,6 +143,7 @@ namespace Lotec.Lighting {
         static readonly int s_raymarchSoftness = Shader.PropertyToID("_RaymarchSoftness");
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
+        static readonly int s_giConfidence = Shader.PropertyToID("_GiConfidence");
         static readonly int s_exposure = Shader.PropertyToID("_Exposure");
         static readonly int s_volumeBoundsMin = Shader.PropertyToID("_VoxelVolumeBoundsMin");
         static readonly int s_volumeBoundsSize = Shader.PropertyToID("_VoxelVolumeBoundsSize");
@@ -152,6 +164,7 @@ namespace Lotec.Lighting {
         void OnValidate() {
             _maxSamples = Mathf.Max(1, _maxSamples);
             _raysPerFrame = Mathf.Max(1, _raysPerFrame);
+            _giFireflyClamp = Mathf.Max(0f, _giFireflyClamp);
             _lpvDecay = Mathf.Clamp01(_lpvDecay);
         }
 
@@ -209,6 +222,7 @@ namespace Lotec.Lighting {
 
         public void ResetLightingHistory() {
             _irradianceFieldSampleCount = 0;
+            _transitionFramesRemaining = 0;
             _prevLightSettings = default;
             _isEvenFrame = true;
 
@@ -266,19 +280,33 @@ namespace Lotec.Lighting {
 
             _hasLoggedMissingReferences = false;
 
+            // Don't reset accumulation when the light changes - that snaps the blend weight back
+            // to 1 and pops the GI. Instead just keep the solver running. Because the temporal
+            // blend weight is floored at 1/maxSamples, the accumulator behaves as a slow EMA once
+            // converged: the new lighting is barely applied the first frame (weight 1/maxSamples)
+            // and reaches full strength once it re-stabilizes ~maxSamples frames later. A light
+            // change refreshes the run window so the solver stays awake long enough to settle.
             if (HasLightChanged()) {
-                _irradianceFieldSampleCount = 0;
+                // The blend weight floors at 1/maxSamples, so the EMA time constant is maxSamples
+                // frames (~63% settled). Keep the solver awake for a few time constants so a single
+                // discrete change still reaches full strength before the solver idles again.
+                // Continuous changes (e.g. dragging a light) refresh this every frame anyway.
+                _transitionFramesRemaining = _maxSamples * SettleTimeConstants;
             }
-            bool isStable = _irradianceFieldSampleCount >= _maxSamples;
+            bool isConverging = _irradianceFieldSampleCount < _maxSamples;
+            bool isTransitioning = _transitionFramesRemaining > 0;
 
             EnsureInitialized();
-            if (!isStable || _continuousGi) {
+            if (isConverging || isTransitioning || _continuousGi) {
                 // Reuse the light data the manager already collected this frame (for fragment
                 // direct lighting) and push it to the GI compute - no second collect.
                 Manager?.LocalLights?.ApplyToCompute(_giComputeShader);
                 SetDirectionalLightUniforms();
                 DispatchGIUpdate();
                 _irradianceFieldSampleCount++;
+                if (_transitionFramesRemaining > 0) {
+                    _transitionFramesRemaining--;
+                }
                 _isEvenFrame = !_isEvenFrame;
             }
 
@@ -583,11 +611,15 @@ namespace Lotec.Lighting {
             _giComputeShader.SetInt(s_frameCount, Time.frameCount);
             _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
             _giComputeShader.SetInt(s_raysPerFrame, _raysPerFrame);
-            // When is the stale history gone?
-            // EMA with weight α reaches (1 - (1-α)^N) convergence after N frames.
-            // α = 1/N -> 63%. α = 3/N -> ~95%. α = 4.6/N -> ~99% convergence in N = _maxSamples frames.
-            // Suggested value: 90fps, maxSamples=270 for 3 second ~95% convergence.
-            _giComputeShader.SetFloat(s_temporalBlendWeight, 4.6f / Mathf.Max(_maxSamples, 1));
+            _giComputeShader.SetFloat(s_giFireflyClamp, _giFireflyClamp);
+            // Temporal accumulation weight.
+            // A progressive (cumulative) average, weight = 1/n, whose variance is σ²/n -> 0.
+            // That is what actually integrates the per-frame ray noise away.
+            // Floor the weight at 1/maxSamples so _continuousGi keeps adapting to moving
+            // lights once the converging phase is over (n >= maxSamples).
+            float minBlendWeight = 1f / Mathf.Max(_maxSamples, 1);
+            float blendWeight = Mathf.Max(1f / (_irradianceFieldSampleCount + 1f), minBlendWeight);
+            _giComputeShader.SetFloat(s_temporalBlendWeight, blendWeight);
             _giComputeShader.SetInt(s_injectLpvSky, _lightingMethod == LightingMethod.LPV ? 1 : 0);
             _giComputeShader.SetFloat(s_lpvDecay, _lpvDecay);
             _giComputeShader.SetInt(s_raymarchMaxSteps, _raymarchMaxSteps);
@@ -766,6 +798,12 @@ namespace Lotec.Lighting {
             // change the surface read offset in SampleVoxelGI.
             float voxelSize = GetGiGridVoxelSize();
             Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector3.one);
+
+            // Fade applied indirect light in with accumulation progress so the noisy single-ray
+            // warm-up frames (right after the GI is turned on / reset) stay hidden. Stays at 1
+            // for light changes, which never reset the sample count - only a cold start ramps.
+            float giConfidence = Mathf.Clamp01(_irradianceFieldSampleCount / (float)Mathf.Max(_maxSamples, 1));
+            Shader.SetGlobalFloat(s_giConfidence, giConfidence);
 
             // The volume bounds the GI fragment read needs (Volume.hlsl WorldToVoxelUV) are the
             // shared _VoxelVolumeBounds* globals, published by LightingManager for the active

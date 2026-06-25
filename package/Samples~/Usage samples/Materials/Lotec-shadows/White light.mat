@@ -58,6 +58,6 @@ Material:
     - _Roughness: 1
     m_Colors:
     - _BaseColor: {r: 0.8616352, g: 0.8616352, b: 0.8616352, a: 1}
-    - _EmissionColor: {r: 4.237095, g: 4.237095, b: 4.237095, a: 1}
+    - _EmissionColor: {r: 1.4980392, g: 1.4980392, b: 1.4980392, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

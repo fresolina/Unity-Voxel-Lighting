@@ -1916,9 +1916,9 @@ Transform:
   m_GameObject: {fileID: 659102737}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0.418, y: 2.765, z: -2.552}
-  m_LocalScale: {x: 0.05, y: 0.05, z: 0.05}
-  m_ConstrainProportionsScale: 1
+  m_LocalPosition: {x: 0.563, y: 2.765, z: -2.453}
+  m_LocalScale: {x: 0.5, y: 0.5, z: 0.5}
+  m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 772833387}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
@@ -2176,7 +2176,7 @@ Transform:
   m_GameObject: {fileID: 772833386}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -13.23, y: 0, z: 0}
+  m_LocalPosition: {x: -9.72, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -2209,7 +2209,7 @@ MonoBehaviour:
   sdfLowresTexture: {fileID: 11700000, guid: 66de412f06a354148a79f985619d526f, type: 2}
   _trimmedMaxResolution: {x: 79, y: 76, z: 128}
   _bounds:
-    m_Center: {x: -11.24, y: 1.7320002, z: -0.26000023}
+    m_Center: {x: -7.730001, y: 1.7320002, z: -0.26000023}
     m_Extent: {x: 3.1854837, y: 3.064516, z: 5.16129}
 --- !u!114 &772833389
 MonoBehaviour:
@@ -2231,7 +2231,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 772833386}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 82756e4c53a5250448bd5340c704fdc8, type: 3}
   m_Name: 
@@ -2247,7 +2247,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 772833386}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: ab66d466b2e7aec43941ef7eeaa2cc0f, type: 3}
   m_Name: 
@@ -3090,7 +3090,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1127919668}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 82756e4c53a5250448bd5340c704fdc8, type: 3}
   m_Name: 
@@ -3106,7 +3106,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1127919668}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: ab66d466b2e7aec43941ef7eeaa2cc0f, type: 3}
   m_Name: 
@@ -4045,14 +4045,15 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.GiFieldUpdater
   _giComputeShader: {fileID: 7200000, guid: 02f9a08ea0218754cac3ba8d03fd4a99, type: 3}
   _continuousGi: 0
-  _maxSamples: 420
+  _maxSamples: 450
   _raysPerFrame: 1
+  _giFireflyClamp: 8
   _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
   _tonemapInShader: 1
   _exposure: 0
   _autoExposure: 1
   _autoExposureMin: -2
-  _autoExposureMax: 4
+  _autoExposureMax: 2
   _adaptationSpeed: 2
   _autoExposureRadius: 3
   _lightingMethod: 0
@@ -4437,8 +4438,8 @@ Transform:
   m_GameObject: {fileID: 1588789276}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 3.459, y: 2.765, z: -2.552}
-  m_LocalScale: {x: 0.05, y: 0.05, z: 0.05}
+  m_LocalPosition: {x: 3.448, y: 2.701, z: -2.497}
+  m_LocalScale: {x: 0.5, y: 0.5, z: 0.5}
   m_ConstrainProportionsScale: 1
   m_Children: []
   m_Father: {fileID: 772833387}
@@ -4489,7 +4490,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 2100000, guid: 6ef5337297338bc419b09c664c2bc3bb, type: 2}
+  - {fileID: 2100000, guid: d04fa02cb787ff24db6057868dcf6b45, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
