@@ -23,22 +23,18 @@ namespace Lotec.Lighting {
     public class LightingManager : MonoBehaviour {
         public static LightingManager Instance { get; private set; }
 
-        static readonly int s_sdfTex = Shader.PropertyToID("_SdfTex");
-        static readonly int s_sdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
-        static readonly int s_sdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
-
         /// <summary>Runtime shadow-source selector (for UI). Derived from, and applied to, the
         /// binder components on the active volume - it is not serialized; the binders are the
         /// source of truth. Selecting a source whose binder is absent falls back to SDF.</summary>
         public enum ShadowSource { SDF, BitmaskPoint, Bitmask8Tap, OcclusionField }
 
         [Header("Source")]
-        [SerializeField] LightingVolume _volume;
+        [SerializeField] VoxelVolume _volume;
         [Tooltip("Automatically activate the volume closest to the main camera.")]
         [SerializeField] bool _autoSwitchToClosestVolume;
 
-        readonly List<LightingVolume> _registeredVolumes = new List<LightingVolume>();
-        LightingVolume _activeVolume;
+        readonly List<VoxelVolume> _registeredVolumes = new List<VoxelVolume>();
+        VoxelVolume _activeVolume;
         readonly LocalLightData _localLights = new LocalLightData();
 
         [Header("Additional Lights")]
@@ -66,9 +62,9 @@ namespace Lotec.Lighting {
             set => SetShadowMode(value);
         }
         /// <summary>The currently active volume. Returns the runtime override if set, otherwise the serialized default.</summary>
-        public LightingVolume Volume => _activeVolume != null ? _activeVolume : _volume;
+        public VoxelVolume Volume => _activeVolume != null ? _activeVolume : _volume;
         /// <summary>All registered volumes in the scene.</summary>
-        public IReadOnlyList<LightingVolume> Volumes => _registeredVolumes;
+        public IReadOnlyList<VoxelVolume> Volumes => _registeredVolumes;
         public IReadOnlyList<Light> AdditionalLights => _additionalLights;
         /// <summary>The shared packed light data, collected once per frame for both fragment
         /// direct lighting (globals) and the GI compute solve.</summary>
@@ -78,18 +74,18 @@ namespace Lotec.Lighting {
         /// Switch the active lighting volume at runtime. Pass null to revert to the serialized
         /// default. Each volume's own GI/binder components react to the active-volume change.
         /// </summary>
-        public void SetActiveVolume(LightingVolume volume) {
+        public void SetActiveVolume(VoxelVolume volume) {
             if (_activeVolume == volume) return;
             _activeVolume = volume;
             ApplyShaderGlobals();
         }
 
-        internal void RegisterVolume(LightingVolume volume) {
+        internal void RegisterVolume(VoxelVolume volume) {
             if (volume != null && !_registeredVolumes.Contains(volume))
                 _registeredVolumes.Add(volume);
         }
 
-        internal void UnregisterVolume(LightingVolume volume) {
+        internal void UnregisterVolume(VoxelVolume volume) {
             _registeredVolumes.Remove(volume);
             if (_activeVolume == volume)
                 _activeVolume = null;
@@ -106,7 +102,9 @@ namespace Lotec.Lighting {
         private void ApplyShaderGlobals() {
             ApplyShadowModeKeywords();
             if (Volume != null) {
-                PublishVolumeCore(Volume);
+                // The active volume owns and publishes its core globals (bounds, voxel grid,
+                // SDF texture); the manager just drives it for the active volume.
+                Volume.ApplyShaderGlobals();
                 _sdfShadow.ApplyShaderGlobals(Volume.VoxelSize);
             }
             _sdfAo.ApplyShaderGlobals();
@@ -116,16 +114,6 @@ namespace Lotec.Lighting {
             // GI updater reuses this same packed data for the compute solve (via LocalLights).
             _localLights.Collect(_additionalLights);
             _localLights.ApplyGlobals();
-        }
-
-        // Publish the volume's core shader globals: the SDF texture (when baked) and the
-        // bounds. Bounds are published unconditionally because the occlusion-field/bitmask
-        // paths map world->uvw with them even when no SDF is bound at runtime.
-        void PublishVolumeCore(LightingVolume volume) {
-            Shader.SetGlobalVector(s_sdfBoundsMin, volume.Bounds.min);
-            Shader.SetGlobalVector(s_sdfBoundsSize, volume.Bounds.size);
-            if (volume.sdfHiresTexture != null)
-                Shader.SetGlobalTexture(s_sdfTex, volume.sdfHiresTexture);
         }
 
         // Update is called once per frame
@@ -143,11 +131,11 @@ namespace Lotec.Lighting {
             if (cam == null || _registeredVolumes.Count == 0) return;
 
             Vector3 camPos = cam.transform.position;
-            LightingVolume closest = null;
+            VoxelVolume closest = null;
             float closestDist = float.MaxValue;
 
             for (int i = 0; i < _registeredVolumes.Count; i++) {
-                LightingVolume vol = _registeredVolumes[i];
+                VoxelVolume vol = _registeredVolumes[i];
                 if (vol == null || vol.sdfHiresTexture == null) continue;
 
                 float dist = vol.Bounds.SqrDistance(camPos);
@@ -181,7 +169,7 @@ namespace Lotec.Lighting {
         // Switch the shadow source at runtime by toggling the binder components on the active
         // volume. A source whose binder is absent (or has no baked data) falls back to SDF.
         void SetShadowMode(ShadowSource source) {
-            LightingVolume volume = Volume;
+            VoxelVolume volume = Volume;
             if (volume == null) return;
 
             bool wantOcc = source == ShadowSource.OcclusionField;

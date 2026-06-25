@@ -1,12 +1,23 @@
-#ifndef LOTEC_VOXEL_OCCLUSION_DIRECTION_INCLUDED
-#define LOTEC_VOXEL_OCCLUSION_DIRECTION_INCLUDED
+#ifndef LOTEC_VOXEL_OCCLUSION_INCLUDED
+#define LOTEC_VOXEL_OCCLUSION_INCLUDED
 
-// Directional occlusion bitmask shadows.
-//
-// Expects the includer to provide:
-//   float3 _SdfBoundsMin;
-//   float3 _InverseVoxelSize;
-//   float3 _VoxelResolution;
+// Directional occlusion shadows in two encodings, selected by keyword:
+//   BITMASK_POINT / BITMASK_8TAP -> per-voxel directional bitmask
+//   OCC_FIELD                    -> per-direction occlusion field
+// Both are baked alternatives to the runtime SDF shadow march.
+
+#include "Volume.hlsl"   // _VoxelVolumeBounds*, WorldToVoxelUV
+#include "Math.hlsl"     // GetBit64
+
+// Occlusion-grid uniforms, published by the active occlusion binder.
+float3 _VoxelSize;        // world-space size of one voxel
+float3 _VoxelSizeInverse; // 1 / _VoxelSize, kept so world->voxel-index stays a multiply
+
+// -----------------------------------------------------------------------------
+// BITMASK (directional occlusion bits per voxel)
+// -----------------------------------------------------------------------------
+
+float3 _VoxelResolution; // bitmask grid resolution (as a float vector)
 
 // Bitmask texture. Format depends on direction count:
 //   8 dirs  -> R8_UNorm      (8 bits in R channel)
@@ -71,10 +82,9 @@ inline float GetShadowBitTrilinear8Tap(float3 localPos, uint chosenIndex) {
     return saturate(1.0 - lerp(oXY0, oXY1, f.z));
 }
 
-// Shadow query using the precomputed sun Fibonacci index.
-// Returns 0.0 (shadow) to 1.0 (lit).
+// Shadow query using the precomputed sun Fibonacci index. Returns 0.0 (shadow) to 1.0 (lit).
 float GetBitmaskShadow(float3 worldPos) {
-    float3 localPos = (worldPos - _SdfBoundsMin) * _InverseVoxelSize;
+    float3 localPos = (worldPos - _VoxelVolumeBoundsMin) * _VoxelSizeInverse;
     uint chosenIndex = (uint)_BitmaskSunFibIndex;
 
     #if defined(BITMASK_POINT)
@@ -88,9 +98,37 @@ float GetBitmaskShadow(float3 worldPos) {
 
 // Variant with normal-based offset to reduce self-occlusion.
 float GetBitmaskShadow(float3 worldPos, float3 normal) {
-    float3 voxelSize = rcp(max(_InverseVoxelSize, 1e-6));
-    float3 offsetPos = worldPos + normal * voxelSize * 1.2;
+    float3 offsetPos = worldPos + normal * _VoxelSize * 1.2;
     return GetBitmaskShadow(offsetPos);
 }
 
-#endif
+// -----------------------------------------------------------------------------
+// OCCLUSION FIELD (per-direction lit value, hardware trilinear)
+// -----------------------------------------------------------------------------
+
+// Sun direction query results (set from C# each frame).
+float3 _OccFieldSunDir;
+int _OccFieldSunChannel;
+
+// Active occlusion field texture (bound per-frame to the texture matching the sun direction).
+TEXTURE3D(_OccFieldTex);
+SAMPLER(sampler_OccFieldTex);
+
+// Sample the occlusion field shadow using the precomputed sun direction.
+// Returns 0.0 (shadow) to 1.0 (lit).
+float GetOccFieldShadow(float3 worldPos) {
+    float3 uvw = WorldToVoxelUV(worldPos);
+    float4 raw = _OccFieldTex.SampleLevel(sampler_OccFieldTex, uvw, 0);
+    if (_OccFieldSunChannel == 0) return raw.r;
+    if (_OccFieldSunChannel == 1) return raw.g;
+    if (_OccFieldSunChannel == 2) return raw.b;
+    return raw.a;
+}
+
+// Variant with normal-based offset to reduce self-occlusion.
+float GetOccFieldShadow(float3 worldPos, float3 normal) {
+    float3 offsetPos = worldPos + normal * _VoxelSize * 1.2;
+    return GetOccFieldShadow(offsetPos);
+}
+
+#endif // LOTEC_VOXEL_OCCLUSION_INCLUDED

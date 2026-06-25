@@ -2,43 +2,66 @@ using UnityEngine;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Pure data container for a baked lighting volume: bake input, computed bounds/
-    /// resolution, and the baked SDF/material textures. Does not publish shader globals -
-    /// the LightingManager publishes the SDF core, GiFieldUpdater the GI volume globals,
-    /// and the per-feature binders (VoxelOcclusionField / VoxelOcclusionBitmask) the rest.
+    /// Baked lighting volume: bake input, computed bounds/resolution, and the baked SDF
+    /// textures. Owns the volume-derived shader globals (bounds, voxel grid, SDF texture) and
+    /// how to publish them via <see cref="ApplyShaderGlobals"/> - but LightingManager decides
+    /// *when* and for *which* volume to call it, so the singular globals reflect the active
+    /// volume only. GiFieldUpdater publishes the GI-grid globals separately.
     /// </summary>
-    public class LightingVolume : MonoBehaviour {
+    public class VoxelVolume : MonoBehaviour {
+        static readonly int s_sdfHires = Shader.PropertyToID("_SdfHires");
+        static readonly int s_boundsMin = Shader.PropertyToID("_VoxelVolumeBoundsMin");
+        static readonly int s_boundsSize = Shader.PropertyToID("_VoxelVolumeBoundsSize");
+
         [Header("Bake Input")]
         [SerializeField] Transform _root;
-
-        [Tooltip("Extra padding added to computed bounds (world units).")]
-        [Min(0f)]
-        [SerializeField] float _paddingWorld = 0.25f;
 
         [Tooltip("Maximum voxel resolution along the largest axis.")]
         [Min(4)]
         [SerializeField] int _maxResolution = 128;
 
-        [Tooltip("Computed max voxel resolution")]
-        public Vector3Int TrimmedMaxResolution;
-
-        [Tooltip("Computed bounds used for baking.")]
-        public Bounds Bounds = new Bounds(Vector3.zero, Vector3.one);
-
         [Header("Baked static fields")]
         public Texture3D sdfHiresTexture;
         public Texture3D sdfLowresTexture;
 
+        [HideInInspector]
+        [SerializeField] Vector3Int _trimmedMaxResolution;
+        [HideInInspector]
+        [SerializeField] Bounds _bounds = new Bounds(Vector3.zero, Vector3.one);
         Vector3 _voxelSize;
+
+        // Fixed border around the geometry, so the SDF have valid distances at the boundary.
+        // 2.0 (not 1.5): at concave corners a thinner border let GI rays leak exterior light.
+        // NOTE: This can be reduced when GI light is tracked in all 6 axes.
+        const float PaddingVoxels = 2f;
 
         /// <summary>Cubic voxel edge length in world units, derived from Bounds and TrimmedMaxResolution.</summary>
         public float VoxelSize => Bounds.size.x / Mathf.Max(1, TrimmedMaxResolution.x);
 
+        /// <summary>Per-axis inverse voxel size (TrimmedMaxResolution / Bounds.size) at the volume grid.</summary>
+        public Vector3 VoxelSizeInverse => new Vector3(
+            TrimmedMaxResolution.x / Mathf.Max(1e-9f, Bounds.size.x),
+            TrimmedMaxResolution.y / Mathf.Max(1e-9f, Bounds.size.y),
+            TrimmedMaxResolution.z / Mathf.Max(1e-9f, Bounds.size.z));
+
         public Transform BakeRoot { get => _root; set => _root = value; }
+        public Vector3Int TrimmedMaxResolution => _trimmedMaxResolution;
+        public Bounds Bounds => _bounds;
+
+        /// <summary>Publish the universal volume-derived globals: world-space bounds and the
+        /// hi-res SDF texture (needed by shadows + GI regardless of occlusion). Call from
+        /// LightingManager for the active volume - these are singular globals, so a non-active
+        /// volume must not publish them. Occlusion-grid globals are published by the occlusion
+        /// binders (they read this volume's VoxelSizeInverse / TrimmedMaxResolution).</summary>
+        public void ApplyShaderGlobals() {
+            Shader.SetGlobalVector(s_boundsMin, Bounds.min);
+            Shader.SetGlobalVector(s_boundsSize, Bounds.size);
+            if (sdfHiresTexture != null)
+                Shader.SetGlobalTexture(s_sdfHires, sdfHiresTexture);
+        }
 
         void OnValidate() {
             _maxResolution = Mathf.Max(4, _maxResolution);
-            _paddingWorld = Mathf.Max(0f, _paddingWorld);
             if (BakeRoot == null) {
                 BakeRoot = transform;
             }
@@ -68,7 +91,9 @@ namespace Lotec.Lighting {
         /// Expands Bounds to encapsulate all meshes under _root
         /// </summary>
         void ComputeBounds() {
-            Bounds = new Bounds();
+            // Mutate the backing field directly. Encapsulate/Expand on the Bounds property
+            // would mutate the getter's struct copy and be lost.
+            _bounds = new Bounds();
             MeshRenderer[] meshRenderers = _root.GetComponentsInChildren<MeshRenderer>();
             foreach (MeshRenderer mr in meshRenderers) {
                 if (mr == null)
@@ -79,15 +104,11 @@ namespace Lotec.Lighting {
                 if (mf == null || mf.sharedMesh == null)
                     continue;
 
-                if (Bounds.size == Vector3.zero) {
-                    Bounds = mr.bounds;
+                if (_bounds.size == Vector3.zero) {
+                    _bounds = mr.bounds;
                 } else {
-                    Bounds.Encapsulate(mr.bounds);
+                    _bounds.Encapsulate(mr.bounds);
                 }
-            }
-
-            if (_paddingWorld > 0f) {
-                Bounds.Expand(_paddingWorld * 2f);
             }
         }
 
@@ -103,18 +124,22 @@ namespace Lotec.Lighting {
         void ComputeMaxResolutionForBounds() {
             _maxResolution = Mathf.Max(4, _maxResolution);
 
-            Vector3 size = Bounds.size;
+            Vector3 size = _bounds.size;
             float maxAxis = Mathf.Max(size.x, Mathf.Max(size.y, size.z));
             maxAxis = Mathf.Max(0.0001f, maxAxis);
 
-            float voxelSize = maxAxis / _maxResolution;
+            // Increase bounds with padding.
+            float resolutionBudget = Mathf.Max(1f, _maxResolution - 2f * PaddingVoxels);
+            float voxelSize = maxAxis / resolutionBudget;
             voxelSize = Mathf.Max(0.0001f, voxelSize);
+            _bounds.Expand(2f * PaddingVoxels * voxelSize);
+            size = _bounds.size;
 
             int rx = Mathf.Clamp(Mathf.CeilToInt(size.x / voxelSize), 4, _maxResolution);
             int ry = Mathf.Clamp(Mathf.CeilToInt(size.y / voxelSize), 4, _maxResolution);
             int rz = Mathf.Clamp(Mathf.CeilToInt(size.z / voxelSize), 4, _maxResolution);
 
-            TrimmedMaxResolution = new Vector3Int(rx, ry, rz);
+            _trimmedMaxResolution = new Vector3Int(rx, ry, rz);
 
             // Enforce cubic voxels by expanding the bounds to an integer number of
             // cells of the chosen voxel size on every axis. Without this adjustment,
@@ -122,7 +147,7 @@ namespace Lotec.Lighting {
             // the runtime GI shaders would silently stop agreeing on shell widths,
             // offsets, and distance thresholds.
             Vector3 alignedSize = new Vector3(rx * voxelSize, ry * voxelSize, rz * voxelSize);
-            Bounds = new Bounds(Bounds.center, alignedSize);
+            _bounds = new Bounds(_bounds.center, alignedSize);
             _voxelSize = Vector3.one * voxelSize;
         }
     }

@@ -38,17 +38,11 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
-            // Shadow providers, selected at runtime by keyword (published by the matching
-            // binder on the volume): default = SDF, BITMASK_POINT / BITMASK_8TAP = directional
-            // bitmask, OCC_FIELD = occlusion field (no SDF texture needed at runtime).
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelSdfShadows.hlsl"
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelSdfAo.hlsl"
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionDirection.hlsl"
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelOcclusionField.hlsl"
-            // Runtime GI (irradiance field).
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelGi.hlsl"
-            // Direct lighting (sun + local lights) + keyword-gated shadow dispatch.
+            // Surface lighting: direct + selectable shadow source + SDF AO (pulls its own
+            // shadow/AO/volume headers). Runtime GI (irradiance field) pulls the volume header.
+            // Each is self-contained, so these two are all the lit pass needs.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelDirectLighting.hlsl"
+            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelGi.hlsl"
 
             // Shadow source (default = SDF): directional bitmask (point / 8-tap) or occlusion field.
             #pragma multi_compile __ BITMASK_POINT BITMASK_8TAP OCC_FIELD

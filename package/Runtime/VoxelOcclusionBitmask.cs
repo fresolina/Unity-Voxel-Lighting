@@ -3,15 +3,16 @@ using UnityEngine;
 namespace Lotec.Lighting {
     /// <summary>
     /// Runtime binder for bitmask occlusion shadows. Reads the baked directional bitmask off
-    /// the <see cref="LightingVolume"/> on the same GameObject and publishes the globals the
-    /// shader needs (the bitmask, the volume bounds, and the sun's nearest baked direction).
+    /// the <see cref="VoxelVolume"/> on the same GameObject and publishes the globals the
+    /// shader needs (the bitmask and the sun's nearest baked direction). The shared volume
+    /// bounds it samples against are published by <see cref="LightingManager"/>.
     ///
     /// Added automatically by <see cref="VoxelOcclusionBitmaskBaker"/> when it bakes. Its
     /// presence (and the <see cref="Sampling"/> mode) tells <see cref="LightingManager"/> to
     /// select the BITMASK_POINT / BITMASK_8TAP path.
     /// </summary>
     [ExecuteInEditMode]
-    [RequireComponent(typeof(LightingVolume))]
+    [RequireComponent(typeof(VoxelVolume))]
     [AddComponentMenu("Lotec/Voxel Lighting/Binders/Voxel Occlusion Bitmask")]
     public class VoxelOcclusionBitmask : MonoBehaviour {
         public enum Sampling {
@@ -28,16 +29,15 @@ namespace Lotec.Lighting {
 
         static readonly int s_bitmaskTex = Shader.PropertyToID("_BitmaskTex");
         static readonly int s_voxelResolution = Shader.PropertyToID("_VoxelResolution");
-        static readonly int s_sdfBoundsMin = Shader.PropertyToID("_SdfBoundsMin");
-        static readonly int s_sdfBoundsSize = Shader.PropertyToID("_SdfBoundsSize");
-        static readonly int s_inverseVoxelSize = Shader.PropertyToID("_InverseVoxelSize");
+        static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
+        static readonly int s_voxelSizeInverse = Shader.PropertyToID("_VoxelSizeInverse");
         static readonly int s_bitmaskSunFibIndex = Shader.PropertyToID("_BitmaskSunFibIndex");
         static readonly int s_bitmaskDirCount = Shader.PropertyToID("_BitmaskDirCount");
 
-        LightingVolume _volume;
-        LightingVolume Volume {
+        VoxelVolume _volume;
+        VoxelVolume Volume {
             get {
-                if (_volume == null) _volume = GetComponent<LightingVolume>();
+                if (_volume == null) _volume = GetComponent<VoxelVolume>();
                 return _volume;
             }
         }
@@ -54,26 +54,17 @@ namespace Lotec.Lighting {
             if (HasData) Bind();
         }
 
-        /// <summary>Publish the bitmask globals plus the bounds the sampling needs.</summary>
+        /// <summary>Publish the bitmask globals + the occlusion-grid uniforms (resolution +
+        /// inverse voxel size). The volume bounds it samples against are published by the
+        /// active VoxelVolume.</summary>
         public void Bind() {
-            LightingVolume v = Volume;
+            VoxelVolume v = Volume;
             if (v == null) return;
-
-            Bounds bounds = v.Bounds;
-            Shader.SetGlobalVector(s_sdfBoundsMin, bounds.min);
-            Shader.SetGlobalVector(s_sdfBoundsSize, bounds.size);
 
             Vector3Int res = v.TrimmedMaxResolution;
             Shader.SetGlobalVector(s_voxelResolution, new Vector3(res.x, res.y, res.z));
-
-            Vector3 voxelSize = new Vector3(
-                bounds.size.x / Mathf.Max(1, res.x),
-                bounds.size.y / Mathf.Max(1, res.y),
-                bounds.size.z / Mathf.Max(1, res.z));
-            Shader.SetGlobalVector(s_inverseVoxelSize, new Vector3(
-                1f / Mathf.Max(1e-9f, voxelSize.x),
-                1f / Mathf.Max(1e-9f, voxelSize.y),
-                1f / Mathf.Max(1e-9f, voxelSize.z)));
+            Shader.SetGlobalVector(s_voxelSize, Vector3.one * v.VoxelSize);
+            Shader.SetGlobalVector(s_voxelSizeInverse, v.VoxelSizeInverse);
 
             Shader.SetGlobalTexture(s_bitmaskTex, occlusionBitmaskTexture);
 

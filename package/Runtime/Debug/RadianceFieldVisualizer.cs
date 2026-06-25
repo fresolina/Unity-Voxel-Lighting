@@ -10,7 +10,7 @@ namespace Lotec.Lighting {
 
         int _lastStatusFrame;
         protected override string ConversionShaderName => "Hidden/Unpack3D";
-        LightingVolume Volume => LightingManager.Instance != null ? LightingManager.Instance.Volume : null;
+        VoxelVolume Volume => LightingManager.Instance != null ? LightingManager.Instance.Volume : null;
 
         protected override Texture GetTexture() {
             if (source == null) {

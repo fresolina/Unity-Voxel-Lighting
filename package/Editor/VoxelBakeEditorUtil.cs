@@ -15,7 +15,7 @@ namespace Lotec.Lighting.Editor {
         /// folder, replacing existing assets in place. Safe to call after a single-baker
         /// bake (untouched textures are simply re-saved idempotently).
         /// </summary>
-        public static void SaveBakedAssets(LightingVolume volume, Object context) {
+        public static void SaveBakedAssets(VoxelVolume volume, Object context) {
             if (volume == null)
                 return;
 
@@ -63,7 +63,7 @@ namespace Lotec.Lighting.Editor {
             Debug.Log($"Voxel lighting bake assets saved for '{volume.gameObject.name}'.", context);
         }
 
-        static string GetBakeFolder(LightingVolume volume) {
+        static string GetBakeFolder(VoxelVolume volume) {
             if (volume == null) {
                 Debug.LogError("Target volume is null.");
                 return null;

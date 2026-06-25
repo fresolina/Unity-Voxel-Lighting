@@ -1,35 +1,24 @@
 #ifndef LOTEC_VOLUME_INCLUDED
 #define LOTEC_VOLUME_INCLUDED
 
-float3 _VolumePosition;
-float3 _VolumeSize;
-float3 _VoxelSize;
-Texture3D<float> _DistanceField;
-SamplerState linearClampSampler;
-SamplerState pointClampSampler;
+// Universal volume space: the active volume's world-space AABB and the world->[0,1] UVW
+// mapping that every feature (shadows, occlusion, GI) and both stages (fragment + compute)
+// share. Published by the active VoxelVolume. No textures or stage-specific uniforms here -
+// those live in the per-feature headers (e.g. VoxelGiField.hlsl for the GI distance field).
+float3 _VoxelVolumeBoundsMin;
+float3 _VoxelVolumeBoundsSize;
 
-// Normalise to local [0,1] for texture sampling. Assumes the volume is axis-aligned and starts at _VolumePosition.
-// TODO: Maybe support non-axis-aligned to world volumes with _VolumeRotation or _VolumeMatrix?
+// Normalise to local [0,1] for texture sampling. Assumes the volume is axis-aligned.
+// TODO: Maybe support non-axis-aligned volumes with _VolumeRotation or _VolumeMatrix?
 float3 WorldToVoxelUV(float3 worldPos)
 {
-    return (worldPos - _VolumePosition) / _VolumeSize;
+    return (worldPos - _VoxelVolumeBoundsMin) / max(_VoxelVolumeBoundsSize, 1e-6);
 }
 
-// Helpers for raymarching the SDF field.
-float SampleSDF(float3 pos) {
-    float3 uvw = WorldToVoxelUV(pos);
-    return _DistanceField.SampleLevel(linearClampSampler, uvw, 0).r;
-}
-
-float3 GetNormalFromSDF(float3 pos) {
-    float2 k = float2(1, -1);
-    float3 h = _VoxelSize * 0.1;
-    return normalize(
-        k.xyy * SampleSDF(pos + k.xyy * h) +
-        k.yyx * SampleSDF(pos + k.yyx * h) +
-        k.yxy * SampleSDF(pos + k.yxy * h) +
-        k.xxx * SampleSDF(pos + k.xxx * h)
-    );
+// True when the UVW lies inside the volume's [0,1] box.
+bool InsideVolumeUVW(float3 uvw)
+{
+    return all(uvw >= 0.0) && all(uvw <= 1.0);
 }
 
 #endif // LOTEC_VOLUME_INCLUDED

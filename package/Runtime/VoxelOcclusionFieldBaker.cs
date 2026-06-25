@@ -16,7 +16,7 @@ namespace Lotec.Lighting {
         public override int BakeOrder => 10;
         public override string BakeLabel => "Occlusion Field";
 
-        public override bool Bake(LightingVolume volume, out string error) {
+        public override bool Bake(VoxelVolume volume, out string error) {
             if (!_baker.TryBake(volume, out Texture3D[] fieldTextures, out Vector3[] fieldDirections, out error))
                 return false;
 
@@ -47,7 +47,7 @@ namespace Lotec.Lighting {
                 return;
             }
             if (_lastHemisphereOnly != _baker.hemisphereOnly) {
-                LightingVolume volume = ResolveVolume();
+                VoxelVolume volume = ResolveVolume();
                 if (volume != null && volume.TryGetComponent(out VoxelOcclusionField binder)) {
                     bool hasBake = binder != null && binder.HasData;
                     if (hasBake) {

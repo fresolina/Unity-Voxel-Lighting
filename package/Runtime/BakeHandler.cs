@@ -10,11 +10,11 @@ namespace Lotec.Lighting {
     [AddComponentMenu("Lotec/Voxel Lighting/Bake Handler")]
     public class BakeHandler : MonoBehaviour {
         [Tooltip("Volume to bake into. If unset, falls back to the active LightingManager volume.")]
-        [SerializeField] LightingVolume _targetVolume;
+        [SerializeField] VoxelVolume _targetVolume;
 
-        public LightingVolume TargetVolume => _targetVolume;
+        public VoxelVolume TargetVolume => _targetVolume;
 
-        public LightingVolume ResolveVolume() {
+        public VoxelVolume ResolveVolume() {
             if (_targetVolume != null) return _targetVolume;
             LightingManager manager = LightingManager.Instance;
             return manager != null ? manager.Volume : null;
@@ -27,7 +27,7 @@ namespace Lotec.Lighting {
         /// ordered by <see cref="VoxelBakerBase.BakeOrder"/> so the SDF is built first.
         /// Returns false if any stage fails.
         /// </summary>
-        public bool Bake(LightingVolume volume) {
+        public bool Bake(VoxelVolume volume) {
             if (volume == null) {
                 Debug.LogError("BakeHandler: target volume is not assigned.", this);
                 return false;

@@ -1,7 +1,7 @@
-using UnityEngine;
-using UnityEngine.UIElements;
 using UnityEditor;
 using UnityEditor.UIElements;
+using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace Lotec.Lighting.Editor {
     /// <summary>Adds Bake / Bake All Volumes buttons that drive every enabled baker on the GameObject.</summary>
@@ -33,9 +33,9 @@ namespace Lotec.Lighting.Editor {
             var handler = target as BakeHandler;
             if (handler == null) return;
 
-            var volumes = Object.FindObjectsByType<LightingVolume>(FindObjectsSortMode.None);
+            var volumes = Object.FindObjectsByType<VoxelVolume>(FindObjectsSortMode.None);
             if (volumes.Length == 0) {
-                Debug.LogWarning("No LightingVolume components found in the scene.");
+                Debug.LogWarning("No VoxelVolume components found in the scene.");
                 return;
             }
 
@@ -45,7 +45,7 @@ namespace Lotec.Lighting.Editor {
             Debug.Log($"Finished baking {volumes.Length} volume(s).");
         }
 
-        static void BakeAndSave(BakeHandler handler, LightingVolume volume) {
+        static void BakeAndSave(BakeHandler handler, VoxelVolume volume) {
             if (volume == null) {
                 Debug.LogError("BakeHandler: target volume is null.", handler);
                 return;

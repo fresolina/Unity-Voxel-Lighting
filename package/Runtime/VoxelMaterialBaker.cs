@@ -17,7 +17,7 @@ namespace Lotec.Lighting {
         public override int BakeOrder => 10;
         public override string BakeLabel => "Material";
 
-        public override bool Bake(LightingVolume volume, out string error) {
+        public override bool Bake(VoxelVolume volume, out string error) {
             error = _baker.Bake(volume, out Texture3D bakedAlbedoIntensity, LowresDownscaleFactor);
             if (!string.IsNullOrEmpty(error))
                 return false;

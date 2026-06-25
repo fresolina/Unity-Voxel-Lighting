@@ -29,7 +29,7 @@ namespace Lotec.Lighting {
         static readonly int s_boundsSize = Shader.PropertyToID("_BoundsSize");
         static readonly int s_resolution = Shader.PropertyToID("_Resolution");
         static readonly int s_outBitmask = Shader.PropertyToID("_OutBitmask");
-        static readonly int s_sdfTex = Shader.PropertyToID("_SdfTex");
+        static readonly int s_sdfHires = Shader.PropertyToID("_SdfHires");
         static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
         static readonly int s_raymarchMinStep = Shader.PropertyToID("_RaymarchMinStep");
         static readonly int s_raymarchEpsilon = Shader.PropertyToID("_RaymarchEpsilon");
@@ -45,7 +45,7 @@ namespace Lotec.Lighting {
         }
 
         public bool TryBake(
-            LightingVolume sourceVolume,
+            VoxelVolume sourceVolume,
             out Texture3D result,
             out Vector3[] bakedDirections,
             out string error
@@ -93,7 +93,7 @@ namespace Lotec.Lighting {
             Vector3 voxelSize = new Vector3(bounds.size.x / resolution.x, bounds.size.y / resolution.y, bounds.size.z / resolution.z);
             float voxelDiag = voxelSize.magnitude;
 
-            bitmaskBakeCompute.SetTexture(kernelIdx, s_sdfTex, sourceVolume.sdfHiresTexture);
+            bitmaskBakeCompute.SetTexture(kernelIdx, s_sdfHires, sourceVolume.sdfHiresTexture);
             bitmaskBakeCompute.SetInt(s_raymarchMaxSteps, 256);
             bitmaskBakeCompute.SetFloat(s_raymarchMinStep, voxelDiag * 0.01f);
             bitmaskBakeCompute.SetFloat(s_raymarchEpsilon, voxelDiag * 0.02f);

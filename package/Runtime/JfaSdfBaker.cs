@@ -46,7 +46,7 @@ namespace Lotec.Lighting {
         int _resolveKernel = -1;
 
         public bool TryBake(
-            LightingVolume volume,
+            VoxelVolume volume,
             Vector3Int resolution,
             string textureName,
             out Texture3D bakedSdf,

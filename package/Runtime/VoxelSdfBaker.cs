@@ -30,7 +30,7 @@ namespace Lotec.Lighting {
         public override int BakeOrder => 0;
         public override string BakeLabel => "SDF";
 
-        public override bool Bake(LightingVolume volume, out string error) {
+        public override bool Bake(VoxelVolume volume, out string error) {
             error = null;
             if (volume == null) {
                 error = "Target volume is not assigned.";

@@ -115,8 +115,7 @@ namespace Lotec.Lighting {
         static readonly int s_clearVolumeTarget = Shader.PropertyToID("_ClearVolumeTarget");
         static readonly int s_radianceTextureSize = Shader.PropertyToID("_RadianceTextureSize");
         static readonly int s_materialAlbedoIntensity = Shader.PropertyToID("_MaterialAlbedoIntensity");
-        static readonly int s_distanceField = Shader.PropertyToID("_DistanceField");
-        static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
+        static readonly int s_sdfLowres = Shader.PropertyToID("_SdfLowres");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_temporalBlendWeight = Shader.PropertyToID("_TemporalBlendWeight");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
@@ -134,8 +133,8 @@ namespace Lotec.Lighting {
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
         static readonly int s_exposure = Shader.PropertyToID("_Exposure");
-        static readonly int s_volumePosition = Shader.PropertyToID("_VolumePosition");
-        static readonly int s_volumeSize = Shader.PropertyToID("_VolumeSize");
+        static readonly int s_volumeBoundsMin = Shader.PropertyToID("_VoxelVolumeBoundsMin");
+        static readonly int s_volumeBoundsSize = Shader.PropertyToID("_VoxelVolumeBoundsSize");
         #endregion
 
         public RenderTexture RadianceField => _radianceField;
@@ -143,10 +142,10 @@ namespace Lotec.Lighting {
         public RenderTexture IrradianceBlurred => _irradianceFieldFinal;
         RenderTexture IrradianceRead => _isEvenFrame ? _irradianceFieldB : _irradianceFieldA;
 
-        LightingVolume _volume;
+        VoxelVolume _volume;
         /// <summary>The volume this GI is currently solving for - the active volume, tracked
         /// each frame from the manager. Changing it releases and rebuilds the GI buffers.</summary>
-        public LightingVolume Volume => _volume;
+        public VoxelVolume Volume => _volume;
 
         LightingManager Manager => LightingManager.Instance;
 
@@ -227,7 +226,7 @@ namespace Lotec.Lighting {
             // GI is scene-wide and solves for the active volume. When the manager switches
             // volumes, release the old buffers (sized to the old volume) and rebuild lazily
             // for the new one.
-            LightingVolume active = Manager != null ? Manager.Volume : null;
+            VoxelVolume active = Manager != null ? Manager.Volume : null;
             if (active != _volume) {
                 _volume = active;
                 ReleaseBuffers();
@@ -308,13 +307,12 @@ namespace Lotec.Lighting {
         }
 
         static void SetGiKeyword(bool on) {
-            if (on) { Shader.EnableKeyword("GI_ON"); Shader.DisableKeyword("GI_OFF"); }
-            else { Shader.DisableKeyword("GI_ON"); Shader.EnableKeyword("GI_OFF"); }
+            if (on) { Shader.EnableKeyword("GI_ON"); Shader.DisableKeyword("GI_OFF"); } else { Shader.DisableKeyword("GI_ON"); Shader.EnableKeyword("GI_OFF"); }
         }
 
         bool IsRuntimeGiReady(out string reason) {
             if (Volume == null) {
-                reason = "LightingVolume";
+                reason = "VoxelVolume";
                 return false;
             }
 
@@ -329,7 +327,7 @@ namespace Lotec.Lighting {
             }
 
             if (SurfaceDistanceFieldLowRes == null) {
-                reason = "LightingVolume.sdfLowresTexture";
+                reason = "VoxelVolume.sdfLowresTexture";
                 return false;
             }
 
@@ -576,12 +574,12 @@ namespace Lotec.Lighting {
         void DispatchGIUpdate() {
             // Shared parameters
             float voxelSize = GetGiGridVoxelSize();
-            _giComputeShader.SetVector(s_voxelSize, voxelSize * Vector3.one);
+            _giComputeShader.SetVector(s_radianceFieldVoxelSize, voxelSize * Vector3.one);
             // The compute computes voxel world positions from these, and local lights use
             // absolute world positions - so the volume origin/size must be set on the compute
             // directly (compute shaders do not read Shader.SetGlobal values reliably).
-            _giComputeShader.SetVector(s_volumePosition, Volume.Bounds.min);
-            _giComputeShader.SetVector(s_volumeSize, Volume.Bounds.size);
+            _giComputeShader.SetVector(s_volumeBoundsMin, Volume.Bounds.min);
+            _giComputeShader.SetVector(s_volumeBoundsSize, Volume.Bounds.size);
             _giComputeShader.SetInt(s_frameCount, Time.frameCount);
             _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
             _giComputeShader.SetInt(s_raysPerFrame, _raysPerFrame);
@@ -603,7 +601,7 @@ namespace Lotec.Lighting {
             // Radiance pass
             _giComputeShader.SetTexture(_radianceKernel, s_radianceFieldWrite, _radianceField);
             _giComputeShader.SetTexture(_radianceKernel, s_irradianceField, IrradianceRead);
-            _giComputeShader.SetTexture(_radianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+            _giComputeShader.SetTexture(_radianceKernel, s_sdfLowres, SurfaceDistanceFieldLowRes);
             _giComputeShader.SetTexture(_radianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
             _giComputeShader.Dispatch(_radianceKernel, groupsX, groupsY, groupsZ);
 
@@ -614,7 +612,7 @@ namespace Lotec.Lighting {
             _giComputeShader.SetTexture(irradianceKernel, s_radianceField, _radianceField);
             _giComputeShader.SetTexture(irradianceKernel, s_irradianceFieldWrite, IrradianceFinal);
             _giComputeShader.SetTexture(irradianceKernel, s_irradianceField, IrradianceRead);
-            _giComputeShader.SetTexture(irradianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+            _giComputeShader.SetTexture(irradianceKernel, s_sdfLowres, SurfaceDistanceFieldLowRes);
             _giComputeShader.SetTexture(irradianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
             if (_lightingMethod == LightingMethod.PathTracing) {
                 _giComputeShader.SetTexture(_irradiancePathTracingKernel, s_blueNoiseTex, _blueNoiseTexture);
@@ -625,7 +623,7 @@ namespace Lotec.Lighting {
             if (_lightingMethod != LightingMethod.LPV) {
                 _giComputeShader.SetTexture(_blurKernel, s_irradianceFieldInput, IrradianceFinal);
                 _giComputeShader.SetTexture(_blurKernel, s_irradianceFieldFinal, _irradianceFieldFinal);
-                _giComputeShader.SetTexture(_blurKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+                _giComputeShader.SetTexture(_blurKernel, s_sdfLowres, SurfaceDistanceFieldLowRes);
                 _giComputeShader.Dispatch(_blurKernel, groupsX, groupsY, groupsZ);
             }
         }
@@ -704,7 +702,7 @@ namespace Lotec.Lighting {
 
             _giComputeShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, _luminanceBuffer);
             _giComputeShader.SetTexture(_averageLuminanceKernel, s_irradianceFieldInput, IrradianceFinal);
-            _giComputeShader.SetTexture(_averageLuminanceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+            _giComputeShader.SetTexture(_averageLuminanceKernel, s_sdfLowres, SurfaceDistanceFieldLowRes);
             _giComputeShader.SetVector(s_cameraPosition, Camera.main.transform.position);
             _giComputeShader.SetVector(s_cameraForward, Camera.main.transform.forward);
             _giComputeShader.SetFloat(s_luminanceRadius, _autoExposureRadius);
@@ -760,7 +758,7 @@ namespace Lotec.Lighting {
             // LPV uses the direct ping-pong output (no blur).
             // PathTracing uses the separate blurred irradiance texture.
             Shader.SetGlobalTexture(s_irradianceFieldFinal, _lightingMethod == LightingMethod.LPV ? IrradianceFinal : _irradianceFieldFinal);
-            Shader.SetGlobalTexture(s_distanceField, SurfaceDistanceFieldLowRes);
+            Shader.SetGlobalTexture(s_sdfLowres, SurfaceDistanceFieldLowRes);
 
             // Update these every frame in case the volume moves
             // The runtime GI include samples the irradiance volume, so use the GI grid
@@ -769,13 +767,10 @@ namespace Lotec.Lighting {
             float voxelSize = GetGiGridVoxelSize();
             Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector3.one);
 
-            // Volume bounds for the GI fragment read (Volume.hlsl WorldToVoxelUV). These are
-            // GI-only globals, so the GI updater owns them now (the volume is pure data).
-            Shader.SetGlobalVector(s_volumePosition, Volume.Bounds.min);
-            Shader.SetGlobalVector(s_volumeSize, Volume.Bounds.size);
-
-            // The point/spot light globals for fragment direct lighting are published by
-            // LightingManager (so local lights work without the GI updater running).
+            // The volume bounds the GI fragment read needs (Volume.hlsl WorldToVoxelUV) are the
+            // shared _VoxelVolumeBounds* globals, published by LightingManager for the active
+            // volume - GI no longer republishes them. Likewise the point/spot light globals for
+            // fragment direct lighting are published by LightingManager.
         }
 
         // In-shader display transform: when on, publish exposure (auto-adapted or manual) and keep

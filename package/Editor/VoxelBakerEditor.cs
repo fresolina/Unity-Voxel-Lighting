@@ -1,7 +1,7 @@
-using UnityEngine;
-using UnityEngine.UIElements;
 using UnityEditor;
 using UnityEditor.UIElements;
+using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace Lotec.Lighting.Editor {
     /// <summary>
@@ -28,7 +28,7 @@ namespace Lotec.Lighting.Editor {
             var baker = target as VoxelBakerBase;
             if (baker == null) return;
 
-            LightingVolume volume = baker.ResolveVolume();
+            VoxelVolume volume = baker.ResolveVolume();
             if (volume == null) {
                 Debug.LogError($"{baker.BakeLabel} baker: no target volume (assign one or add a LightingManager).", baker);
                 return;
