@@ -57,7 +57,7 @@ Material:
     - _ReceiveLocalShadows: 1
     - _Roughness: 1
     m_Colors:
-    - _BaseColor: {r: 0.28477898, g: 0.48125863, b: 0.7610062, a: 1}
-    - _EmissionColor: {r: 0.5498185, g: 2.7781866, b: 6.9937105, a: 1}
+    - _BaseColor: {r: 0, g: 0.41322327, b: 1, a: 1}
+    - _EmissionColor: {r: 0, g: 0.12549187, b: 5.992157, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

@@ -3,8 +3,15 @@
 #include "VoxelGiField.hlsl"
 
 // Bind these globals from C# script (Shader.SetGlobalTexture, etc.)
-Texture3D<float4> _IrradianceFieldFinal; 
+Texture3D<float4> _IrradianceFieldFinal;
 SamplerState sampler_IrradianceFieldFinal; // Unity binds this automatically if named matches texture
+
+// Confidence in the accumulated GI, 0..1, published by GiFieldUpdater. Ramps from 0 on a cold
+// start (single-ray, firefly-prone frames) to 1 once enough samples have accumulated. Fading the
+// applied indirect light by this hides the noisy warm-up frames: the displayed indirect noise is
+// confidence * bufferNoise, and because confidence is lowest exactly when the buffer is noisiest
+// (frame 1 = one ray), that product only ever ramps up to the converged level - never spikes.
+float _GiConfidence;
 
 // _RadianceFieldVoxelSize, _SdfLowres, and SampleSDF come from VoxelGiField.hlsl above.
 
@@ -60,5 +67,6 @@ float3 SampleVoxelGI(float3 worldPos, float3 normal)
 
     // The GPU automatically unpacks the R11G11B10 HDR format to floats here.
     // We use .rgb because this format has no Alpha channel.
-    return _IrradianceFieldFinal.Sample(sampler_IrradianceFieldFinal, uvw).rgb;
+    // Fade in by accumulation confidence so the noisy cold-start frames stay hidden.
+    return _IrradianceFieldFinal.Sample(sampler_IrradianceFieldFinal, uvw).rgb * _GiConfidence;
 }

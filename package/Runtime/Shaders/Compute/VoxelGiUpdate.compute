@@ -65,6 +65,7 @@ float3 _RadianceTextureSize;
 uint _FrameCount;
 uint _RaysPerFrame;
 float _TemporalBlendWeight;
+float _GiFireflyClamp;
 float3 _DirectLightDir;
 float4 _DirectLightColor;
 uint _PointLightCount;
@@ -100,6 +101,23 @@ float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
     float distanceAtten = rcp(max(distSq, 0.01));
     float rangeFade = saturate(1.0 - (distSq / max(rangeSq, 1e-6)));
     return distanceAtten * rangeFade * rangeFade;
+}
+
+// Hard luminance clamp that preserves hue. Emissive surfaces are the only light source the
+// irradiance pass gathers stochastically, and they are bright + localized, so a rare ray that
+// hits one spikes the temporal estimate (fireflies). Capping a single bounce sample's luminance
+// removes those spikes while leaving in-range bounce light energy-exact. maxLuminance <= 0
+// disables clamping.
+float3 ClampFirefly(float3 color, float maxLuminance)
+{
+    if (maxLuminance <= 0.0) {
+        return color;
+    }
+    float luma = GetRec709Luminance(color);
+    if (luma > maxLuminance) {
+        color *= maxLuminance / max(luma, 1e-6);
+    }
+    return color;
 }
 
 float3 GetIndirectSkyLight(float3 rayDir, bool includeSun)
@@ -294,7 +312,9 @@ void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
         if (lit == 0) {
             // Sample value half a voxel away from the surface hit point, to avoid sampling a voxel center inside the surface.
             float3 surfaceUVW = WorldToVoxelUV(hitPos - rayDir * _RadianceFieldVoxelSize * 0.51);
-            incomingLight += _RadianceField.SampleLevel(linearClampSampler, surfaceUVW, 0).rgb;
+            float3 bounce = _RadianceField.SampleLevel(linearClampSampler, surfaceUVW, 0).rgb;
+            // Suppress emitter fireflies before they enter the temporal accumulator.
+            incomingLight += ClampFirefly(bounce, _GiFireflyClamp);
         } else {
             // No hit means the ray escaped to the environment.
             // Only air voxels add the sun miss term; near-surface shell voxels
