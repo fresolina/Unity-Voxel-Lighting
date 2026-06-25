@@ -3,11 +3,11 @@ using UnityEngine;
 namespace Lotec.Lighting {
     [ExecuteAlways]
     public class MaterialFieldVisualizer : VoxelFieldVisualizerBase {
-        LightingVolume Volume => LightingManager.Instance.Volume;
+        VoxelVolume Volume => LightingManager.Instance.Volume;
 
         protected override Texture GetTexture() {
             if (Volume == null) return null;
-            return Volume.materialAlbedoIntensityTexture;
+            return Volume.TryGetComponent(out VoxelMaterialField material) ? material.materialAlbedoIntensityTexture : null;
         }
 
         protected override bool TryGetBounds(out Bounds bounds) {

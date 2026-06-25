@@ -3,10 +3,9 @@
 
 // Cheap SDF ambient occlusion approximation.
 // Returns 0..1 where 0 = fully enclosed, 1 = open ambient visibility.
-// Requires the following symbols to be defined by the including file:
-//  - Texture3D<float> _SdfTex;
-//  - SamplerState sampler_SdfTex;
-//  - bool SdfWorldToUVW(float3 worldPos, out float3 uvw)
+
+// _SdfHires / sampler_SdfHires (hi-res SDF) + WorldToVoxelUV (volume mapping).
+#include "VoxelSdfShadows.hlsl"
 
 float _SdfAoStep;
 float _SdfAoIntensity;
@@ -40,10 +39,10 @@ inline float GetAmbientOcclusionFromSdf(float3 worldPos, float3 normal)
     for (int sampleIndex = 1; sampleIndex <= AO_SAMPLES; sampleIndex++) {
         float h = aoStep * sampleIndex;
         float3 samplePos = worldPos + n * h;
-        float3 uvw;
-        if (!SdfWorldToUVW(samplePos, uvw)) break; 
+        float3 uvw = WorldToVoxelUV(samplePos);
+        if (!InsideVolumeUVW(uvw)) break;
 
-        float d = _SdfTex.SampleLevel(sampler_SdfTex, uvw, 0).r;
+        float d = _SdfHires.SampleLevel(sampler_SdfHires, uvw, 0).r;
         occlusion += max(h - d, 0.0) * weight;
         weight *= 0.5;
     }

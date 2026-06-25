@@ -29,7 +29,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     {
         float3 rayDir = _Directions[c];
         float lit = RayMarchTex3D(
-            _SdfTex, sampler_SdfTex,
+            _SdfHires, sampler_SdfHires,
             voxelCenter, rayDir,
             _BoundsMin, _BoundsSize,
             originBias, maxDistance,

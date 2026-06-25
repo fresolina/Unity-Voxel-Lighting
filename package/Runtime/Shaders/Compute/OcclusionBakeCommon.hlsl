@@ -7,8 +7,8 @@
 #include "../Includes/Raymarch.hlsl"
 
 // SDF volume
-Texture3D<float> _SdfTex;
-SamplerState sampler_SdfTex;
+Texture3D<float> _SdfHires;
+SamplerState sampler_SdfHires;
 
 // Bounds
 float3 _BoundsMin;

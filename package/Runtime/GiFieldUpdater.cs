@@ -6,7 +6,11 @@ using UnityEngine.Rendering;
 namespace Lotec.Lighting {
     [DisallowMultipleComponent]
     [ExecuteInEditMode]
+    [AddComponentMenu("Lotec/Voxel Lighting/Voxel GI")]
     public class GiFieldUpdater : MonoBehaviour {
+        /// <summary>The scene's GI updater. GI is scene-wide and solves for the active volume.</summary>
+        public static GiFieldUpdater Instance { get; private set; }
+
         static bool s_loggedUnsupportedRuntimeGi;
         static bool s_loggedGiTextureFormatSelection;
         static readonly GraphicsFormat[] s_webGpuGiTextureFormatCandidates = {
@@ -33,6 +37,10 @@ namespace Lotec.Lighting {
         [SerializeField] Texture2D _blueNoiseTexture;
 
         [Header("Lighting")]
+        [Tooltip("Apply the display transform (exposure + tonemap) in the lit shader. Turn off to " +
+                 "output linear HDR for a post-processing stack to expose/tonemap once - this also " +
+                 "skips the auto-exposure luminance pass.")]
+        [SerializeField] bool _tonemapInShader = true;
         [Tooltip("Manual exposure offset in EV stops (added on top of auto-exposure).")]
         [SerializeField] float _exposure;
         [Tooltip("Automatically adapt exposure based on average scene luminance.")]
@@ -64,7 +72,8 @@ namespace Lotec.Lighting {
             LPV = 1,
         }
 
-        public Texture3D MaterialFieldAlbedoIntensity => Volume.materialAlbedoIntensityTexture;
+        public Texture3D MaterialFieldAlbedoIntensity =>
+            Volume != null && Volume.TryGetComponent(out VoxelMaterialField material) ? material.materialAlbedoIntensityTexture : null;
         public Texture3D SurfaceDistanceFieldHighRes => Volume.sdfHiresTexture;
         public Texture3D SurfaceDistanceFieldLowRes => Volume.sdfLowresTexture;
         public ComputeShader GiComputeShader { get => _giComputeShader; set => _giComputeShader = value; }
@@ -93,13 +102,6 @@ namespace Lotec.Lighting {
         int _irradianceFieldSampleCount;
         GraphicsFormat _giTextureFormat;
         LightSettings _prevLightSettings;
-        int _currentPointLightCount;
-        int _currentSpotLightCount;
-        readonly Vector4[] _pointLightPositionRanges = new Vector4[LightingManager.MaxPointLights];
-        readonly Vector4[] _pointLightColors = new Vector4[LightingManager.MaxPointLights];
-        readonly Vector4[] _spotLightPositionRanges = new Vector4[LightingManager.MaxSpotLights];
-        readonly Vector4[] _spotLightDirectionAngleScales = new Vector4[LightingManager.MaxSpotLights];
-        readonly Vector4[] _spotLightColorAngleOffsets = new Vector4[LightingManager.MaxSpotLights];
 
         #region Shader Property IDs
         // Property IDs local to gi update compute shader
@@ -113,19 +115,11 @@ namespace Lotec.Lighting {
         static readonly int s_clearVolumeTarget = Shader.PropertyToID("_ClearVolumeTarget");
         static readonly int s_radianceTextureSize = Shader.PropertyToID("_RadianceTextureSize");
         static readonly int s_materialAlbedoIntensity = Shader.PropertyToID("_MaterialAlbedoIntensity");
-        static readonly int s_distanceField = Shader.PropertyToID("_DistanceField");
-        static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
+        static readonly int s_sdfLowres = Shader.PropertyToID("_SdfLowres");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_temporalBlendWeight = Shader.PropertyToID("_TemporalBlendWeight");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
-        static readonly int s_pointLightCount = Shader.PropertyToID("_PointLightCount");
-        static readonly int s_pointLightPositionRange = Shader.PropertyToID("_PointLightPositionRange");
-        static readonly int s_pointLightColor = Shader.PropertyToID("_PointLightColor");
-        static readonly int s_spotLightCount = Shader.PropertyToID("_SpotLightCount");
-        static readonly int s_spotLightPositionRange = Shader.PropertyToID("_SpotLightPositionRange");
-        static readonly int s_spotLightDirectionAngleScale = Shader.PropertyToID("_SpotLightDirectionAngleScale");
-        static readonly int s_spotLightColorAngleOffset = Shader.PropertyToID("_SpotLightColorAngleOffset");
         static readonly int s_skyColor = Shader.PropertyToID("_SkyColor");
         static readonly int s_blueNoiseTex = Shader.PropertyToID("_BlueNoiseTex");
         static readonly int s_injectLpvSky = Shader.PropertyToID("_InjectLpvSky");
@@ -139,6 +133,8 @@ namespace Lotec.Lighting {
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
         static readonly int s_exposure = Shader.PropertyToID("_Exposure");
+        static readonly int s_volumeBoundsMin = Shader.PropertyToID("_VoxelVolumeBoundsMin");
+        static readonly int s_volumeBoundsSize = Shader.PropertyToID("_VoxelVolumeBoundsSize");
         #endregion
 
         public RenderTexture RadianceField => _radianceField;
@@ -146,16 +142,10 @@ namespace Lotec.Lighting {
         public RenderTexture IrradianceBlurred => _irradianceFieldFinal;
         RenderTexture IrradianceRead => _isEvenFrame ? _irradianceFieldB : _irradianceFieldA;
 
-        LightingVolume _volume;
-        public LightingVolume Volume {
-            get => _volume;
-            set {
-                if (_volume == value) return;
-                _volume = value;
-                ReleaseBuffers();
-                _hasLoggedMissingReferences = false;
-            }
-        }
+        VoxelVolume _volume;
+        /// <summary>The volume this GI is currently solving for - the active volume, tracked
+        /// each frame from the manager. Changing it releases and rebuilds the GI buffers.</summary>
+        public VoxelVolume Volume => _volume;
 
         LightingManager Manager => LightingManager.Instance;
 
@@ -232,13 +222,21 @@ namespace Lotec.Lighting {
             ClearVolume(_irradianceFieldFinal);
         }
 
-        void Start() {
-            if (Volume == null && Manager != null)
-                Volume = Manager.Volume;
-            Debug.Log($"GiFieldUpdater.Start: Volume={(Volume != null ? Volume.gameObject.name : "null")}", this);
-        }
-
         void Update() {
+            // GI is scene-wide and solves for the active volume. When the manager switches
+            // volumes, release the old buffers (sized to the old volume) and rebuild lazily
+            // for the new one.
+            VoxelVolume active = Manager != null ? Manager.Volume : null;
+            if (active != _volume) {
+                _volume = active;
+                ReleaseBuffers();
+                _hasLoggedMissingReferences = false;
+            }
+            if (_volume == null) {
+                SetGiKeyword(false);
+                return;
+            }
+
             if (!SupportsRuntimeGi(out string unsupportedReason)) {
                 ReleaseBuffers();
 
@@ -251,15 +249,17 @@ namespace Lotec.Lighting {
                 return;
             }
 
+            // Active volume has runtime GI -> enable the GI shading path.
+            SetGiKeyword(true);
+
             if (!IsRuntimeGiReady(out string missingReason)) {
                 if (!_hasLoggedMissingReferences) {
                     _hasLoggedMissingReferences = true;
                     string volName = Volume != null ? Volume.gameObject.name : "null";
-                    string matName = Volume != null && Volume.materialAlbedoIntensityTexture != null ? Volume.materialAlbedoIntensityTexture.name : "null";
+                    string matName = MaterialFieldAlbedoIntensity != null ? MaterialFieldAlbedoIntensity.name : "null";
                     string sdfHires = Volume != null && Volume.sdfHiresTexture != null ? Volume.sdfHiresTexture.name : "null";
                     string sdfLow = Volume != null && Volume.sdfLowresTexture != null ? Volume.sdfLowresTexture.name : "null";
-                    string occlName = Volume != null && Volume.occlusionBitmaskTexture != null ? Volume.occlusionBitmaskTexture.name : "null";
-                    Debug.LogWarning($"GI Field Updater is missing required references: {missingReason}. Volume={volName}, materialAlbedoIntensityTexture={matName}, sdfHiresTexture={sdfHires}, sdfLowresTexture={sdfLow}, occlusionBitmaskTexture={occlName}. Waiting for runtime GI initialization.", this);
+                    Debug.LogWarning($"GI Field Updater is missing required references: {missingReason}. Volume={volName}, materialAlbedoIntensityTexture={matName}, sdfHiresTexture={sdfHires}, sdfLowresTexture={sdfLow}. Waiting for runtime GI initialization.", this);
                 }
                 return;
             }
@@ -273,18 +273,16 @@ namespace Lotec.Lighting {
 
             EnsureInitialized();
             if (!isStable || _continuousGi) {
-                SetPointLightShaderUniforms();
-                SetSpotLightShaderUniforms();
+                // Reuse the light data the manager already collected this frame (for fragment
+                // direct lighting) and push it to the GI compute - no second collect.
+                Manager?.LocalLights?.ApplyToCompute(_giComputeShader);
                 SetDirectionalLightUniforms();
                 DispatchGIUpdate();
                 _irradianceFieldSampleCount++;
                 _isEvenFrame = !_isEvenFrame;
             }
 
-            if (_autoExposure) {
-                DispatchLuminanceReduction();
-                UpdateAutoExposure();
-            }
+            ApplyDisplayTransform();
             SetGlobalShaderVariables();
 
             _prevLightSettings = new LightSettings {
@@ -295,13 +293,26 @@ namespace Lotec.Lighting {
             };
         }
 
+        void OnEnable() {
+            Instance = this;
+        }
+
         void OnDisable() {
+            if (Instance == this) Instance = null;
+            // GI is the sole GI / display-transform authority; with it gone, fall back to the
+            // direct-only path with the in-shader tonemap so HDR still gets tonemapped.
+            SetGiKeyword(false);
+            Shader.DisableKeyword("TONEMAP_OFF");
             ReleaseBuffers();
+        }
+
+        static void SetGiKeyword(bool on) {
+            if (on) { Shader.EnableKeyword("GI_ON"); Shader.DisableKeyword("GI_OFF"); } else { Shader.DisableKeyword("GI_ON"); Shader.EnableKeyword("GI_OFF"); }
         }
 
         bool IsRuntimeGiReady(out string reason) {
             if (Volume == null) {
-                reason = "LightingVolume";
+                reason = "VoxelVolume";
                 return false;
             }
 
@@ -311,12 +322,12 @@ namespace Lotec.Lighting {
             }
 
             if (MaterialFieldAlbedoIntensity == null) {
-                reason = $"LightingVolume.materialAlbedoIntensityTexture";
+                reason = "VoxelMaterialField.materialAlbedoIntensityTexture (run the Material baker)";
                 return false;
             }
 
             if (SurfaceDistanceFieldLowRes == null) {
-                reason = "LightingVolume.sdfLowresTexture";
+                reason = "VoxelVolume.sdfLowresTexture";
                 return false;
             }
 
@@ -390,7 +401,7 @@ namespace Lotec.Lighting {
 
                 for (int i = 0; i < additionalLights.Count; i++) {
                     Light light = additionalLights[i];
-                    if (IsSupportedPointLight(light) && pointLightCount < LightingManager.MaxPointLights) {
+                    if (LocalLightData.IsSupportedPointLight(light) && pointLightCount < LocalLightData.MaxPointLights) {
                         Vector3 position = light.transform.position;
                         Color color = light.color;
                         hash = (hash * 31) + ((int)light.type);
@@ -403,7 +414,7 @@ namespace Lotec.Lighting {
                         hash = (hash * 31) + light.range.GetHashCode();
                         hash = (hash * 31) + light.intensity.GetHashCode();
                         pointLightCount++;
-                    } else if (IsSupportedSpotLight(light) && spotLightCount < LightingManager.MaxSpotLights) {
+                    } else if (LocalLightData.IsSupportedSpotLight(light) && spotLightCount < LocalLightData.MaxSpotLights) {
                         Vector3 position = light.transform.position;
                         Vector3 direction = light.transform.forward;
                         Color color = light.color;
@@ -424,7 +435,7 @@ namespace Lotec.Lighting {
                         spotLightCount++;
                     }
 
-                    if (pointLightCount >= LightingManager.MaxPointLights && spotLightCount >= LightingManager.MaxSpotLights) {
+                    if (pointLightCount >= LocalLightData.MaxPointLights && spotLightCount >= LocalLightData.MaxSpotLights) {
                         break;
                     }
                 }
@@ -563,7 +574,12 @@ namespace Lotec.Lighting {
         void DispatchGIUpdate() {
             // Shared parameters
             float voxelSize = GetGiGridVoxelSize();
-            _giComputeShader.SetVector(s_voxelSize, voxelSize * Vector3.one);
+            _giComputeShader.SetVector(s_radianceFieldVoxelSize, voxelSize * Vector3.one);
+            // The compute computes voxel world positions from these, and local lights use
+            // absolute world positions - so the volume origin/size must be set on the compute
+            // directly (compute shaders do not read Shader.SetGlobal values reliably).
+            _giComputeShader.SetVector(s_volumeBoundsMin, Volume.Bounds.min);
+            _giComputeShader.SetVector(s_volumeBoundsSize, Volume.Bounds.size);
             _giComputeShader.SetInt(s_frameCount, Time.frameCount);
             _giComputeShader.SetVector(s_radianceTextureSize, _radianceTextureResolution);
             _giComputeShader.SetInt(s_raysPerFrame, _raysPerFrame);
@@ -585,7 +601,7 @@ namespace Lotec.Lighting {
             // Radiance pass
             _giComputeShader.SetTexture(_radianceKernel, s_radianceFieldWrite, _radianceField);
             _giComputeShader.SetTexture(_radianceKernel, s_irradianceField, IrradianceRead);
-            _giComputeShader.SetTexture(_radianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+            _giComputeShader.SetTexture(_radianceKernel, s_sdfLowres, SurfaceDistanceFieldLowRes);
             _giComputeShader.SetTexture(_radianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
             _giComputeShader.Dispatch(_radianceKernel, groupsX, groupsY, groupsZ);
 
@@ -596,7 +612,7 @@ namespace Lotec.Lighting {
             _giComputeShader.SetTexture(irradianceKernel, s_radianceField, _radianceField);
             _giComputeShader.SetTexture(irradianceKernel, s_irradianceFieldWrite, IrradianceFinal);
             _giComputeShader.SetTexture(irradianceKernel, s_irradianceField, IrradianceRead);
-            _giComputeShader.SetTexture(irradianceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+            _giComputeShader.SetTexture(irradianceKernel, s_sdfLowres, SurfaceDistanceFieldLowRes);
             _giComputeShader.SetTexture(irradianceKernel, s_materialAlbedoIntensity, MaterialFieldAlbedoIntensity);
             if (_lightingMethod == LightingMethod.PathTracing) {
                 _giComputeShader.SetTexture(_irradiancePathTracingKernel, s_blueNoiseTex, _blueNoiseTexture);
@@ -607,7 +623,7 @@ namespace Lotec.Lighting {
             if (_lightingMethod != LightingMethod.LPV) {
                 _giComputeShader.SetTexture(_blurKernel, s_irradianceFieldInput, IrradianceFinal);
                 _giComputeShader.SetTexture(_blurKernel, s_irradianceFieldFinal, _irradianceFieldFinal);
-                _giComputeShader.SetTexture(_blurKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+                _giComputeShader.SetTexture(_blurKernel, s_sdfLowres, SurfaceDistanceFieldLowRes);
                 _giComputeShader.Dispatch(_blurKernel, groupsX, groupsY, groupsZ);
             }
         }
@@ -686,7 +702,7 @@ namespace Lotec.Lighting {
 
             _giComputeShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, _luminanceBuffer);
             _giComputeShader.SetTexture(_averageLuminanceKernel, s_irradianceFieldInput, IrradianceFinal);
-            _giComputeShader.SetTexture(_averageLuminanceKernel, s_distanceField, SurfaceDistanceFieldLowRes);
+            _giComputeShader.SetTexture(_averageLuminanceKernel, s_sdfLowres, SurfaceDistanceFieldLowRes);
             _giComputeShader.SetVector(s_cameraPosition, Camera.main.transform.position);
             _giComputeShader.SetVector(s_cameraForward, Camera.main.transform.forward);
             _giComputeShader.SetFloat(s_luminanceRadius, _autoExposureRadius);
@@ -738,99 +754,11 @@ namespace Lotec.Lighting {
             _giComputeShader.SetVector(s_skyColor, GetSkyEnvironmentColor());
         }
 
-        void SetPointLightShaderUniforms() {
-            if (_giComputeShader == null) {
-                return;
-            }
-
-            int pointLightCount = 0;
-            var additionalLights = Manager != null ? Manager.AdditionalLights : null;
-            if (additionalLights != null) {
-                for (int i = 0; i < additionalLights.Count; i++) {
-                    Light light = additionalLights[i];
-                    if (!IsSupportedPointLight(light)) {
-                        continue;
-                    }
-
-                    Vector3 position = light.transform.position;
-                    _pointLightPositionRanges[pointLightCount] = new Vector4(position.x, position.y, position.z, light.range);
-                    _pointLightColors[pointLightCount] = (Vector4)light.color * light.intensity;
-                    pointLightCount++;
-
-                    if (pointLightCount >= LightingManager.MaxPointLights) {
-                        break;
-                    }
-                }
-            }
-
-            _currentPointLightCount = pointLightCount;
-            _giComputeShader.SetInt(s_pointLightCount, pointLightCount);
-            _giComputeShader.SetVectorArray(s_pointLightPositionRange, _pointLightPositionRanges);
-            _giComputeShader.SetVectorArray(s_pointLightColor, _pointLightColors);
-        }
-
-        void SetSpotLightShaderUniforms() {
-            if (_giComputeShader == null) {
-                return;
-            }
-
-            int spotLightCount = 0;
-            var additionalLights = Manager != null ? Manager.AdditionalLights : null;
-            if (additionalLights != null) {
-                for (int i = 0; i < additionalLights.Count; i++) {
-                    Light light = additionalLights[i];
-                    if (!IsSupportedSpotLight(light)) {
-                        continue;
-                    }
-
-                    Vector3 position = light.transform.position;
-                    Vector3 direction = light.transform.forward;
-                    float outerCos = Mathf.Cos(light.spotAngle * Mathf.Deg2Rad * 0.5f);
-                    float innerCos = Mathf.Cos(light.innerSpotAngle * Mathf.Deg2Rad * 0.5f);
-                    float angleRange = Mathf.Max(innerCos - outerCos, 1e-4f);
-                    float angleScale = 1f / angleRange;
-                    float angleOffset = -outerCos * angleScale;
-
-                    _spotLightPositionRanges[spotLightCount] = new Vector4(position.x, position.y, position.z, light.range);
-                    _spotLightDirectionAngleScales[spotLightCount] = new Vector4(direction.x, direction.y, direction.z, angleScale);
-                    _spotLightColorAngleOffsets[spotLightCount] = new Vector4(light.color.r * light.intensity, light.color.g * light.intensity, light.color.b * light.intensity, angleOffset);
-                    spotLightCount++;
-
-                    if (spotLightCount >= LightingManager.MaxSpotLights) {
-                        break;
-                    }
-                }
-            }
-
-            _currentSpotLightCount = spotLightCount;
-            _giComputeShader.SetInt(s_spotLightCount, spotLightCount);
-            _giComputeShader.SetVectorArray(s_spotLightPositionRange, _spotLightPositionRanges);
-            _giComputeShader.SetVectorArray(s_spotLightDirectionAngleScale, _spotLightDirectionAngleScales);
-            _giComputeShader.SetVectorArray(s_spotLightColorAngleOffset, _spotLightColorAngleOffsets);
-        }
-
-        static bool IsSupportedPointLight(Light light) {
-            return light != null &&
-                   light.isActiveAndEnabled &&
-                   light.type == LightType.Point &&
-                   light.range > 0f &&
-                   light.intensity > 0f;
-        }
-
-        static bool IsSupportedSpotLight(Light light) {
-            return light != null &&
-                   light.isActiveAndEnabled &&
-                   light.type == LightType.Spot &&
-                   light.range > 0f &&
-                   light.intensity > 0f &&
-                   light.spotAngle > 0f;
-        }
-
         void SetGlobalShaderVariables() {
             // LPV uses the direct ping-pong output (no blur).
             // PathTracing uses the separate blurred irradiance texture.
             Shader.SetGlobalTexture(s_irradianceFieldFinal, _lightingMethod == LightingMethod.LPV ? IrradianceFinal : _irradianceFieldFinal);
-            Shader.SetGlobalTexture(s_distanceField, SurfaceDistanceFieldLowRes);
+            Shader.SetGlobalTexture(s_sdfLowres, SurfaceDistanceFieldLowRes);
 
             // Update these every frame in case the volume moves
             // The runtime GI include samples the irradiance volume, so use the GI grid
@@ -839,16 +767,26 @@ namespace Lotec.Lighting {
             float voxelSize = GetGiGridVoxelSize();
             Shader.SetGlobalVector(s_radianceFieldVoxelSize, voxelSize * Vector3.one);
 
-            // Visible local-light direct shading now runs in the fragment shader,
-            // so publish the curated point/spot light arrays there as globals too.
-            Shader.SetGlobalInt(s_pointLightCount, _currentPointLightCount);
-            Shader.SetGlobalVectorArray(s_pointLightPositionRange, _pointLightPositionRanges);
-            Shader.SetGlobalVectorArray(s_pointLightColor, _pointLightColors);
-            Shader.SetGlobalInt(s_spotLightCount, _currentSpotLightCount);
-            Shader.SetGlobalVectorArray(s_spotLightPositionRange, _spotLightPositionRanges);
-            Shader.SetGlobalVectorArray(s_spotLightDirectionAngleScale, _spotLightDirectionAngleScales);
-            Shader.SetGlobalVectorArray(s_spotLightColorAngleOffset, _spotLightColorAngleOffsets);
-            if (!_autoExposure) {
+            // The volume bounds the GI fragment read needs (Volume.hlsl WorldToVoxelUV) are the
+            // shared _VoxelVolumeBounds* globals, published by LightingManager for the active
+            // volume - GI no longer republishes them. Likewise the point/spot light globals for
+            // fragment direct lighting are published by LightingManager.
+        }
+
+        // In-shader display transform: when on, publish exposure (auto-adapted or manual) and keep
+        // the shader's tonemap on. When off, output linear HDR for a post stack to do exposure +
+        // tonemap once - and skip the auto-exposure luminance pass entirely.
+        void ApplyDisplayTransform() {
+            if (!_tonemapInShader) {
+                Shader.EnableKeyword("TONEMAP_OFF");
+                return;
+            }
+
+            Shader.DisableKeyword("TONEMAP_OFF");
+            if (_autoExposure) {
+                DispatchLuminanceReduction();
+                UpdateAutoExposure();
+            } else {
                 Shader.SetGlobalFloat(s_exposure, _exposure);
             }
         }

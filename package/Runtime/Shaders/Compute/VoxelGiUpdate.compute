@@ -13,7 +13,7 @@
 #define MAX_SPOT_LIGHTS 4
 #define MAX_SDF_DIST 1.0e+10
 
-#include "../Includes/Volume.hlsl"
+#include "../Includes/VoxelGiField.hlsl"
 #include "../Includes/Raymarch.hlsl"
 
 // --- GI RAYMARCHING ---
@@ -21,8 +21,8 @@
 // automatically adapts when resolution changes. 0.25 * voxelSize covers the
 // worst-case trilinear deviation for a one-voxel-thick wall.
 // RAYMARCH_MIN_STEP: minimum step to avoid micro-stepping near surfaces.
-#define EPSILON (_VoxelSize.x * 0.25)
-#define RAYMARCH_MIN_STEP (_VoxelSize.x * 0.0625)
+#define EPSILON (_RadianceFieldVoxelSize.x * 0.25)
+#define RAYMARCH_MIN_STEP (_RadianceFieldVoxelSize.x * 0.0625)
 
 int _RaymarchMaxSteps;
 float _RaymarchSoftness;
@@ -33,11 +33,11 @@ float ComputeRaymarchStartOffset(float dist)
 }
 
 float RaymarchSDF(float3 voxelCenter, float3 rayDir, float maxDistance, out float3 hitPos) {
-    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, 0, maxDistance, EPSILON, RAYMARCH_MIN_STEP, _RaymarchMaxSteps, _RaymarchSoftness, hitPos);
+    return RayMarchTex3D(_SdfLowres, linearClampSampler, voxelCenter, rayDir, _VoxelVolumeBoundsMin, _VoxelVolumeBoundsSize, 0, maxDistance, EPSILON, RAYMARCH_MIN_STEP, _RaymarchMaxSteps, _RaymarchSoftness, hitPos);
 }
 
 float RaymarchSDF(float3 voxelCenter, float3 rayDir, float startOffset, float maxDistance, out float3 hitPos) {
-    return RayMarchTex3D(_DistanceField, linearClampSampler, voxelCenter, rayDir, _VolumePosition, _VolumeSize, startOffset, maxDistance, EPSILON, RAYMARCH_MIN_STEP, _RaymarchMaxSteps, _RaymarchSoftness, hitPos);
+    return RayMarchTex3D(_SdfLowres, linearClampSampler, voxelCenter, rayDir, _VoxelVolumeBoundsMin, _VoxelVolumeBoundsSize, startOffset, maxDistance, EPSILON, RAYMARCH_MIN_STEP, _RaymarchMaxSteps, _RaymarchSoftness, hitPos);
 }
 
 // --- RESOURCES ---
@@ -85,7 +85,7 @@ bool HasOpenSky(uint3 id)
 {
     [loop]
     for (uint y = id.y + 1; y < (uint)_RadianceTextureSize.y; y++) {
-        if (_DistanceField.Load(int4((int)id.x, (int)y, (int)id.z, 0)).r < 0.0) {
+        if (_SdfLowres.Load(int4((int)id.x, (int)y, (int)id.z, 0)).r < 0.0) {
             return false;
         }
     }
@@ -104,17 +104,18 @@ float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
 
 float3 GetIndirectSkyLight(float3 rayDir, bool includeSun)
 {
+    // Single return point: an early return here lowers to a synthetic return-slot
+    // variable that the WebGPU validator (tint/naga) flags as possibly uninitialized.
     float3 environmentLight = _SkyColor;
-    if (!includeSun) {
-        return environmentLight;
+    if (includeSun) {
+        // Use a deliberately broad sun lobe here. A physical sun disk is too small
+        // to be sampled reliably at 1-4 rays per frame, which leaves rooms lit
+        // through small openings much darker than the user expects.
+        float sunLobe = saturate(dot(rayDir, _DirectLightDir));
+        sunLobe *= sunLobe;
+        environmentLight += _DirectLightColor.rgb * sunLobe;
     }
-
-    // Use a deliberately broad sun lobe here. A physical sun disk is too small
-    // to be sampled reliably at 1-4 rays per frame, which leaves rooms lit
-    // through small openings much darker than the user expects.
-    float sunLobe = saturate(dot(rayDir, _DirectLightDir));
-    sunLobe *= sunLobe;
-    return environmentLight + (_DirectLightColor.rgb * sunLobe);
+    return environmentLight;
 }
 
 float3 GetPointLight(float3 voxelCenter, float startOffset)
@@ -196,18 +197,18 @@ void CSComputeRadiance(uint3 id : SV_DispatchThreadID)
 {
     if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
 
-    float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
+    float3 voxelCenter = _VoxelVolumeBoundsMin + (float3(id) * _RadianceFieldVoxelSize) + (_RadianceFieldVoxelSize * 0.5);
     float3 uvw = WorldToVoxelUV(voxelCenter);
-    float dist = _DistanceField.SampleLevel(pointClampSampler, uvw, 0).r;
+    float dist = _SdfLowres.SampleLevel(pointClampSampler, uvw, 0).r;
     bool isAir = dist >= 0;
     bool shouldInjectSky = _InjectLpvSky != 0 && isAir && HasOpenSky(id);
     float3 outgoingLight = shouldInjectSky ? _SkyColor : 0.0;
 
     // Only near-surface voxels radiate. dist >= 0 includes voxels exactly on the
-    // surface (e.g. wall mesh perfectly aligned to the voxel grid). LightingVolume
-    // expands bounds so the GI/SDF grid stays cubic, so _VoxelSize.x is the single
+    // surface (e.g. wall mesh perfectly aligned to the voxel grid). VoxelVolume
+    // expands bounds so the GI/SDF grid stays cubic, so _RadianceFieldVoxelSize.x is the single
     // world-space edge length for this grid.
-    bool shouldRadiate = dist >= 0 && dist <= _VoxelSize.x;
+    bool shouldRadiate = dist >= 0 && dist <= _RadianceFieldVoxelSize.x;
     if (!shouldRadiate) {
         _RadianceFieldWrite[id] = float4(outgoingLight, 1.0);
         return;
@@ -259,15 +260,15 @@ void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
 {
     if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
 
-    float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
+    float3 voxelCenter = _VoxelVolumeBoundsMin + (float3(id) * _RadianceFieldVoxelSize) + (_RadianceFieldVoxelSize * 0.5);
     float3 uvw = WorldToVoxelUV(voxelCenter);
     // Abort if inside geometry.
-    half dist = _DistanceField.SampleLevel(pointClampSampler, uvw, 0).r;
+    half dist = _SdfLowres.SampleLevel(pointClampSampler, uvw, 0).r;
     if (dist < 0) {
         _IrradianceFieldWrite[id] = 0;
         return;
     }
-    bool isAir = (dist > _VoxelSize.x);
+    bool isAir = (dist > _RadianceFieldVoxelSize.x);
 
     float3 incomingLight = float3(0, 0, 0);
     float3 surfaceNormal = GetNormalFromSDF(voxelCenter);
@@ -292,7 +293,7 @@ void CSComputeIrradiancePathTracing(uint3 id : SV_DispatchThreadID)
         float lit = RaymarchSDF(voxelCenter, rayDir, startOffset, MAX_SDF_DIST, hitPos);
         if (lit == 0) {
             // Sample value half a voxel away from the surface hit point, to avoid sampling a voxel center inside the surface.
-            float3 surfaceUVW = WorldToVoxelUV(hitPos - rayDir * _VoxelSize * 0.51);
+            float3 surfaceUVW = WorldToVoxelUV(hitPos - rayDir * _RadianceFieldVoxelSize * 0.51);
             incomingLight += _RadianceField.SampleLevel(linearClampSampler, surfaceUVW, 0).rgb;
         } else {
             // No hit means the ray escaped to the environment.
@@ -322,8 +323,8 @@ void CSComputeIrradianceLPV(uint3 id : SV_DispatchThreadID)
     // Early exit if out of bounds (can happen with non-dispatch-aligned volume sizes)
     if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
 
-    float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
-    half dist = _DistanceField.Load(int4(id, 0)).r;
+    float3 voxelCenter = _VoxelVolumeBoundsMin + (float3(id) * _RadianceFieldVoxelSize) + (_RadianceFieldVoxelSize * 0.5);
+    half dist = _SdfLowres.Load(int4(id, 0)).r;
     if (dist < 0) {
         _IrradianceFieldWrite[id] = 0;
         return;
@@ -350,9 +351,9 @@ void CSComputeIrradianceLPV(uint3 id : SV_DispatchThreadID)
         // If distance is < 0, weight is 0.0 (fully blocked).
         // If distance is > a full voxel away, weight is 1.0 (fully open).
         // If it's in between, fade. This removes squared blocky AO.
-        float3 midPos = voxelCenter + float3(delta) * (_VoxelSize * 0.5f);
+        float3 midPos = voxelCenter + float3(delta) * (_RadianceFieldVoxelSize * 0.5f);
         float midDist = SampleSDF(midPos);
-        float transferWeight = saturate(midDist / _VoxelSize.x);
+        float transferWeight = saturate(midDist / _RadianceFieldVoxelSize.x);
         if (transferWeight <= 0.0f) continue;
 
         float3 neighborLight = _IrradianceFieldHistory.Load(int4(n, 0)).rgb;
@@ -379,7 +380,7 @@ void CSComputeIrradianceLPV(uint3 id : SV_DispatchThreadID)
     // sits about half a voxel outside it. This keeps the lookup on the air side
     // while allowing LPV receiver voxels to see the directly lit shell.
     float3 surfaceNormal = GetNormalFromSDF(voxelCenter);
-    float radianceBackoff = max(dist - (_VoxelSize.x * 0.5f), 0.0f);
+    float radianceBackoff = max(dist - (_RadianceFieldVoxelSize.x * 0.5f), 0.0f);
     float3 radianceSamplePos = voxelCenter - surfaceNormal * radianceBackoff;
     float3 radianceUVW = WorldToVoxelUV(radianceSamplePos);
     float3 injectedRadiance = _RadianceField.SampleLevel(linearClampSampler, radianceUVW, 0).rgb * (1.0 - _LpvDecay);
@@ -396,9 +397,9 @@ void CSBlurIrradiance(uint3 id : SV_DispatchThreadID)
 {
     if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
 
-    float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
+    float3 voxelCenter = _VoxelVolumeBoundsMin + (float3(id) * _RadianceFieldVoxelSize) + (_RadianceFieldVoxelSize * 0.5);
     float3 uvwCenter = WorldToVoxelUV(voxelCenter);
-    float3 uvwHalf = (_VoxelSize * 0.5) * rcp(max(_VolumeSize, 1e-6));
+    float3 uvwHalf = (_RadianceFieldVoxelSize * 0.5) * rcp(max(_VoxelVolumeBoundsSize, 1e-6));
 
     // _IrradianceFieldFinal[id] = _IrradianceFieldInput.SampleLevel(linearClampSampler, uvwCenter, 0);
     // return;
@@ -427,7 +428,7 @@ void CSComputeAverageLuminance(uint3 id : SV_DispatchThreadID)
 {
     if (any(id >= uint3(_RadianceTextureSize.xyz))) return;
 
-    float3 voxelCenter = _VolumePosition + (float3(id) * _VoxelSize) + (_VoxelSize * 0.5);
+    float3 voxelCenter = _VoxelVolumeBoundsMin + (float3(id) * _RadianceFieldVoxelSize) + (_RadianceFieldVoxelSize * 0.5);
 
     float3 offset = voxelCenter - _CameraPosition;
     float distSq = dot(offset, offset);
@@ -440,7 +441,7 @@ void CSComputeAverageLuminance(uint3 id : SV_DispatchThreadID)
     if (cosAngle < 0.0) return;
 
     float3 uvw = WorldToVoxelUV(voxelCenter);
-    half dist = _DistanceField.SampleLevel(pointClampSampler, uvw, 0).r;
+    half dist = _SdfLowres.SampleLevel(pointClampSampler, uvw, 0).r;
     // Skip voxels inside geometry.
     if (dist < 0) return;
 

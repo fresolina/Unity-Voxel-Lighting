@@ -28,7 +28,7 @@ namespace Lotec.Lighting {
         public DirectionCount directionCount = DirectionCount.Dir64;
 
         [Tooltip("Use only upper hemisphere directions (Y >= 0). Useful when the sun never goes below the horizon.")]
-        public bool hemisphereOnly;
+        public bool hemisphereOnly = true;
 
         [Tooltip("Softness of shadow penumbra. Higher = sharper. 0 = binary.")]
         [Range(1f, 128f)]
@@ -44,7 +44,7 @@ namespace Lotec.Lighting {
         static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
         static readonly int s_raymarchMinStep = Shader.PropertyToID("_RaymarchMinStep");
         static readonly int s_raymarchEpsilon = Shader.PropertyToID("_RaymarchEpsilon");
-        static readonly int s_sdfTex = Shader.PropertyToID("_SdfTex");
+        static readonly int s_sdfHires = Shader.PropertyToID("_SdfHires");
 
         static GraphicsFormat GetOcclusionFieldFormat(bool isSingleDir) {
             if (isSingleDir)
@@ -82,7 +82,7 @@ namespace Lotec.Lighting {
         /// Each texture stores 4 directions (one per RGBA channel).
         /// </summary>
         public bool TryBake(
-            LightingVolume sourceVolume,
+            VoxelVolume sourceVolume,
             out Texture3D[] resultTextures,
             out Vector3[] bakedDirections,
             out string error
@@ -147,7 +147,7 @@ namespace Lotec.Lighting {
             int kernelIdx = occlusionFieldBakeCompute.FindKernel("CSMain");
 
             // Set shared uniforms
-            occlusionFieldBakeCompute.SetTexture(kernelIdx, s_sdfTex, sourceVolume.sdfHiresTexture);
+            occlusionFieldBakeCompute.SetTexture(kernelIdx, s_sdfHires, sourceVolume.sdfHiresTexture);
             occlusionFieldBakeCompute.SetVector(s_boundsMin, bounds.min);
             occlusionFieldBakeCompute.SetVector(s_boundsSize, bounds.size);
             occlusionFieldBakeCompute.SetInts(s_resolution, resolution.x, resolution.y, resolution.z);

@@ -27,7 +27,7 @@ namespace Lotec.Lighting {
 
         // Bake packed material data into one CPU-side Texture3D asset.
         // Returns null on success, or an error string describing the failure.
-        public string Bake(LightingVolume volume, out Texture3D albedoIntensity, int downscaleFactor = 1) {
+        public string Bake(VoxelVolume volume, out Texture3D albedoIntensity, int downscaleFactor = 1) {
             albedoIntensity = null;
             Transform root = volume.BakeRoot;
             if (volume == null) return "Target SdfVolume is null.";

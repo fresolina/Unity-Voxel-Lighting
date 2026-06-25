@@ -10,7 +10,7 @@
                         <ui:DataBinding property="value" data-source-path="LightingMethod" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
-                <ui:EnumField label="Shadow Mode" value="SDF" type="Lotec.Lighting.LightingManager+ShadowModeType, Lotec.Lighting" name="shadow-mode-enum" class="setting-field">
+                <ui:EnumField label="Shadow Mode" value="SDF" type="Lotec.Lighting.LightingManager+ShadowSource, Lotec.Lighting" name="shadow-mode-enum" class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="ShadowMode" binding-mode="TwoWay"/>
                     </Bindings>

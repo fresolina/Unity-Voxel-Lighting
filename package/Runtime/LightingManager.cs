@@ -16,31 +16,32 @@ namespace Lotec.Lighting {
         }
     }
 
+    // Run before GiFieldUpdater (default order 0): the manager collects the local lights and
+    // publishes the shared LocalLightData each frame, which GI then reads for its compute solve.
+    [DefaultExecutionOrder(-100)]
     [ExecuteInEditMode]
-    [RequireComponent(typeof(GiFieldUpdater))]
     public class LightingManager : MonoBehaviour {
         public static LightingManager Instance { get; private set; }
 
-        // Keep in sync with MAX_POINT_LIGHTS and MAX_SPOT_LIGHTS in VoxelGiUpdate.compute.
-        internal const int MaxPointLights = 4;
-        internal const int MaxSpotLights = 4;
-        public enum ShadowModeType { SDF = 0, BitmaskPoint = 1, Bitmask8Tap = 4, OcclusionField = 5 }
+        /// <summary>Runtime shadow-source selector (for UI). Derived from, and applied to, the
+        /// binder components on the active volume - it is not serialized; the binders are the
+        /// source of truth. Selecting a source whose binder is absent falls back to SDF.</summary>
+        public enum ShadowSource { SDF, BitmaskPoint, Bitmask8Tap, OcclusionField }
 
         [Header("Source")]
-        [SerializeField] LightingVolume _volume;
+        [SerializeField] VoxelVolume _volume;
         [Tooltip("Automatically activate the volume closest to the main camera.")]
         [SerializeField] bool _autoSwitchToClosestVolume;
-        [SerializeField] GiFieldUpdater _giUpdater;
 
-        readonly List<LightingVolume> _registeredVolumes = new List<LightingVolume>();
-        LightingVolume _activeVolume;
+        readonly List<VoxelVolume> _registeredVolumes = new List<VoxelVolume>();
+        VoxelVolume _activeVolume;
+        readonly LocalLightData _localLights = new LocalLightData();
 
         [Header("Additional Lights")]
         [Tooltip("Extra runtime GI lights. The first 4 supported point lights and the first 4 supported spot lights are injected.")]
         [SerializeField] List<Light> _additionalLights = new List<Light>();
 
         [Header("Shadows")]
-        [SerializeField] ShadowModeType _shadowMode = ShadowModeType.SDF;
         [SerializeField] SdfShadowConfig _sdfShadow = new SdfShadowConfig();
 
         [Header("Ambient Occlusion")]
@@ -48,58 +49,46 @@ namespace Lotec.Lighting {
 
         [SerializeField] bool _updateInEditor = true;
 
-        public ShadowModeType ShadowMode {
-            get => _shadowMode;
-            set {
-                if (_shadowMode != value) {
-                    _shadowMode = value;
-                    ApplyShadowModeKeywords();
-                }
-            }
-        }
         public SdfShadowConfig SdfShadow => _sdfShadow;
-        /// <summary>The currently active volume. Returns the runtime override if set, otherwise the serialized default.</summary>
-        public LightingVolume Volume => _activeVolume != null ? _activeVolume : _volume;
-        public GiFieldUpdater GiUpdater => _giUpdater;
-        /// <summary>All registered volumes in the scene.</summary>
-        public IReadOnlyList<LightingVolume> Volumes => _registeredVolumes;
-        public IReadOnlyList<Light> AdditionalLights => _additionalLights;
-        public GiFieldUpdater.LightingMethod LightingMethod => _giUpdater != null ? _giUpdater.GiLightingMethod : GiFieldUpdater.LightingMethod.PathTracing;
 
-        void OnValidate() {
-            EnsureFieldsAssigned();
+        /// <summary>The active shadow source, read from / written to the volume's binder components.</summary>
+        public ShadowSource ShadowMode {
+            get {
+                if (HasActiveOcclusionFieldBinder()) return ShadowSource.OcclusionField;
+                if (HasActiveBitmaskBinder(out VoxelOcclusionBitmask bitmask))
+                    return bitmask.sampling == VoxelOcclusionBitmask.Sampling.Point ? ShadowSource.BitmaskPoint : ShadowSource.Bitmask8Tap;
+                return ShadowSource.SDF;
+            }
+            set => SetShadowMode(value);
         }
+        /// <summary>The currently active volume. Returns the runtime override if set, otherwise the serialized default.</summary>
+        public VoxelVolume Volume => _activeVolume != null ? _activeVolume : _volume;
+        /// <summary>All registered volumes in the scene.</summary>
+        public IReadOnlyList<VoxelVolume> Volumes => _registeredVolumes;
+        public IReadOnlyList<Light> AdditionalLights => _additionalLights;
+        /// <summary>The shared packed light data, collected once per frame for both fragment
+        /// direct lighting (globals) and the GI compute solve.</summary>
+        public LocalLightData LocalLights => _localLights;
 
         /// <summary>
-        /// Switch the active lighting volume at runtime. Pass null to revert to the serialized default.
-        /// Releases GI buffers and resets lighting history for a clean transition.
+        /// Switch the active lighting volume at runtime. Pass null to revert to the serialized
+        /// default. Each volume's own GI/binder components react to the active-volume change.
         /// </summary>
-        public void SetActiveVolume(LightingVolume volume) {
+        public void SetActiveVolume(VoxelVolume volume) {
             if (_activeVolume == volume) return;
             _activeVolume = volume;
-            EnsureFieldsAssigned();
             ApplyShaderGlobals();
         }
 
-        internal void RegisterVolume(LightingVolume volume) {
+        internal void RegisterVolume(VoxelVolume volume) {
             if (volume != null && !_registeredVolumes.Contains(volume))
                 _registeredVolumes.Add(volume);
         }
 
-        internal void UnregisterVolume(LightingVolume volume) {
+        internal void UnregisterVolume(VoxelVolume volume) {
             _registeredVolumes.Remove(volume);
             if (_activeVolume == volume)
                 _activeVolume = null;
-        }
-
-        public bool ToggleLightingMethod() {
-            EnsureFieldsAssigned();
-            if (_giUpdater == null) {
-                return false;
-            }
-
-            _giUpdater.ToggleLightingMethod();
-            return true;
         }
 
         void Awake() {
@@ -107,22 +96,28 @@ namespace Lotec.Lighting {
         }
 
         void OnEnable() {
-            EnsureFieldsAssigned();
             ApplyShaderGlobals();
         }
 
         private void ApplyShaderGlobals() {
             ApplyShadowModeKeywords();
             if (Volume != null) {
+                // The active volume owns and publishes its core globals (bounds, voxel grid,
+                // SDF texture); the manager just drives it for the active volume.
                 Volume.ApplyShaderGlobals();
                 _sdfShadow.ApplyShaderGlobals(Volume.VoxelSize);
             }
             _sdfAo.ApplyShaderGlobals();
+
+            // Collect the local lights once per frame and publish them as globals for
+            // fragment-shader direct lighting (works without a GiFieldUpdater present). The
+            // GI updater reuses this same packed data for the compute solve (via LocalLights).
+            _localLights.Collect(_additionalLights);
+            _localLights.ApplyGlobals();
         }
 
         // Update is called once per frame
         void Update() {
-            EnsureFieldsAssigned();
             if (_autoSwitchToClosestVolume) {
                 SwitchToClosestVolume();
             }
@@ -131,32 +126,16 @@ namespace Lotec.Lighting {
             }
         }
 
-        void EnsureFieldsAssigned() {
-            if (_giUpdater == null) {
-                _giUpdater = GetComponent<GiFieldUpdater>();
-                if (_giUpdater == null) return;
-            }
-
-            if (_giUpdater.Volume != Volume) {
-                _giUpdater.Volume = Volume;
-            }
-#if UNITY_EDITOR
-            if (!Application.isPlaying) {
-                _giUpdater.Volume = Volume;
-            }
-#endif
-        }
-
         void SwitchToClosestVolume() {
             Camera cam = Camera.main;
             if (cam == null || _registeredVolumes.Count == 0) return;
 
             Vector3 camPos = cam.transform.position;
-            LightingVolume closest = null;
+            VoxelVolume closest = null;
             float closestDist = float.MaxValue;
 
             for (int i = 0; i < _registeredVolumes.Count; i++) {
-                LightingVolume vol = _registeredVolumes[i];
+                VoxelVolume vol = _registeredVolumes[i];
                 if (vol == null || vol.sdfHiresTexture == null) continue;
 
                 float dist = vol.Bounds.SqrDistance(camPos);
@@ -170,33 +149,67 @@ namespace Lotec.Lighting {
                 SetActiveVolume(closest);
         }
 
-        void ApplyShadowModeKeywords() {
-            switch (_shadowMode) {
-                case ShadowModeType.SDF:
-                    Shader.EnableKeyword("SDF_ONLY");
-                    Shader.DisableKeyword("BITMASK_POINT");
-                    Shader.DisableKeyword("BITMASK_8TAP");
-                    Shader.DisableKeyword("OCC_FIELD");
-                    break;
-                case ShadowModeType.BitmaskPoint:
-                    Shader.DisableKeyword("SDF_ONLY");
-                    Shader.EnableKeyword("BITMASK_POINT");
-                    Shader.DisableKeyword("BITMASK_8TAP");
-                    Shader.DisableKeyword("OCC_FIELD");
-                    break;
-                case ShadowModeType.Bitmask8Tap:
-                    Shader.DisableKeyword("SDF_ONLY");
-                    Shader.DisableKeyword("BITMASK_POINT");
-                    Shader.EnableKeyword("BITMASK_8TAP");
-                    Shader.DisableKeyword("OCC_FIELD");
-                    break;
-                case ShadowModeType.OcclusionField:
-                    Shader.DisableKeyword("SDF_ONLY");
-                    Shader.DisableKeyword("BITMASK_POINT");
-                    Shader.DisableKeyword("BITMASK_8TAP");
-                    Shader.EnableKeyword("OCC_FIELD");
-                    break;
+        // An enabled VoxelOcclusionField binder with baked data on the active volume drives
+        // the OCC_FIELD path (it publishes the field + bounds, no SDF needed at runtime).
+        bool HasActiveOcclusionFieldBinder() {
+            return Volume != null
+                && Volume.TryGetComponent(out VoxelOcclusionField binder)
+                && binder.enabled
+                && binder.HasData;
+        }
+
+        bool HasActiveBitmaskBinder(out VoxelOcclusionBitmask binder) {
+            binder = null;
+            return Volume != null
+                && Volume.TryGetComponent(out binder)
+                && binder.enabled
+                && binder.HasData;
+        }
+
+        // Switch the shadow source at runtime by toggling the binder components on the active
+        // volume. A source whose binder is absent (or has no baked data) falls back to SDF.
+        void SetShadowMode(ShadowSource source) {
+            VoxelVolume volume = Volume;
+            if (volume == null) return;
+
+            bool wantOcc = source == ShadowSource.OcclusionField;
+            bool wantBitmask = source == ShadowSource.BitmaskPoint || source == ShadowSource.Bitmask8Tap;
+
+            if (volume.TryGetComponent(out VoxelOcclusionField occ))
+                occ.enabled = wantOcc;
+            if (volume.TryGetComponent(out VoxelOcclusionBitmask bitmask)) {
+                if (wantBitmask)
+                    bitmask.sampling = source == ShadowSource.BitmaskPoint
+                        ? VoxelOcclusionBitmask.Sampling.Point
+                        : VoxelOcclusionBitmask.Sampling.TrilinearEightTap;
+                bitmask.enabled = wantBitmask;
             }
+            ApplyShadowModeKeywords();
+        }
+
+        // The shadow source is selected by which binder is present + enabled on the active
+        // volume (presence = intent). Sources are mutually exclusive (occlusion field wins);
+        // with no shadow binder, the default SDF path is used.
+        void ApplyShadowModeKeywords() {
+            if (HasActiveOcclusionFieldBinder()) {
+                Shader.DisableKeyword("SDF_ONLY");
+                Shader.DisableKeyword("BITMASK_POINT");
+                Shader.DisableKeyword("BITMASK_8TAP");
+                Shader.EnableKeyword("OCC_FIELD");
+                return;
+            }
+            if (HasActiveBitmaskBinder(out VoxelOcclusionBitmask bitmask)) {
+                Shader.DisableKeyword("SDF_ONLY");
+                Shader.DisableKeyword("OCC_FIELD");
+                bool point = bitmask.sampling == VoxelOcclusionBitmask.Sampling.Point;
+                if (point) { Shader.EnableKeyword("BITMASK_POINT"); Shader.DisableKeyword("BITMASK_8TAP"); } else { Shader.DisableKeyword("BITMASK_POINT"); Shader.EnableKeyword("BITMASK_8TAP"); }
+                return;
+            }
+            // Default: SDF.
+            Shader.EnableKeyword("SDF_ONLY");
+            Shader.DisableKeyword("BITMASK_POINT");
+            Shader.DisableKeyword("BITMASK_8TAP");
+            Shader.DisableKeyword("OCC_FIELD");
         }
 
     }

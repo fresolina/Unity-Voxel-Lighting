@@ -1,12 +1,12 @@
 // VoxelGI.hlsl
 
-#include "Volume.hlsl"
+#include "VoxelGiField.hlsl"
 
 // Bind these globals from C# script (Shader.SetGlobalTexture, etc.)
 Texture3D<float4> _IrradianceFieldFinal; 
 SamplerState sampler_IrradianceFieldFinal; // Unity binds this automatically if named matches texture
 
-float3 _RadianceFieldVoxelSize; // meters per voxel
+// _RadianceFieldVoxelSize, _SdfLowres, and SampleSDF come from VoxelGiField.hlsl above.
 
 // Main Sampling Function
 float3 SampleVoxelGI(float3 worldPos, float3 normal)
@@ -20,7 +20,7 @@ float3 SampleVoxelGI(float3 worldPos, float3 normal)
     // the wall reads as half-bright at best, fully black at worst.
     //
     // Pushing the sample point along the surface normal by 0.5 * voxelSize is
-    // the principled minimum for this grid. LightingVolume expands the baked
+    // the principled minimum for this grid. VoxelVolume expands the baked
     // bounds so the SDF / GI voxels stay cubic, so the scalar voxel edge length
     // is enough here. Using the diagonal would overshoot and pull light from the
     // next cell, increasing bleed.
@@ -50,7 +50,7 @@ float3 SampleVoxelGI(float3 worldPos, float3 normal)
     float offset = max(0.05 * voxel, min(desiredOffset, sdfAtProbe));
     float3 samplePos = worldPos + unitNormal * offset;
 
-    // Normalize position to [0,1] for texture sampling. Assumes the volume is axis-aligned and starts at _VolumePosition.
+    // Normalize position to [0,1] for texture sampling. Assumes the volume is axis-aligned and starts at _VoxelVolumeBoundsMin.
     float3 uvw = WorldToVoxelUV(samplePos);
 
     if (any(uvw < 0) || any(uvw > 1))
