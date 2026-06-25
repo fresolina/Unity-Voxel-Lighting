@@ -24,7 +24,7 @@ Static objects can cast shadows on dynamic objects. Reacts in realtime to lighti
 Dynamic objects can only receive shadows.
 
 3 modes:
-* SDF Shadows: (Accuracy) Ray marching from every pixel. Always used for additional lights.
+* SDF Shadows: (Accuracy) Ray marching from every pixel. Always used for local lights.
 * Occlusion direction field (1bit): (Performance) 8-64 directions in one texture, hard blocky voxel shadows.
 * Occlusion direction field (8bit): (Performance + Accuracy) 4 directions per texture, interpolated smoother voxel shadows. Supports 256 directions (64 textures).
 
