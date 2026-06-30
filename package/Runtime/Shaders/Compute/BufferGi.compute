@@ -1,0 +1,342 @@
+// Buffer-GI compute: the textureless, cache-resident voxel GI solve.
+//   CSClear     - zero the dynamic fields.
+//   CSInject    - per solid voxel: outgoing radiance = emissive + albedo*(direct + bounce).
+//   CSGather    - per air voxel: 1 ray/frame DDA gather + in-place temporal EMA (resolve fused).
+//   CSBlur      - occupancy-gated spatial blur into _IrradianceBlur (hides the 1-ray/frame shimmer
+//                 the temporal EMA leaves behind); the fragment read samples the blurred buffer.
+// Occupancy/albedo (_Material) is voxelized separately by BufferGiVoxelize.shader (GPU raster).
+// Everything else (visibility, occupancy) reads the flat _Material buffer - no SDF, no textures.
+#pragma kernel CSClear
+#pragma kernel CSInject
+#pragma kernel CSGather
+#pragma kernel CSBlur
+
+#define MAX_POINT_LIGHTS 4
+#define MAX_SPOT_LIGHTS 4
+
+#include "../Includes/BufferGiField.hlsl"
+#include "../Includes/Math.hlsl"
+
+// --- Fields ---
+RWStructuredBuffer<uint2> _Radiance;    // outgoing radiance (fp16x3), stored in solid voxels
+RWStructuredBuffer<uint2> _Irradiance;  // accumulated incoming light (rgb) + sample count (w)
+RWStructuredBuffer<uint2> _IrradianceBlur; // spatially blurred irradiance, sampled by the fragment read
+StructuredBuffer<uint>    _Material;      // occupancy/material (voxelized by BufferGiVoxelize.shader)
+
+// --- Solve uniforms ---
+uint  _FrameCount;
+uint  _RaysPerFrame;
+uint  _MaxSamples;
+uint  _RaymarchMaxSteps;
+float _GiFireflyClamp;
+float3 _DirectLightDir;   // toward the light
+float4 _DirectLightColor;
+// Environment lighting as L2 SH from Unity's ambient probe (which already reflects the Lighting
+// window's Environment Source = Skybox / Gradient / Color). Evaluated per escaped-ray direction.
+// Packed like Unity's unity_SH* / ShadeSH9.
+float4 _EnvShAr; float4 _EnvShAg; float4 _EnvShAb; // L0 + L1
+float4 _EnvShBr; float4 _EnvShBg; float4 _EnvShBb; // L2 (xy, yz, zz*3, zx)
+float4 _EnvShC;                                    // L2 (x^2 - y^2), per channel
+float3 _AmbientFloor; // constant indirect fill so shadowed/enclosed air is never pure black
+uint   _PointLightCount;
+float4 _PointLightPositionRange[MAX_POINT_LIGHTS];
+float4 _PointLightColor[MAX_POINT_LIGHTS];
+uint   _SpotLightCount;
+float4 _SpotLightPositionRange[MAX_SPOT_LIGHTS];
+float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
+float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
+
+// Worst-case ray reach: the volume's world-space diagonal.
+#define BGI_MAX_RAY_DIST (length(_BgiGridSize))
+
+// Procedural stochastic sample (replaces the blue-noise texture, keeps the system textureless):
+// per-voxel spatial decorrelation via a hash, animated over frames by the R2 low-discrepancy
+// sequence (Cranley-Patterson rotation) so each voxel's sequence converges low-discrepancy.
+float2 GiSampleNoise(uint3 id, uint frame, uint salt)
+{
+    uint seed = (id.x * 73856093u) ^ (id.y * 19349663u) ^ (id.z * 83492791u) ^ (salt * 2654435761u);
+    float2 base = float2(HashTo01(seed), HashTo01(seed ^ 0x9e3779b9u));
+    float2 r2 = frac(float(frame) * float2(0.7548776662, 0.5698402909));
+    return frac(base + r2);
+}
+
+// ----------------------------------------------------------
+// 3D-DDA (Amanatides-Woo) through the occupancy buffer. The world-space ray direction is mapped
+// into grid space (divide by per-axis voxel size) so the cell walk is correct for non-cubic
+// voxels; because the world dir is unit length the marched t comes out in WORLD units, so
+// maxDist is a world distance (light distance / volume diagonal). Steps off the origin cell first
+// (so a voxel never self-occludes), stops at the first solid cell or past maxDist. Returns 1 on a
+// solid hit (hitCell valid), else 0.
+// ----------------------------------------------------------
+int MarchOccupancy(int3 start, float3 worldDir, float maxDist, out int3 hitCell)
+{
+    hitCell = start;
+    int3 cell = start;
+    float3 d = worldDir / max(_BgiVoxelSize, 1e-6); // world dir -> grid-space dir
+    int3 step = int3(d.x >= 0 ? 1 : -1, d.y >= 0 ? 1 : -1, d.z >= 0 ? 1 : -1);
+    float3 inv = 1.0 / max(abs(d), 1e-6);
+    float3 tMax = inv * 0.5;   // world distance from cell center to the first boundary on each axis
+    float3 tDelta = inv;       // world distance to cross one full voxel on each axis
+
+    uint maxSteps = max(_RaymarchMaxSteps, 1u);
+    [loop]
+    for (uint s = 0u; s < maxSteps; s++) {
+        float tCross;
+        if (tMax.x < tMax.y) {
+            if (tMax.x < tMax.z) { tCross = tMax.x; cell.x += step.x; tMax.x += tDelta.x; }
+            else                 { tCross = tMax.z; cell.z += step.z; tMax.z += tDelta.z; }
+        } else {
+            if (tMax.y < tMax.z) { tCross = tMax.y; cell.y += step.y; tMax.y += tDelta.y; }
+            else                 { tCross = tMax.z; cell.z += step.z; tMax.z += tDelta.z; }
+        }
+        if (tCross > maxDist) return 0;         // reached the light / max range before a hit
+        if (!BgiInBounds(cell)) return 0;       // escaped the grid -> sky/miss
+        if (BgiIsSolid(_Material[BgiIndex((uint3)cell)])) { hitCell = cell; return 1; }
+    }
+    return 0;
+}
+
+// Surface normal from the occupancy gradient: sum the directions toward empty neighbors.
+// Out-of-grid neighbors count as empty (open). Interior voxels return up as a harmless default.
+float3 OccupancyNormal(int3 c)
+{
+    const int3 axes[6] = {
+        int3(1,0,0), int3(-1,0,0), int3(0,1,0), int3(0,-1,0), int3(0,0,1), int3(0,0,-1)
+    };
+    float3 n = 0;
+    [unroll]
+    for (int i = 0; i < 6; i++) {
+        int3 nb = c + axes[i];
+        bool solid = BgiInBounds(nb) && BgiIsSolid(_Material[BgiIndex((uint3)nb)]);
+        if (!solid) n += (float3)axes[i];
+    }
+    return (dot(n, n) > 1e-6) ? normalize(n) : float3(0, 1, 0);
+}
+
+// Evaluate the environment ambient-probe SH in a direction (matches Unity's ShadeSH9).
+float3 EvalEnvSH(float3 n)
+{
+    float4 vA = float4(n, 1.0);
+    float3 l = float3(dot(_EnvShAr, vA), dot(_EnvShAg, vA), dot(_EnvShAb, vA)); // L0 + L1
+    float4 vB = n.xyzz * n.yzzx;
+    l += float3(dot(_EnvShBr, vB), dot(_EnvShBg, vB), dot(_EnvShBb, vB));       // L2 (4 of 5)
+    l += _EnvShC.rgb * (n.x * n.x - n.y * n.y);                                 // L2 (5th)
+    return max(0.0, l);
+}
+
+// Environment radiance for a ray that escaped to "sky": the ambient-probe SH in that direction plus
+// a broad sun lobe (the directional sun is separate from the low-frequency probe).
+float3 GetIndirectSkyLight(float3 rayDir)
+{
+    float sunLobe = saturate(dot(rayDir, _DirectLightDir));
+    return EvalEnvSH(rayDir) + _DirectLightColor.rgb * (sunLobe * sunLobe);
+}
+
+float3 ClampFirefly(float3 color, float maxLuminance)
+{
+    // Single return point (an early return lowers to a return-slot variable that the WebGPU
+    // validator flags as possibly uninitialized).
+    float luma = GetRec709Luminance(color);
+    float scale = (maxLuminance > 0.0 && luma > maxLuminance) ? (maxLuminance / max(luma, 1e-6)) : 1.0;
+    return color * scale;
+}
+
+// Keep the fields finite and non-negative. (c < 1e8) is false for both +Inf and NaN, so they map
+// to 0 without isnan() - which fast-math / d3d11 /Gis may strip, defeating the guard. This stops a
+// poisoned voxel from spreading through the bounce + blur and rendering black; it recovers next frame.
+float3 SanitizeColor(float3 c)
+{
+    return (c < 1e8) ? clamp(c, 0.0, 60000.0) : float3(0.0, 0.0, 0.0);
+}
+
+float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
+{
+    float distanceAtten = rcp(max(distSq, 0.01));
+    float rangeFade = saturate(1.0 - (distSq / max(rangeSq, 1e-6)));
+    return distanceAtten * rangeFade * rangeFade;
+}
+
+// Direct lighting at a surface voxel, with DDA shadow rays and an N.L cosine term.
+float3 GetDirectLight(int3 cell, float3 normal)
+{
+    float3 voxelCenter = BgiVoxelCenter((uint3)cell);
+    int3 hit;
+
+    // Sun
+    float3 total = 0;
+    float ndlSun = saturate(dot(normal, _DirectLightDir));
+    if (ndlSun > 0.0) {
+        float vis = MarchOccupancy(cell, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0 : 1.0;
+        total += _DirectLightColor.rgb * (ndlSun * vis);
+    }
+
+    // Point lights
+    uint pc = min(_PointLightCount, (uint)MAX_POINT_LIGHTS);
+    [loop]
+    for (uint p = 0u; p < pc; p++) {
+        float4 posRange = _PointLightPositionRange[p];
+        float3 toLight = posRange.xyz - voxelCenter;
+        float distSq = dot(toLight, toLight);
+        float rangeSq = posRange.w * posRange.w;
+        if (distSq <= 1e-6 || distSq >= rangeSq) continue;
+        float invD = rsqrt(distSq);
+        float3 L = toLight * invD;
+        float ndl = saturate(dot(normal, L));
+        if (ndl <= 0.0) continue;
+        float worldDist = distSq * invD; // = sqrt(distSq), distance to the light
+        float vis = MarchOccupancy(cell, L, worldDist, hit) ? 0.0 : 1.0;
+        total += _PointLightColor[p].rgb * (ndl * vis * GetLocalLightRangeAttenuation(distSq, rangeSq));
+    }
+
+    // Spot lights
+    uint sc = min(_SpotLightCount, (uint)MAX_SPOT_LIGHTS);
+    [loop]
+    for (uint sIdx = 0u; sIdx < sc; sIdx++) {
+        float4 posRange = _SpotLightPositionRange[sIdx];
+        float3 toLight = posRange.xyz - voxelCenter;
+        float distSq = dot(toLight, toLight);
+        float rangeSq = posRange.w * posRange.w;
+        if (distSq <= 1e-6 || distSq >= rangeSq) continue;
+        float invD = rsqrt(distSq);
+        float3 L = toLight * invD;
+        float ndl = saturate(dot(normal, L));
+        if (ndl <= 0.0) continue;
+        float4 dirAngleScale = _SpotLightDirectionAngleScale[sIdx];
+        float4 colAngleOffset = _SpotLightColorAngleOffset[sIdx];
+        float cone = saturate(dot(-L, dirAngleScale.xyz) * dirAngleScale.w + colAngleOffset.a);
+        if (cone <= 0.0) continue;
+        float worldDist = distSq * invD; // = sqrt(distSq), distance to the light
+        float vis = MarchOccupancy(cell, L, worldDist, hit) ? 0.0 : 1.0;
+        total += colAngleOffset.rgb * (ndl * vis * (cone * cone) * GetLocalLightRangeAttenuation(distSq, rangeSq));
+    }
+
+    return total;
+}
+
+[numthreads(64, 1, 1)]
+void CSClear(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+    _Radiance[i] = uint2(0u, 0u);
+    _Irradiance[i] = uint2(0u, 0u);
+}
+
+// ----------------------------------------------------------
+// INJECT: outgoing radiance for solid voxels.
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSInject(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+
+    uint mat = _Material[i];
+    if (!BgiIsSolid(mat)) { _Radiance[i] = uint2(0u, 0u); return; }
+
+    int3 cell = (int3)BgiCoord(i);
+    float3 normal = OccupancyNormal(cell);
+    float3 albedo = BgiAlbedo(mat);
+    float emissionIntensity = DecodeEmissionIntensityFrom8Bit(BgiEmission8(mat));
+    float3 emissive = albedo * emissionIntensity;
+
+    // Bounce arriving at this surface = irradiance from the adjacent air voxel along the normal.
+    int3 airCell = cell + int3(round(normal));
+    float3 bounce = 0;
+    if (BgiInBounds(airCell) && !BgiIsSolid(_Material[BgiIndex((uint3)airCell)])) {
+        float w;
+        BgiUnpackRgb(_Irradiance[BgiIndex((uint3)airCell)], bounce, w);
+    }
+
+    // Clamp reflectance below 1: with albedo == 1 the bounce feedback is a lossless cavity that
+    // diverges to Inf/NaN ("black plague"). Emission is unaffected (added separately).
+    float3 safeAlbedo = min(albedo, 0.95);
+    float3 direct = GetDirectLight(cell, normal);
+    float3 outgoing = SanitizeColor(emissive + safeAlbedo * (direct + bounce));
+    _Radiance[i] = BgiPackRgb(outgoing, 1.0);
+}
+
+// ----------------------------------------------------------
+// GATHER: 1 ray/frame for air voxels, with the temporal resolve fused in (in-place EMA).
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSGather(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+
+    // Irradiance only lives in air voxels; solid voxels carry radiance instead.
+    if (BgiIsSolid(_Material[i])) { _Irradiance[i] = uint2(0u, 0u); return; }
+
+    uint3 c = BgiCoord(i);
+    int3 cell = (int3)c;
+
+    float3 incoming = 0;
+    uint rayCount = max(_RaysPerFrame, 1u);
+    [loop]
+    for (uint r = 0u; r < rayCount; r++) {
+        float2 noise = GiSampleNoise(c, _FrameCount, r);
+        float3 dir = GetRandomDirectionFromNoise2(noise); // omnidirectional irradiance probe
+        int3 hit;
+        if (MarchOccupancy(cell, dir, BGI_MAX_RAY_DIST, hit)) {
+            // FRONT hit: see the surface's room-lit radiance. BACK hit: the ray is heading into
+            // geometry, so contribute the ambient-floor "interior color" instead. Voxels enclosed
+            // inside geometry (all rays hit back faces) therefore converge to _AmbientFloor, and
+            // rays tunnelling through a thin shell into a far wall's back don't leak room light.
+            float3 hitNormal = OccupancyNormal(hit);
+            if (dot(dir, hitNormal) < 0.0) {
+                float3 rad; float w;
+                BgiUnpackRgb(_Radiance[BgiIndex((uint3)hit)], rad, w);
+                incoming += ClampFirefly(rad, _GiFireflyClamp);
+            } else {
+                incoming += _AmbientFloor;
+            }
+        } else {
+            incoming += GetIndirectSkyLight(dir);
+        }
+    }
+    incoming *= rcp((float)rayCount);
+
+    // Temporal EMA, progressive average floored at 1/maxSamples so it keeps adapting.
+    float3 oldC; float oldN;
+    BgiUnpackRgb(_Irradiance[i], oldC, oldN);
+    float n = min(oldN + 1.0, (float)max(_MaxSamples, 1u));
+    float weight = max(rcp(n), rcp((float)max(_MaxSamples, 1u)));
+    float3 newC = SanitizeColor(lerp(oldC, incoming, weight));
+    _Irradiance[i] = BgiPackRgb(newC, n);
+}
+
+// ----------------------------------------------------------
+// BLUR: occupancy-gated box blur of the air-voxel irradiance into _IrradianceBlur (what the
+// fragment read samples). Gating skips solid neighbors so dark/zero solid voxels and across-wall
+// values can't bleed in. Averaging decorrelated neighbours hides the 1-ray/frame temporal shimmer.
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSBlur(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+
+    if (BgiIsSolid(_Material[i])) { _IrradianceBlur[i] = uint2(0u, 0u); return; }
+
+    int3 c = (int3)BgiCoord(i);
+    float3 sum; float count;
+    BgiUnpackRgb(_Irradiance[i], sum, count); // center
+    float wsum = 1.0;
+
+    const int3 axes[6] = {
+        int3(1,0,0), int3(-1,0,0), int3(0,1,0), int3(0,-1,0), int3(0,0,1), int3(0,0,-1)
+    };
+    [unroll]
+    for (int k = 0; k < 6; k++) {
+        int3 nb = c + axes[k];
+        if (!BgiInBounds(nb)) continue;
+        if (BgiIsSolid(_Material[BgiIndex((uint3)nb)])) continue; // gate: don't blur across surfaces
+        float3 nc; float nn;
+        BgiUnpackRgb(_Irradiance[BgiIndex((uint3)nb)], nc, nn);
+        sum += nc;
+        wsum += 1.0;
+    }
+
+    _IrradianceBlur[i] = BgiPackRgb(sum / wsum, count);
+}
