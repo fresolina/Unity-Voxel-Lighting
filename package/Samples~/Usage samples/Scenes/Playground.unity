@@ -2335,7 +2335,7 @@ Light:
   m_Lightmapping: 4
   m_LightShadowCasterMode: 0
   m_AreaSize: {x: 1, y: 1}
-  m_BounceIntensity: 0.54
+  m_BounceIntensity: 1
   m_ColorTemperature: 6570
   m_UseColorTemperature: 0
   m_BoundingSphereOverride: {x: 0, y: 0, z: 0, w: 0}
@@ -2796,8 +2796,8 @@ MonoBehaviour:
   _root: {fileID: 896086981}
   _maxResolution: 128
   _autoRegisterWithManager: 0
-  sdfHiresTexture: {fileID: 11700000, guid: 298fdea8f151aae4796232493ff3bf0f, type: 2}
-  sdfLowresTexture: {fileID: 11700000, guid: 57b8fde58b1ab4747b6ad429f7708ba7, type: 2}
+  sdfHiresTexture: {fileID: 0}
+  sdfLowresTexture: {fileID: 0}
   _trimmedMaxResolution: {x: 128, y: 50, z: 83}
   _bounds:
     m_Center: {x: -2.8700004, y: 1.7320002, z: -0.26000023}
@@ -2832,7 +2832,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionField
   occlusionFieldTextures:
-  - {fileID: 11700000, guid: b91f21babf3dc2949b128d79f9b2c3d2, type: 2}
+  - {fileID: 0}
   occlusionFieldDirections:
   - {x: -0, y: 0.9848078, z: -0.17364824}
 --- !u!1 &941273792
@@ -4113,7 +4113,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1437948840}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 6653e61db895d8a44bd1f642f9e2b3d3, type: 3}
   m_Name: 
@@ -4144,7 +4144,7 @@ MonoBehaviour:
   _maxSamples: 450
   _raysPerFrame: 1
   _giFireflyClamp: 3
-  _ambientFloor: {r: 0.49685526, g: 0.49685526, b: 0.49685526, a: 1}
+  _ambientFloor: {r: 0.16352195, g: 0.16352195, b: 0.16352195, a: 1}
   _spatialBlur: 1
   _raymarchMaxSteps: 96
   _coarseVolume: {fileID: 896086980}
