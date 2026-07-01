@@ -82,6 +82,10 @@ namespace Lotec.Lighting {
         int _gatherKernel = -1;
         int _blurKernel = -1;
         int _solveFrames;
+        // Separate warm-up counter for the fine field: reset on a volume switch (while the coarse
+        // field + global confidence persist), so the read fades the new fine field in from coarse.
+        int _fineSolveFrames;
+        bool _resetFineField;
         bool _hasLoggedMissingReferences;
 
         public ComputeBuffer MaterialBuffer => _materialBuffer;
@@ -116,6 +120,7 @@ namespace Lotec.Lighting {
         static readonly int s_coarseOrigin = Shader.PropertyToID("_BgiCoarseOrigin");
         static readonly int s_coarseVoxelSize = Shader.PropertyToID("_BgiCoarseVoxelSize");
         static readonly int s_blendBand = Shader.PropertyToID("_BgiBlendBand");
+        static readonly int s_fineConfidence = Shader.PropertyToID("_BgiFineConfidence");
         static readonly int s_material = Shader.PropertyToID("_Material");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_raysPerFrame = Shader.PropertyToID("_RaysPerFrame");
@@ -189,9 +194,19 @@ namespace Lotec.Lighting {
         void Update() {
             VoxelVolume active = Manager != null ? Manager.Volume : null;
             if (active != _volume) {
+                // Switching between two live volumes: keep the buffers (fixed size) so the coarse
+                // field and the global cold-start confidence survive; just rebuild the fine field
+                // and let the read fade it in from the coarse field. A first assignment or a
+                // teardown (null) falls back to a full cold-start (re)init.
+                bool warmSwitch = _volume != null && active != null && _irradianceBuffer != null;
                 _volume = active;
-                ReleaseBuffers();
                 _hasLoggedMissingReferences = false;
+                if (warmSwitch) {
+                    _materialBaked = false;
+                    _resetFineField = true;
+                } else {
+                    ReleaseBuffers();
+                }
             }
             if (_volume == null || _computeShader == null) {
                 SetGiBufferKeyword(false);
@@ -211,6 +226,13 @@ namespace Lotec.Lighting {
             EnsureInitialized();
             if (!_materialBaked) {
                 Voxelize();
+            }
+            if (_resetFineField) {
+                // Clear only the fine slice (n=0) so it re-converges fast for the new bounds; the
+                // coarse slice is untouched. _BgiFineConfidence then ramps the fine field back in.
+                ClearField(FineField * VoxelCount);
+                _fineSolveFrames = 0;
+                _resetFineField = false;
             }
             DispatchSolve();
             SetGlobals();
@@ -233,6 +255,10 @@ namespace Lotec.Lighting {
             // we reach 100% only once the samples are complete. Ramps linearly over maxSamples.
             float confidence = Mathf.Clamp01(_solveFrames / (float)Mathf.Max(1, _maxSamples));
             Shader.SetGlobalFloat(s_confidence, confidence);
+            // Fine-field warm-up (reset on a volume switch): the read cross-fades the fine field in
+            // from the coarse field as this ramps 0->1, so a new active volume never resets to black.
+            float fineConfidence = Mathf.Clamp01(_fineSolveFrames / (float)Mathf.Max(1, _maxSamples));
+            Shader.SetGlobalFloat(s_fineConfidence, fineConfidence);
             // GI gain from the sun's Indirect Multiplier (Light.bounceIntensity) - the standard
             // Unity control for indirect strength, used instead of a custom field.
             Light sun = RenderSettings.sun;
@@ -281,13 +307,16 @@ namespace Lotec.Lighting {
         static int Groups => Mathf.CeilToInt(VoxelCount / 64f);
 
         void ClearDynamicFields() {
+            for (int f = 0; f < FieldCount; f++) ClearField(f * VoxelCount);
+        }
+
+        // Zero one field's radiance + irradiance slice (resets its temporal sample count to 0).
+        void ClearField(int fieldOffset) {
             if (_clearKernel < 0) return;
             _computeShader.SetBuffer(_clearKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_clearKernel, s_irradiance, _irradianceBuffer);
-            for (int f = 0; f < FieldCount; f++) {
-                _computeShader.SetInt(s_fieldOffset, f * VoxelCount);
-                _computeShader.Dispatch(_clearKernel, Groups, 1, 1);
-            }
+            _computeShader.SetInt(s_fieldOffset, fieldOffset);
+            _computeShader.Dispatch(_clearKernel, Groups, 1, 1);
         }
 
         // GPU 3-axis rasterization of the volume's mesh geometry into each field's material slice.
@@ -408,6 +437,7 @@ namespace Lotec.Lighting {
             }
 
             if (_solveFrames < _maxSamples) _solveFrames++;
+            if (_fineSolveFrames < _maxSamples) _fineSolveFrames++;
         }
 
         // Inject -> gather -> (optional) blur for one field's slice.
@@ -476,6 +506,8 @@ namespace Lotec.Lighting {
             _irradianceBlurBuffer = null;
             _materialBaked = false;
             _solveFrames = 0;
+            _fineSolveFrames = 0;
+            _resetFineField = false;
         }
     }
 }

@@ -19,6 +19,9 @@ float3 _BgiCoarseOrigin;
 float3 _BgiCoarseVoxelSize;
 // Blend band as a fraction of the fine box, over which fine cross-fades to coarse at its edges.
 float _BgiBlendBand;
+// Fine-field warm-up (0..1), reset on a volume switch. Scales the fine weight so a freshly
+// activated fine field fades in from the coarse field instead of resetting to black.
+float _BgiFineConfidence;
 
 // Cold-start confidence ramp (0..1) so the noisy single-ray warm-up frames stay hidden.
 float _BgiConfidence;
@@ -92,14 +95,17 @@ float3 SampleBufferGI(float3 worldPos, float3 normal)
     float3 fuv = (worldPos - _BgiGridOrigin) / max(_BgiGridSize, 1e-6);
     float3 edge = min(fuv, 1.0 - fuv);                 // distance to nearest face (<0 = outside)
     float fineW = saturate(min(edge.x, min(edge.y, edge.z)) / max(_BgiBlendBand, 1e-4));
+    // Also gate by the fine warm-up: right after a volume switch this is 0, so the fine box shows
+    // the coarse field, then fades to fine as it re-converges (no reset-to-black pop).
+    float fineWeight = fineW * _BgiFineConfidence;
 
     float3 result;
-    if (fineW >= 0.999) {
+    if (fineWeight >= 0.999) {
         result = fine;
     } else {
-        // Coarse field - the big far-GI volume.
+        // Coarse field - the big far-GI volume (also the fallback while the fine field warms up).
         float3 coarse = BgiSampleField(worldPos, normal, _BgiCoarseOrigin, _BgiCoarseVoxelSize, BGI_COARSE_OFFSET);
-        result = lerp(coarse, fine, fineW);
+        result = lerp(coarse, fine, fineWeight);
     }
 
     // Final safety net: guarantee finite, non-negative GI so the additive term can never darken a
