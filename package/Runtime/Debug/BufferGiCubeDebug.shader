@@ -28,7 +28,7 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             float3 _DbgGridDims;  // strided instance grid (gx,gy,gz); instanceCount = product
             float _DbgStride;
             float _DbgCubeFill;
-            float _DbgExposure;
+            float _DbgIntensity;
             float _DbgMinLum;
             float _DbgMode;        // 0 occupancy, 1 irradiance, 2 radiance
             float _DbgFieldOffset; // base index of the field slice being shown (0 fine, BGI_COUNT coarse)
@@ -106,7 +106,7 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                 } else {
                     float w;
                     BgiUnpackRgb(mode == 1u ? _DbgIrradiance[idx] : _DbgRadiance[idx], col, w);
-                    float lum = dot(col, float3(0.2126, 0.7152, 0.0722)) * _DbgExposure;
+                    float lum = dot(col, float3(0.2126, 0.7152, 0.0722)) * _DbgIntensity;
                     show = lum >= _DbgMinLum;
                 }
 
@@ -119,9 +119,9 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                 float3 n = kFaceNormal[vid / 6u];
                 float shade = 0.55 + 0.45 * saturate(dot(n, normalize(float3(0.4, 0.8, 0.3))));
 
-                // Occupancy shows raw albedo (exposure-independent so it can't blank out);
-                // the HDR irradiance/radiance modes scale by exposure.
-                float gain = (mode == 0u) ? 1.0 : _DbgExposure;
+                // Occupancy shows raw albedo (intensity-independent so it can't blank out);
+                // the HDR irradiance/radiance modes scale by intensity.
+                float gain = (mode == 0u) ? 1.0 : _DbgIntensity;
 
                 o.positionCS = TransformWorldToHClip(world);
                 o.color = col * gain * shade;

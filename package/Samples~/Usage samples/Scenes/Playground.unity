@@ -4113,19 +4113,19 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1437948840}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 6653e61db895d8a44bd1f642f9e2b3d3, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiCubeVisualizer
   _shader: {fileID: 4800000, guid: 2812d0b83a01c5f4a9ff6e4ecd95957c, type: 3}
-  mode: 0
+  mode: 1
   field: 1
   showWireframe: 1
   stride: 1
-  cubeFill: 0.864
-  exposure: 1
-  minLuminance: 0
+  cubeFill: 0.31
+  intensity: 1
+  minLuminance: 0.02
 --- !u!114 &1437948845
 MonoBehaviour:
   m_ObjectHideFlags: 0

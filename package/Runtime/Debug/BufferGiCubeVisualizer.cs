@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 
 namespace Lotec.Lighting {
     /// <summary>
@@ -26,7 +27,9 @@ namespace Lotec.Lighting {
         [Tooltip("Draw every Nth voxel along each axis (1 = all).")]
         [Min(1)] public int stride = 1;
         [Range(0.1f, 1f)] public float cubeFill = 0.85f;
-        [Min(0f)] public float exposure = 1f;
+        [Tooltip("Linear display multiplier for the irradiance/radiance modes (1 = neutral). " +
+                 "Occupancy mode ignores it.")]
+        [Min(0f)][FormerlySerializedAs("exposure")] public float intensity = 1f;
         [Min(0f)] public float minLuminance = 0.02f;
 
         Material _material;
@@ -41,7 +44,7 @@ namespace Lotec.Lighting {
         static readonly int s_gridDims = Shader.PropertyToID("_DbgGridDims");
         static readonly int s_stride = Shader.PropertyToID("_DbgStride");
         static readonly int s_cubeFill = Shader.PropertyToID("_DbgCubeFill");
-        static readonly int s_exposure = Shader.PropertyToID("_DbgExposure");
+        static readonly int s_intensity = Shader.PropertyToID("_DbgIntensity");
         static readonly int s_minLum = Shader.PropertyToID("_DbgMinLum");
         static readonly int s_mode = Shader.PropertyToID("_DbgMode");
         static readonly int s_fieldOffset = Shader.PropertyToID("_DbgFieldOffset");
@@ -89,7 +92,7 @@ namespace Lotec.Lighting {
             _material.SetVector(s_gridDims, new Vector4(g, g, g, 0f));
             _material.SetFloat(s_stride, s);
             _material.SetFloat(s_cubeFill, cubeFill);
-            _material.SetFloat(s_exposure, exposure);
+            _material.SetFloat(s_intensity, intensity);
             _material.SetFloat(s_minLum, minLuminance);
             _material.SetFloat(s_mode, (int)mode);
             _material.SetFloat(s_fieldOffset, fieldOffset);
