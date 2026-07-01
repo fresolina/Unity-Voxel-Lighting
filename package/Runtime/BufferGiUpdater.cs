@@ -46,6 +46,10 @@ namespace Lotec.Lighting {
                  "floors at 1/maxSamples, so the field keeps adapting to moving lights.")]
         [Min(1)][SerializeField] int _maxSamples = 90;
         [Min(1)][SerializeField] int _raysPerFrame = 1;
+        [Tooltip("Keep solving every frame even after the field converges. Off (recommended): the " +
+                 "solve idles once converged and only wakes when the sun changes or the scene is " +
+                 "re-baked, so a static scene costs no GI compute.")]
+        [SerializeField] bool _continuousGi;
         [Tooltip("Luminance ceiling for a single gathered bounce, to suppress emitter fireflies. " +
                  "0 disables.")]
         [Min(0f)][SerializeField] float _giFireflyClamp = 8f;
@@ -87,6 +91,12 @@ namespace Lotec.Lighting {
         int _fineSolveFrames;
         bool _resetFineField;
         bool _hasLoggedMissingReferences;
+        // Convergence gating: once converged the solve idles until the sun changes (or a settle
+        // window elapses). Local lights are intentionally excluded from the wake check for now.
+        int _transitionFramesRemaining;
+        Vector3 _prevSunDir;
+        Vector4 _prevSunColor;
+        const int SettleTimeConstants = 4; // EMA time constants to keep solving after a sun change
 
         public ComputeBuffer MaterialBuffer => _materialBuffer;
         public ComputeBuffer RadianceBuffer => _radianceBuffer;
@@ -96,6 +106,18 @@ namespace Lotec.Lighting {
         public Vector3 GridSize => _volume != null ? _volume.Bounds.size : Vector3.one;
         // Per-axis voxel size: the 32^3 grid stretches to fill the (possibly non-cubic) bounds.
         public Vector3 VoxelSize => GridSize / Grid;
+
+        // Gather rays per voxel per frame. Runtime-settable (e.g. from a debug UI); wakes the solver
+        // so a change takes effect even when the convergence gate has it idling.
+        public int RaysPerFrame {
+            get => _raysPerFrame;
+            set {
+                int v = Mathf.Max(1, value);
+                if (v == _raysPerFrame) return;
+                _raysPerFrame = v;
+                _transitionFramesRemaining = _maxSamples * SettleTimeConstants;
+            }
+        }
 
         // Coarse field: its own scene-covering VoxelVolume (32^3 grid, larger voxels). Falls back to
         // the fine bounds when unassigned so the read/visualizer degrade gracefully (empty slice -> 0).
@@ -187,8 +209,25 @@ namespace Lotec.Lighting {
         }
 
         void OnValidate() {
-            // A geometry/threshold change invalidates the bake; redo it on the next Update.
+            // A geometry/threshold change invalidates the bake; redo it on the next Update, and
+            // wake the (possibly idle) solver so the change actually re-settles into the field.
             _materialBaked = false;
+            _transitionFramesRemaining = _maxSamples * SettleTimeConstants;
+        }
+
+        // Wake the solver when the sun changes. Local lights are intentionally excluded (GI may drop
+        // them); add a local-light hash here if that changes. Sky/ambient changes come in via OnValidate.
+        bool HasSunChanged() {
+            Light sun = RenderSettings.sun;
+            Vector3 dir = sun != null ? -sun.transform.forward : Vector3.down;
+            Vector4 col = sun != null ? (Vector4)sun.color * sun.intensity : Vector4.zero;
+            return dir != _prevSunDir || col != _prevSunColor;
+        }
+
+        void StoreSunState() {
+            Light sun = RenderSettings.sun;
+            _prevSunDir = sun != null ? -sun.transform.forward : Vector3.down;
+            _prevSunColor = sun != null ? (Vector4)sun.color * sun.intensity : Vector4.zero;
         }
 
         void Update() {
@@ -234,7 +273,20 @@ namespace Lotec.Lighting {
                 _fineSolveFrames = 0;
                 _resetFineField = false;
             }
-            DispatchSolve();
+
+            // Gate the solve: run while still accumulating (cold start, or a fine-field warm-up after
+            // a volume switch), for a settle window after the sun changes, or always if _continuousGi.
+            // Otherwise idle so a static, converged scene costs no GI compute (matches GiFieldUpdater).
+            if (HasSunChanged()) {
+                _transitionFramesRemaining = _maxSamples * SettleTimeConstants;
+            }
+            bool converging = _solveFrames < _maxSamples || _fineSolveFrames < _maxSamples;
+            if (converging || _transitionFramesRemaining > 0 || _continuousGi) {
+                DispatchSolve();
+                if (_transitionFramesRemaining > 0) _transitionFramesRemaining--;
+            }
+            StoreSunState();
+
             SetGlobals();
             SetGiBufferKeyword(true);
         }
@@ -508,6 +560,7 @@ namespace Lotec.Lighting {
             _solveFrames = 0;
             _fineSolveFrames = 0;
             _resetFineField = false;
+            _transitionFramesRemaining = 0;
         }
     }
 }
