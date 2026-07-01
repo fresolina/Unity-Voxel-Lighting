@@ -91,7 +91,7 @@ int MarchOccupancy(int3 start, float3 worldDir, float maxDist, out int3 hitCell)
         }
         if (tCross > maxDist) return 0;         // reached the light / max range before a hit
         if (!BgiInBounds(cell)) return 0;       // escaped the grid -> sky/miss
-        if (BgiIsSolid(_Material[BgiIndex((uint3)cell)])) { hitCell = cell; return 1; }
+        if (BgiIsSolid(_Material[BgiSlot((uint3)cell)])) { hitCell = cell; return 1; }
     }
     return 0;
 }
@@ -107,7 +107,7 @@ float3 OccupancyNormal(int3 c)
     [unroll]
     for (int i = 0; i < 6; i++) {
         int3 nb = c + axes[i];
-        bool solid = BgiInBounds(nb) && BgiIsSolid(_Material[BgiIndex((uint3)nb)]);
+        bool solid = BgiInBounds(nb) && BgiIsSolid(_Material[BgiSlot((uint3)nb)]);
         if (!solid) n += (float3)axes[i];
     }
     return (dot(n, n) > 1e-6) ? normalize(n) : float3(0, 1, 0);
@@ -218,8 +218,8 @@ void CSClear(uint3 id : SV_DispatchThreadID)
 {
     uint i = id.x;
     if (i >= BGI_COUNT) return;
-    _Radiance[i] = uint2(0u, 0u);
-    _Irradiance[i] = uint2(0u, 0u);
+    _Radiance[_FieldOffset + i] = uint2(0u, 0u);
+    _Irradiance[_FieldOffset + i] = uint2(0u, 0u);
 }
 
 // ----------------------------------------------------------
@@ -231,8 +231,8 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     uint i = id.x;
     if (i >= BGI_COUNT) return;
 
-    uint mat = _Material[i];
-    if (!BgiIsSolid(mat)) { _Radiance[i] = uint2(0u, 0u); return; }
+    uint mat = _Material[_FieldOffset + i];
+    if (!BgiIsSolid(mat)) { _Radiance[_FieldOffset + i] = uint2(0u, 0u); return; }
 
     int3 cell = (int3)BgiCoord(i);
     float3 normal = OccupancyNormal(cell);
@@ -243,9 +243,9 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     // Bounce arriving at this surface = irradiance from the adjacent air voxel along the normal.
     int3 airCell = cell + int3(round(normal));
     float3 bounce = 0;
-    if (BgiInBounds(airCell) && !BgiIsSolid(_Material[BgiIndex((uint3)airCell)])) {
+    if (BgiInBounds(airCell) && !BgiIsSolid(_Material[BgiSlot((uint3)airCell)])) {
         float w;
-        BgiUnpackRgb(_Irradiance[BgiIndex((uint3)airCell)], bounce, w);
+        BgiUnpackRgb(_Irradiance[BgiSlot((uint3)airCell)], bounce, w);
     }
 
     // Clamp reflectance below 1: with albedo == 1 the bounce feedback is a lossless cavity that
@@ -253,7 +253,7 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     float3 safeAlbedo = min(albedo, 0.95);
     float3 direct = GetDirectLight(cell, normal);
     float3 outgoing = SanitizeColor(emissive + safeAlbedo * (direct + bounce));
-    _Radiance[i] = BgiPackRgb(outgoing, 1.0);
+    _Radiance[_FieldOffset + i] = BgiPackRgb(outgoing, 1.0);
 }
 
 // ----------------------------------------------------------
@@ -266,7 +266,7 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     if (i >= BGI_COUNT) return;
 
     // Irradiance only lives in air voxels; solid voxels carry radiance instead.
-    if (BgiIsSolid(_Material[i])) { _Irradiance[i] = uint2(0u, 0u); return; }
+    if (BgiIsSolid(_Material[_FieldOffset + i])) { _Irradiance[_FieldOffset + i] = uint2(0u, 0u); return; }
 
     uint3 c = BgiCoord(i);
     int3 cell = (int3)c;
@@ -286,7 +286,7 @@ void CSGather(uint3 id : SV_DispatchThreadID)
             float3 hitNormal = OccupancyNormal(hit);
             if (dot(dir, hitNormal) < 0.0) {
                 float3 rad; float w;
-                BgiUnpackRgb(_Radiance[BgiIndex((uint3)hit)], rad, w);
+                BgiUnpackRgb(_Radiance[BgiSlot((uint3)hit)], rad, w);
                 incoming += ClampFirefly(rad, _GiFireflyClamp);
             } else {
                 incoming += _AmbientFloor;
@@ -299,11 +299,11 @@ void CSGather(uint3 id : SV_DispatchThreadID)
 
     // Temporal EMA, progressive average floored at 1/maxSamples so it keeps adapting.
     float3 oldC; float oldN;
-    BgiUnpackRgb(_Irradiance[i], oldC, oldN);
+    BgiUnpackRgb(_Irradiance[_FieldOffset + i], oldC, oldN);
     float n = min(oldN + 1.0, (float)max(_MaxSamples, 1u));
     float weight = max(rcp(n), rcp((float)max(_MaxSamples, 1u)));
     float3 newC = SanitizeColor(lerp(oldC, incoming, weight));
-    _Irradiance[i] = BgiPackRgb(newC, n);
+    _Irradiance[_FieldOffset + i] = BgiPackRgb(newC, n);
 }
 
 // ----------------------------------------------------------
@@ -317,11 +317,11 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
     uint i = id.x;
     if (i >= BGI_COUNT) return;
 
-    if (BgiIsSolid(_Material[i])) { _IrradianceBlur[i] = uint2(0u, 0u); return; }
+    if (BgiIsSolid(_Material[_FieldOffset + i])) { _IrradianceBlur[_FieldOffset + i] = uint2(0u, 0u); return; }
 
     int3 c = (int3)BgiCoord(i);
     float3 sum; float count;
-    BgiUnpackRgb(_Irradiance[i], sum, count); // center
+    BgiUnpackRgb(_Irradiance[_FieldOffset + i], sum, count); // center
     float wsum = 1.0;
 
     const int3 axes[6] = {
@@ -331,12 +331,12 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
     for (int k = 0; k < 6; k++) {
         int3 nb = c + axes[k];
         if (!BgiInBounds(nb)) continue;
-        if (BgiIsSolid(_Material[BgiIndex((uint3)nb)])) continue; // gate: don't blur across surfaces
+        if (BgiIsSolid(_Material[BgiSlot((uint3)nb)])) continue; // gate: don't blur across surfaces
         float3 nc; float nn;
-        BgiUnpackRgb(_Irradiance[BgiIndex((uint3)nb)], nc, nn);
+        BgiUnpackRgb(_Irradiance[BgiSlot((uint3)nb)], nc, nn);
         sum += nc;
         wsum += 1.0;
     }
 
-    _IrradianceBlur[i] = BgiPackRgb(sum / wsum, count);
+    _IrradianceBlur[_FieldOffset + i] = BgiPackRgb(sum / wsum, count);
 }

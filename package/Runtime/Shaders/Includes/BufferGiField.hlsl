@@ -15,14 +15,29 @@ static const uint BGI_GRID_LOG2 = 5u;
 static const uint BGI_GRID_MASK = BGI_GRID - 1u;
 static const uint BGI_COUNT = BGI_GRID * BGI_GRID * BGI_GRID;
 
+// Field slice offsets in the concatenated buffers (must match BufferGiUpdater CoarseField/FineField):
+// coarse = slot 0, fine = slot 1, so any future fine fields stay contiguous (slots 1..N-1).
+static const uint BGI_COARSE_OFFSET = 0u;
+static const uint BGI_FINE_OFFSET = BGI_COUNT;
+
 // Cascade placement in world space (set by BufferGiUpdater). Voxels are per-axis (the grid
 // stretches to fill non-cubic volume bounds), so _BgiVoxelSize is a float3, not a scalar.
+// These are the CURRENT field's bounds, set per compute/voxelize dispatch.
 float3 _BgiGridOrigin; // world-space min corner of the cascade grid
 float3 _BgiGridSize;   // world-space extent of the cascade grid
 float3 _BgiVoxelSize;  // per-axis voxel size (= _BgiGridSize / BGI_GRID)
 
+// Base index of the current field's slice in the concatenated buffers (= field * BGI_COUNT). All
+// fields share one buffer; field f occupies [f*BGI_COUNT, (f+1)*BGI_COUNT). Set per dispatch.
+uint _FieldOffset;
+
 uint BgiIndex(uint3 c) {
     return c.x | (c.y << BGI_GRID_LOG2) | (c.z << (BGI_GRID_LOG2 * 2u));
+}
+
+// Buffer slot for a voxel in the current field (compute/voxelize): field offset + local index.
+uint BgiSlot(uint3 c) {
+    return _FieldOffset + BgiIndex(c);
 }
 
 uint3 BgiCoord(uint i) {
@@ -35,14 +50,21 @@ bool BgiInBounds(int3 c) {
     return all(c >= 0) && all(c < (int)BGI_GRID);
 }
 
-// World-space center of a voxel.
+// World-space center of a voxel, for an explicit field (used by the fragment read, which samples
+// multiple fields) and for the current dispatch's field (compute/voxelize).
+float3 BgiVoxelCenterAt(uint3 c, float3 origin, float3 voxelSize) {
+    return origin + (float3(c) + 0.5) * voxelSize;
+}
 float3 BgiVoxelCenter(uint3 c) {
-    return _BgiGridOrigin + (float3(c) + 0.5) * _BgiVoxelSize;
+    return BgiVoxelCenterAt(c, _BgiGridOrigin, _BgiVoxelSize);
 }
 
 // Continuous grid coordinates (voxel units) of a world position. floor() gives the base cell.
+float3 BgiWorldToGridAt(float3 worldPos, float3 origin, float3 voxelSize) {
+    return (worldPos - origin) / max(voxelSize, 1e-6);
+}
 float3 BgiWorldToGrid(float3 worldPos) {
-    return (worldPos - _BgiGridOrigin) / max(_BgiVoxelSize, 1e-6);
+    return BgiWorldToGridAt(worldPos, _BgiGridOrigin, _BgiVoxelSize);
 }
 
 // --- Material / occupancy packing: R8G8B8 albedo + A8 log-encoded emission intensity ---

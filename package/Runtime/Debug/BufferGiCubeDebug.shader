@@ -30,7 +30,13 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             float _DbgCubeFill;
             float _DbgExposure;
             float _DbgMinLum;
-            float _DbgMode;       // 0 occupancy, 1 irradiance, 2 radiance
+            float _DbgMode;        // 0 occupancy, 1 irradiance, 2 radiance
+            float _DbgFieldOffset; // base index of the field slice being shown (0 fine, BGI_COUNT coarse)
+
+            // Wireframe mode: draw the field bounds as box edges (line topology) instead of cubes.
+            float _DbgWire;        // 0 = voxel cubes, 1 = field-bounds wireframe
+            float3 _WireOrigin0; float3 _WireSize0; // fine field box (world)
+            float3 _WireOrigin1; float3 _WireSize1; // coarse field box (world)
 
             // 36 verts = 6 faces * 2 tris. Face order: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z.
             static const float3 kCube[36] = {
@@ -53,6 +59,16 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                 float3(1,0,0), float3(-1,0,0), float3(0,1,0), float3(0,-1,0), float3(0,0,1), float3(0,0,-1)
             };
 
+            // 12 box edges = 24 line-list vertices, corners in [0,1]^3.
+            static const float3 kWire[24] = {
+                float3(0,0,0), float3(1,0,0), float3(1,0,0), float3(1,0,1),
+                float3(1,0,1), float3(0,0,1), float3(0,0,1), float3(0,0,0), // bottom
+                float3(0,1,0), float3(1,1,0), float3(1,1,0), float3(1,1,1),
+                float3(1,1,1), float3(0,1,1), float3(0,1,1), float3(0,1,0), // top
+                float3(0,0,0), float3(0,1,0), float3(1,0,0), float3(1,1,0),
+                float3(1,0,1), float3(1,1,1), float3(0,0,1), float3(0,1,1)  // verticals
+            };
+
             struct v2f {
                 float4 positionCS : SV_POSITION;
                 float3 color : TEXCOORD0;
@@ -60,6 +76,17 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
 
             v2f vert(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
                 v2f o;
+
+                // Wireframe: instance 0 = fine box, instance 1 = coarse box.
+                if (_DbgWire > 0.5) {
+                    float3 origin = (iid == 0u) ? _WireOrigin0 : _WireOrigin1;
+                    float3 size   = (iid == 0u) ? _WireSize0   : _WireSize1;
+                    float3 world  = origin + kWire[vid] * size;
+                    o.positionCS = TransformWorldToHClip(world);
+                    o.color = (iid == 0u) ? float3(0.3, 1.0, 0.4) : float3(0.3, 0.8, 1.0);
+                    return o;
+                }
+
                 uint3 g = (uint3)_DbgGridDims;
                 uint stride = (uint)_DbgStride;
                 uint3 gi;
@@ -67,7 +94,7 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                 gi.y = (iid / g.x) % g.y;
                 gi.z = iid / (g.x * g.y);
                 uint3 vox = gi * stride;
-                uint idx = BgiIndex(vox);
+                uint idx = (uint)_DbgFieldOffset + BgiIndex(vox);
 
                 uint mode = (uint)_DbgMode;
                 float3 col;
@@ -102,6 +129,7 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             }
 
             float4 frag(v2f i) : SV_Target {
+                if (_DbgWire > 0.5) return float4(i.color, 1.0); // wireframe: flat color, no tonemap
                 float3 c = i.color / (1.0 + i.color); // Reinhard tonemap for display
                 return float4(c, 1.0);
             }

@@ -22,7 +22,13 @@ namespace Lotec.Lighting {
     [AddComponentMenu("Lotec/Voxel Lighting/Buffer GI")]
     public class BufferGiUpdater : MonoBehaviour {
         public const int Grid = 32;
-        public const int VoxelCount = Grid * Grid * Grid; // 32768
+        public const int VoxelCount = Grid * Grid * Grid; // 32768 per field
+        // Concatenated fields: 0 = coarse (the big far volume), 1 = fine (the active volume). Coarse
+        // is kept at slot 0 so any future fine fields stay contiguous (1..N-1) and just append.
+        public const int FieldCount = 2;
+        public const int TotalVoxels = FieldCount * VoxelCount;
+        public const int CoarseField = 0;
+        public const int FineField = 1;
 
         public static BufferGiUpdater Instance { get; private set; }
 
@@ -54,6 +60,15 @@ namespace Lotec.Lighting {
                  "corner-to-corner; lower trades reach for cost.")]
         [Min(1)][SerializeField] int _raymarchMaxSteps = 96;
 
+        [Header("Coarse field")]
+        [Tooltip("A separate VoxelVolume covering the whole scene, used as the coarse (low-detail, " +
+                 "far) GI field - a 32^3 grid over its larger bounds (bigger voxels). Should be a " +
+                 "different, larger volume than the active fine volume. Leave null for fine only.")]
+        [SerializeField] VoxelVolume _coarseVolume;
+        [Tooltip("Blend band as a fraction of the fine box, over which the fine field cross-fades to " +
+                 "the coarse field at its edges (hides the seam).")]
+        [Range(0f, 0.5f)][SerializeField] float _blendBand = 0.1f;
+
         ComputeBuffer _materialBuffer;
         ComputeBuffer _radianceBuffer;
         ComputeBuffer _irradianceBuffer;
@@ -78,6 +93,13 @@ namespace Lotec.Lighting {
         // Per-axis voxel size: the 32^3 grid stretches to fill the (possibly non-cubic) bounds.
         public Vector3 VoxelSize => GridSize / Grid;
 
+        // Coarse field: its own scene-covering VoxelVolume (32^3 grid, larger voxels). Falls back to
+        // the fine bounds when unassigned so the read/visualizer degrade gracefully (empty slice -> 0).
+        public bool HasCoarse => _coarseVolume != null;
+        public Vector3 CoarseOrigin => _coarseVolume != null ? _coarseVolume.Bounds.min : GridOrigin;
+        public Vector3 CoarseSize => _coarseVolume != null ? _coarseVolume.Bounds.size : GridSize;
+        public Vector3 CoarseVoxelSize => CoarseSize / Grid;
+
         LightingManager Manager => LightingManager.Instance;
 
         #region Shader Property IDs
@@ -90,6 +112,10 @@ namespace Lotec.Lighting {
         static readonly int s_gridOrigin = Shader.PropertyToID("_BgiGridOrigin");
         static readonly int s_gridSize = Shader.PropertyToID("_BgiGridSize");
         static readonly int s_voxelSize = Shader.PropertyToID("_BgiVoxelSize");
+        static readonly int s_fieldOffset = Shader.PropertyToID("_FieldOffset");
+        static readonly int s_coarseOrigin = Shader.PropertyToID("_BgiCoarseOrigin");
+        static readonly int s_coarseVoxelSize = Shader.PropertyToID("_BgiCoarseVoxelSize");
+        static readonly int s_blendBand = Shader.PropertyToID("_BgiBlendBand");
         static readonly int s_material = Shader.PropertyToID("_Material");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_raysPerFrame = Shader.PropertyToID("_RaysPerFrame");
@@ -196,9 +222,13 @@ namespace Lotec.Lighting {
             Shader.SetGlobalBuffer(s_material, _materialBuffer);
             // Fragment reads the blurred field when the blur is on, else the raw field (A/B).
             Shader.SetGlobalBuffer(s_irradiance, _spatialBlur ? _irradianceBlurBuffer : _irradianceBuffer);
+            // Fine field bounds + coarse field bounds + blend band for the fragment read.
             Shader.SetGlobalVector(s_gridOrigin, GridOrigin);
             Shader.SetGlobalVector(s_gridSize, GridSize);
             Shader.SetGlobalVector(s_voxelSize, VoxelSize);
+            Shader.SetGlobalVector(s_coarseOrigin, CoarseOrigin);
+            Shader.SetGlobalVector(s_coarseVoxelSize, CoarseVoxelSize);
+            Shader.SetGlobalFloat(s_blendBand, _blendBand);
             // Cold-start fade: displayed GI = buffer * confidence, so the first rays barely show and
             // we reach 100% only once the samples are complete. Ramps linearly over maxSamples.
             float confidence = Mathf.Clamp01(_solveFrames / (float)Mathf.Max(1, _maxSamples));
@@ -231,59 +261,81 @@ namespace Lotec.Lighting {
             _gatherKernel = _computeShader.FindKernel("CSGather");
             _blurKernel = _computeShader.FindKernel("CSBlur");
 
-            // uint material, uint2 radiance/irradiance.
-            _materialBuffer = new ComputeBuffer(VoxelCount, sizeof(uint));
-            _radianceBuffer = new ComputeBuffer(VoxelCount, sizeof(uint) * 2);
-            _irradianceBuffer = new ComputeBuffer(VoxelCount, sizeof(uint) * 2);
-            _irradianceBlurBuffer = new ComputeBuffer(VoxelCount, sizeof(uint) * 2);
+            // uint material, uint2 radiance/irradiance. Sized for all fields (concatenated slices).
+            _materialBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));
+            _radianceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
+            _irradianceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
+            _irradianceBlurBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
             _materialBaked = false;
 
             ClearDynamicFields();
         }
 
-        void SetGridUniforms() {
-            _computeShader.SetVector(s_gridOrigin, GridOrigin);
-            _computeShader.SetVector(s_gridSize, GridSize);
-            _computeShader.SetVector(s_voxelSize, VoxelSize);
+        void SetGridUniforms(Vector3 origin, Vector3 size, Vector3 voxelSize) {
+            _computeShader.SetVector(s_gridOrigin, origin);
+            _computeShader.SetVector(s_gridSize, size);
+            _computeShader.SetVector(s_voxelSize, voxelSize);
         }
 
+        // Groups to cover ONE field's voxels (each field is dispatched separately with its offset).
         static int Groups => Mathf.CeilToInt(VoxelCount / 64f);
 
         void ClearDynamicFields() {
             if (_clearKernel < 0) return;
             _computeShader.SetBuffer(_clearKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_clearKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.Dispatch(_clearKernel, Groups, 1, 1);
+            for (int f = 0; f < FieldCount; f++) {
+                _computeShader.SetInt(s_fieldOffset, f * VoxelCount);
+                _computeShader.Dispatch(_clearKernel, Groups, 1, 1);
+            }
         }
 
-        // GPU 3-axis rasterization of the volume's mesh geometry into the 32^3 material buffer.
-        // One-shot (geometry is static): clears the buffer, then renders every submesh from the X, Y
-        // and Z directions; each fragment writes its voxel's albedo+occupancy via a fragment UAV.
+        // GPU 3-axis rasterization of the volume's mesh geometry into each field's material slice.
+        // One-shot (geometry is static): clears the whole buffer, then rasterizes the fine and coarse
+        // fields, each into its own slice with its own grid; each fragment writes via a fragment UAV.
         public void Voxelize() {
             if (_voxelizeShader == null || _materialBuffer == null) return;
-            Transform root = _volume.BakeRoot;
-            if (root == null) { _materialBaked = true; return; }
+            Transform fineRoot = _volume.BakeRoot;
+            if (fineRoot == null) { _materialBaked = true; return; }
 
             if (_voxelizeMaterial == null) {
                 _voxelizeMaterial = new Material(_voxelizeShader) { hideFlags = HideFlags.HideAndDontSave };
             }
 
-            // Rasterization only writes covered voxels, so clear the buffer to empty first.
-            if (_materialClear == null) _materialClear = new uint[VoxelCount];
+            // Rasterization only writes covered voxels, so clear all field slices to empty first.
+            if (_materialClear == null) _materialClear = new uint[TotalVoxels];
             _materialBuffer.SetData(_materialClear);
 
-            // The voxelize shader reads these as globals (BgiWorldToGrid / BgiIndex).
-            Shader.SetGlobalVector(s_gridOrigin, GridOrigin);
-            Shader.SetGlobalVector(s_gridSize, GridSize);
-            Shader.SetGlobalVector(s_voxelSize, VoxelSize);
-
-            MeshRenderer[] renderers = root.GetComponentsInChildren<MeshRenderer>(true);
             RenderTexture dummy = RenderTexture.GetTemporary(Grid, Grid, 0, RenderTextureFormat.R8);
             CommandBuffer cmd = new CommandBuffer { name = "BufferGI Voxelize" };
             cmd.SetRenderTarget(dummy);
             // We output clip space directly from the vertex shader, so neutralize the view-projection.
             cmd.SetViewProjectionMatrices(Matrix4x4.identity, Matrix4x4.identity);
             cmd.SetRandomWriteTarget(1, _materialBuffer);
+
+            // Each field rasterizes its OWN volume's geometry into its slice (coarse = a separate,
+            // scene-covering VoxelVolume with its own BakeRoot).
+            VoxelizeFieldInto(cmd, fineRoot, GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
+            Transform coarseRoot = _coarseVolume != null ? _coarseVolume.BakeRoot : null;
+            if (coarseRoot != null) {
+                VoxelizeFieldInto(cmd, coarseRoot, CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount);
+            }
+
+            cmd.ClearRandomWriteTargets();
+            Graphics.ExecuteCommandBuffer(cmd);
+            cmd.Release();
+            RenderTexture.ReleaseTemporary(dummy);
+            _materialBaked = true;
+        }
+
+        // Rasterize a volume's geometry into one field's slice. The voxelize shader reads the grid +
+        // field offset as globals (BgiWorldToGrid / BgiSlot), so set them before the draws.
+        void VoxelizeFieldInto(CommandBuffer cmd, Transform root, Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset) {
+            MeshRenderer[] renderers = root.GetComponentsInChildren<MeshRenderer>(true);
+            cmd.SetGlobalVector(s_gridOrigin, origin);
+            cmd.SetGlobalVector(s_gridSize, size);
+            cmd.SetGlobalVector(s_voxelSize, voxelSize);
+            cmd.SetGlobalInt(s_fieldOffset, fieldOffset);
 
             for (int axis = 0; axis < 3; axis++) {
                 cmd.SetGlobalInt(s_voxAxis, axis);
@@ -306,12 +358,6 @@ namespace Lotec.Lighting {
                     }
                 }
             }
-
-            cmd.ClearRandomWriteTargets();
-            Graphics.ExecuteCommandBuffer(cmd);
-            cmd.Release();
-            RenderTexture.ReleaseTemporary(dummy);
-            _materialBaked = true;
         }
 
         const float EmissionIntensityMax = 1024f;
@@ -345,7 +391,7 @@ namespace Lotec.Lighting {
         void DispatchSolve() {
             if (_injectKernel < 0 || _gatherKernel < 0 || !_materialBaked) return;
 
-            SetGridUniforms();
+            // Per-frame shared uniforms (same for every field).
             _computeShader.SetInt(s_frameCount, Time.frameCount);
             _computeShader.SetInt(s_raysPerFrame, Mathf.Max(1, _raysPerFrame));
             _computeShader.SetInt(s_maxSamples, Mathf.Max(1, _maxSamples));
@@ -354,6 +400,20 @@ namespace Lotec.Lighting {
             _computeShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
             SetDirectionalLightUniforms();
             Manager?.LocalLights?.ApplyToCompute(_computeShader);
+
+            // Fine field every frame, then the coarse field every frame (when assigned).
+            SolveField(GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
+            if (HasCoarse) {
+                SolveField(CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount);
+            }
+
+            if (_solveFrames < _maxSamples) _solveFrames++;
+        }
+
+        // Inject -> gather -> (optional) blur for one field's slice.
+        void SolveField(Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset) {
+            SetGridUniforms(origin, size, voxelSize);
+            _computeShader.SetInt(s_fieldOffset, fieldOffset);
 
             // Inject: solid voxels emit/reflect. Reads _Material + last-frame _Irradiance, writes _Radiance.
             _computeShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
@@ -367,16 +427,14 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
             _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
 
-            // Blur: occupancy-gated spatial smoothing of the noisy 1-ray field into the buffer the
-            // fragment read samples (hides per-frame temporal shimmer). Optional, for A/B.
+            // Blur: occupancy-gated spatial smoothing into the buffer the fragment read samples
+            // (hides per-frame temporal shimmer). Optional, for A/B.
             if (_spatialBlur) {
                 _computeShader.SetBuffer(_blurKernel, s_material, _materialBuffer);
                 _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
                 _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
                 _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
             }
-
-            if (_solveFrames < _maxSamples) _solveFrames++;
         }
 
         void SetDirectionalLightUniforms() {
@@ -399,7 +457,7 @@ namespace Lotec.Lighting {
         static readonly Vector4[] s_shScratch = new Vector4[7];
 
         // Pack a SphericalHarmonicsL2 into 7 float4 the same way Unity's unity_SH* / ShadeSH9 expect.
-        static void PackAmbientProbeSH(UnityEngine.Rendering.SphericalHarmonicsL2 sh, Vector4[] outCoeff) {
+        static void PackAmbientProbeSH(SphericalHarmonicsL2 sh, Vector4[] outCoeff) {
             for (int c = 0; c < 3; c++) {
                 outCoeff[c] = new Vector4(sh[c, 3], sh[c, 1], sh[c, 2], sh[c, 0] - sh[c, 6]); // L0 + L1
                 outCoeff[c + 3] = new Vector4(sh[c, 4], sh[c, 5], sh[c, 6] * 3f, sh[c, 7]);   // L2 (4 of 5)

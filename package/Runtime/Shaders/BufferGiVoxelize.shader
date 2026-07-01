@@ -47,7 +47,7 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                 int3 c = (int3)floor(BgiWorldToGrid(i.ws));
                 if (all(c >= 0) && all(c < (int)BGI_GRID)) {
                     float3 albedo = max(_VoxAlbedo.rgb, 1.0 / 255.0); // floor so black surfaces stay occupied
-                    _MaterialWrite[BgiIndex((uint3)c)] = BgiPackMaterial(albedo, _VoxEmission8);
+                    _MaterialWrite[BgiSlot((uint3)c)] = BgiPackMaterial(albedo, _VoxEmission8);
                 }
                 return 0;
             }
