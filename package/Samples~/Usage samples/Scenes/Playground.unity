@@ -4056,7 +4056,7 @@ GameObject:
   - component: {fileID: 1437948842}
   - component: {fileID: 1437948843}
   - component: {fileID: 1437948845}
-  - component: {fileID: 1437948844}
+  - component: {fileID: 1437948846}
   m_Layer: 0
   m_Name: Lighting manager
   m_TagString: Untagged
@@ -4106,26 +4106,6 @@ MonoBehaviour:
     <Intensity>k__BackingField: 1.7
     <SampleQuality>k__BackingField: 0
   _updateInEditor: 1
---- !u!114 &1437948844
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1437948840}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6653e61db895d8a44bd1f642f9e2b3d3, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiDebug
-  _shader: {fileID: 4800000, guid: 2812d0b83a01c5f4a9ff6e4ecd95957c, type: 3}
-  mode: 1
-  field: 1
-  showWireframe: 1
-  stride: 1
-  cubeFill: 0.1
-  intensity: 1
-  minLuminance: 0.02
 --- !u!114 &1437948845
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4149,6 +4129,26 @@ MonoBehaviour:
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
   _raymarchMaxSteps: 96
   _coarseVolume: {fileID: 896086980}
+--- !u!114 &1437948846
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1437948840}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6653e61db895d8a44bd1f642f9e2b3d3, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiDebug
+  _shader: {fileID: 4800000, guid: 2812d0b83a01c5f4a9ff6e4ecd95957c, type: 3}
+  mode: 0
+  field: 0
+  showWireframe: 1
+  stride: 1
+  cubeFill: 0.85
+  intensity: 1
+  minLuminance: 0.02
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0
