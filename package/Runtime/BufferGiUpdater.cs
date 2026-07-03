@@ -3,12 +3,11 @@ using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Driver for the buffer-based GI (the textureless, cache-resident GI that runs alongside the
-    /// texture GI in <see cref="GiFieldUpdater"/>, behind the GI_BUFFER shader keyword). Owns the
-    /// ComputeBuffers, voxelizes the scene mesh into the occupancy/albedo buffer once (GPU 3-axis
+    /// Driver for the buffer-based GI (the textureless, cache-resident GI that runs behind the GI_BUFFER shader keyword).
+    /// Owns the ComputeBuffers, voxelizes the scene mesh into the occupancy/albedo buffer once (GPU 3-axis
     /// raster, BufferGiVoxelize.shader), and runs the per-frame solve: inject (solid voxels
     /// emit/reflect) then gather (air voxels integrate 1 ray/frame with the temporal resolve fused
-    /// in) then a gated blur. The lit shader reads it via SampleBufferGI (BufferGi.hlsl).
+    /// in) then a blur pass. The lit shader reads it via SampleBufferGI (BufferGi.hlsl).
     ///
     /// All fields are a fixed 32^3 so a voxel index fits in 16 bits and the whole grid stays
     /// resident in the GPU L2. (Single fine cascade for now; a coarse cascade + scheduler is the
@@ -42,12 +41,19 @@ namespace Lotec.Lighting {
                  "shader applies exp2(_Exposure) whenever GI is on, so this must be set explicitly " +
                  "(otherwise a stale value from a previous GI updater darkens the image).")]
         [SerializeField] float _exposure;
-        [Tooltip("Temporal blend window: per-voxel sample count is capped here and the EMA weight " +
-                 "floors at 1/maxSamples, so the field keeps adapting to moving lights.")]
-        [Min(1)][SerializeField] int _maxSamples = 90;
-        [Min(1)][SerializeField] int _raysPerFrame = 1;
-        [Tooltip("Keep solving every frame even after the field converges. Off (recommended): the " +
-                 "solve idles once converged and only wakes when the sun changes or the scene is " +
+        [Tooltip("Total ray budget per voxel (quality): the field is a progressive average that " +
+                 "accumulates rays until it reaches this many, then the solve idles. Quality depends " +
+                 "on total rays, so bigger = cleaner. It's reached after maxSamples/samplesPerFrame frames.")]
+        [Min(1)][SerializeField] int _maxSamples = 512;
+        [Tooltip("Samples (rays) gathered per voxel per frame - a PERFORMANCE knob: it spends the " +
+                 "maxSamples budget over fewer/more frames but does not change the converged result.")]
+        [Min(1)][SerializeField] int _samplesPerFrame = 1;
+        [Tooltip("Ease-in exponent for the displayed fade / light-change reveal. Higher keeps the " +
+                 "noisy early accumulation frames hidden and ramps the reveal up later (1 = linear). " +
+                 "Raise it when using few rays/frame (noisier early frames).")]
+        [Range(1f, 8f)][SerializeField] float _confidenceCurve = 3f;
+        [Tooltip("Keep solving every frame even after the field settles. Off (recommended): the " +
+                 "solve idles once settled and only wakes when the sun changes or the scene is " +
                  "re-baked, so a static scene costs no GI compute.")]
         [SerializeField] bool _continuousGi;
         [Tooltip("Luminance ceiling for a single gathered bounce, to suppress emitter fireflies. " +
@@ -57,9 +63,6 @@ namespace Lotec.Lighting {
                  "of a surface contributes this instead of the surface's room-lit value. Voxels " +
                  "fully enclosed in geometry converge to this color. Black = dark interiors.")]
         [SerializeField] Color _ambientFloor = Color.black;
-        [Tooltip("Occupancy-gated spatial blur of the irradiance field to hide the 1-ray/frame " +
-                 "temporal shimmer. Off = the fragment reads the raw field directly (for A/B).")]
-        [SerializeField] bool _spatialBlur = true;
         [Tooltip("Max DDA steps per ray. The grid diagonal crosses up to ~96 cells, so 96 covers " +
                  "corner-to-corner; lower trades reach for cost.")]
         [Min(1)][SerializeField] int _raymarchMaxSteps = 96;
@@ -69,9 +72,6 @@ namespace Lotec.Lighting {
                  "far) GI field - a 32^3 grid over its larger bounds (bigger voxels). Should be a " +
                  "different, larger volume than the active fine volume. Leave null for fine only.")]
         [SerializeField] VoxelVolume _coarseVolume;
-        [Tooltip("Blend band as a fraction of the fine box, over which the fine field cross-fades to " +
-                 "the coarse field at its edges (hides the seam).")]
-        [Range(0f, 0.5f)][SerializeField] float _blendBand = 0.1f;
 
         ComputeBuffer _materialBuffer;
         ComputeBuffer _radianceBuffer;
@@ -85,18 +85,31 @@ namespace Lotec.Lighting {
         int _injectKernel = -1;
         int _gatherKernel = -1;
         int _blurKernel = -1;
-        int _solveFrames;
-        // Separate warm-up counter for the fine field: reset on a volume switch (while the coarse
-        // field + global confidence persist), so the read fades the new fine field in from coarse.
-        int _fineSolveFrames;
+        int _initFineKernel = -1;
         bool _resetFineField;
         bool _hasLoggedMissingReferences;
-        // Convergence gating: once converged the solve idles until the sun changes (or a settle
-        // window elapses). Local lights are intentionally excluded from the wake check for now.
-        int _transitionFramesRemaining;
+        // Progressive accumulation in SAMPLES (rays): _collectedSamples = total rays gathered since the last
+        // change (0 = just changed), accumulated by samplesPerFrame each solve and capped at _maxSamples
+        // (the ray budget). Quality depends on total rays, not frames - samplesPerFrame just spends the
+        // budget faster (fewer frames to converge). The solve idles once the budget is spent.
+        int _collectedSamples;
         Vector3 _prevSunDir;
         Vector4 _prevSunColor;
-        const int SettleTimeConstants = 4; // EMA time constants to keep solving after a sun change
+
+        // 0 at a change -> 1 once the ray budget is spent (_collectedSamples == _maxSamples), shaped by an
+        // ease-in curve (_confidenceCurve) so the noisy early frames stay hidden and the reveal ramps up
+        // as the field cleans. Auto-hides more with fewer rays (frame-1 confidence = samplesPerFrame/max).
+        float Confidence {
+            get {
+                if (_maxSamples < 1) return 1f;
+                float t = Mathf.Clamp01(_collectedSamples / (float)_maxSamples);
+                return Mathf.Pow(t, _confidenceCurve);
+            }
+        }
+
+        // Progressive-average blend weight = samplesPerFrame / totalSamples (== 1/frame during fill),
+        // floored at samplesPerFrame/maxSamples by the sample cap. Frame 1 -> ~1 (hidden by Confidence≈0).
+        float EmaWeight => _samplesPerFrame / (float)Mathf.Max(1, _collectedSamples);
 
         public ComputeBuffer MaterialBuffer => _materialBuffer;
         public ComputeBuffer RadianceBuffer => _radianceBuffer;
@@ -107,16 +120,11 @@ namespace Lotec.Lighting {
         // Per-axis voxel size: the 32^3 grid stretches to fill the (possibly non-cubic) bounds.
         public Vector3 VoxelSize => GridSize / Grid;
 
-        // Gather rays per voxel per frame. Runtime-settable (e.g. from a debug UI); wakes the solver
-        // so a change takes effect even when the convergence gate has it idling.
-        public int RaysPerFrame {
-            get => _raysPerFrame;
-            set {
-                int v = Mathf.Max(1, value);
-                if (v == _raysPerFrame) return;
-                _raysPerFrame = v;
-                _transitionFramesRemaining = _maxSamples * SettleTimeConstants;
-            }
+        // Samples (rays) gathered per voxel per frame - a performance knob (spends the maxSamples
+        // budget over fewer/more frames); it doesn't change the converged result, so it needs no re-solve.
+        public int SamplesPerFrame {
+            get => _samplesPerFrame;
+            set => _samplesPerFrame = Mathf.Max(1, value);
         }
 
         // Coarse field: its own scene-covering VoxelVolume (32^3 grid, larger voxels). Falls back to
@@ -141,12 +149,13 @@ namespace Lotec.Lighting {
         static readonly int s_fieldOffset = Shader.PropertyToID("_FieldOffset");
         static readonly int s_coarseOrigin = Shader.PropertyToID("_BgiCoarseOrigin");
         static readonly int s_coarseVoxelSize = Shader.PropertyToID("_BgiCoarseVoxelSize");
-        static readonly int s_blendBand = Shader.PropertyToID("_BgiBlendBand");
-        static readonly int s_fineConfidence = Shader.PropertyToID("_BgiFineConfidence");
+        static readonly int s_confidence = Shader.PropertyToID("_Confidence");
+        static readonly int s_emaWeight = Shader.PropertyToID("_EmaWeight");
+        static readonly int s_coarseGridOrigin = Shader.PropertyToID("_CoarseGridOrigin");
+        static readonly int s_coarseGridVoxelSize = Shader.PropertyToID("_CoarseGridVoxelSize");
         static readonly int s_material = Shader.PropertyToID("_Material");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
-        static readonly int s_raysPerFrame = Shader.PropertyToID("_RaysPerFrame");
-        static readonly int s_maxSamples = Shader.PropertyToID("_MaxSamples");
+        static readonly int s_samplesPerFrame = Shader.PropertyToID("_SamplesPerFrame");
         static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
         static readonly int s_giFireflyClamp = Shader.PropertyToID("_GiFireflyClamp");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
@@ -157,7 +166,6 @@ namespace Lotec.Lighting {
             Shader.PropertyToID("_EnvShC"),
         };
         static readonly int s_ambientFloor = Shader.PropertyToID("_AmbientFloor");
-        static readonly int s_confidence = Shader.PropertyToID("_BgiConfidence");
         static readonly int s_intensity = Shader.PropertyToID("_BgiIntensity");
         static readonly int s_exposure = Shader.PropertyToID("_Exposure");
         #endregion
@@ -209,10 +217,10 @@ namespace Lotec.Lighting {
         }
 
         void OnValidate() {
-            // A geometry/threshold change invalidates the bake; redo it on the next Update, and
-            // wake the (possibly idle) solver so the change actually re-settles into the field.
+            // A geometry/threshold change invalidates the bake; redo it on the next Update, and restart
+            // the accumulation so the change settles into the (possibly idle) field.
             _materialBaked = false;
-            _transitionFramesRemaining = _maxSamples * SettleTimeConstants;
+            _collectedSamples = 0;
         }
 
         // Wake the solver when the sun changes. Local lights are intentionally excluded (GI may drop
@@ -242,7 +250,8 @@ namespace Lotec.Lighting {
                 _hasLoggedMissingReferences = false;
                 if (warmSwitch) {
                     _materialBaked = false;
-                    _resetFineField = true;
+                    _resetFineField = true; // clear + re-fill the fine field for the new bounds
+                    _collectedSamples = 0;
                 } else {
                     ReleaseBuffers();
                 }
@@ -267,23 +276,23 @@ namespace Lotec.Lighting {
                 Voxelize();
             }
             if (_resetFineField) {
-                // Clear only the fine slice (n=0) so it re-converges fast for the new bounds; the
-                // coarse slice is untouched. _BgiFineConfidence then ramps the fine field back in.
-                ClearField(FineField * VoxelCount);
-                _fineSolveFrames = 0;
+                // The fine bounds changed: reset the stale fine slice for the new volume (coarse is
+                // untouched). With a coarse field, SEED the fine slice from it so the fine box starts
+                // from the coarse approximation and refines - instead of restarting from black.
+                if (HasCoarse) InitFineFromCoarse();
+                else ClearField(FineField * VoxelCount);
                 _resetFineField = false;
             }
 
-            // Gate the solve: run while still accumulating (cold start, or a fine-field warm-up after
-            // a volume switch), for a settle window after the sun changes, or always if _continuousGi.
-            // Otherwise idle so a static, converged scene costs no GI compute (matches GiFieldUpdater).
+            // Gate the solve: keep gathering until the ray budget is spent (_collectedSamples == maxSamples),
+            // or always if _continuousGi. Otherwise idle so a static, settled scene costs no GI compute.
+            // Samples are accumulated BEFORE the dispatch so the first solved frame's weight is ~1.
             if (HasSunChanged()) {
-                _transitionFramesRemaining = _maxSamples * SettleTimeConstants;
+                _collectedSamples = 0;
             }
-            bool converging = _solveFrames < _maxSamples || _fineSolveFrames < _maxSamples;
-            if (converging || _transitionFramesRemaining > 0 || _continuousGi) {
+            if (_collectedSamples < _maxSamples || _continuousGi) {
+                _collectedSamples = Mathf.Min(_collectedSamples + Mathf.Max(1, _samplesPerFrame), _maxSamples);
                 DispatchSolve();
-                if (_transitionFramesRemaining > 0) _transitionFramesRemaining--;
             }
             StoreSunState();
 
@@ -294,23 +303,14 @@ namespace Lotec.Lighting {
         // Publish the buffers + grid mapping + confidence the lit shader's SampleBufferGI reads.
         void SetGlobals() {
             Shader.SetGlobalBuffer(s_material, _materialBuffer);
-            // Fragment reads the blurred field when the blur is on, else the raw field (A/B).
-            Shader.SetGlobalBuffer(s_irradiance, _spatialBlur ? _irradianceBlurBuffer : _irradianceBuffer);
-            // Fine field bounds + coarse field bounds + blend band for the fragment read.
+            // Fragment reads the occupancy-gated blurred field (always on).
+            Shader.SetGlobalBuffer(s_irradiance, _irradianceBlurBuffer);
+            // Fine field bounds + coarse field bounds for the fragment read (hard fine/coarse switch).
             Shader.SetGlobalVector(s_gridOrigin, GridOrigin);
             Shader.SetGlobalVector(s_gridSize, GridSize);
             Shader.SetGlobalVector(s_voxelSize, VoxelSize);
             Shader.SetGlobalVector(s_coarseOrigin, CoarseOrigin);
             Shader.SetGlobalVector(s_coarseVoxelSize, CoarseVoxelSize);
-            Shader.SetGlobalFloat(s_blendBand, _blendBand);
-            // Cold-start fade: displayed GI = buffer * confidence, so the first rays barely show and
-            // we reach 100% only once the samples are complete. Ramps linearly over maxSamples.
-            float confidence = Mathf.Clamp01(_solveFrames / (float)Mathf.Max(1, _maxSamples));
-            Shader.SetGlobalFloat(s_confidence, confidence);
-            // Fine-field warm-up (reset on a volume switch): the read cross-fades the fine field in
-            // from the coarse field as this ramps 0->1, so a new active volume never resets to black.
-            float fineConfidence = Mathf.Clamp01(_fineSolveFrames / (float)Mathf.Max(1, _maxSamples));
-            Shader.SetGlobalFloat(s_fineConfidence, fineConfidence);
             // GI gain from the sun's Indirect Multiplier (Light.bounceIntensity) - the standard
             // Unity control for indirect strength, used instead of a custom field.
             Light sun = RenderSettings.sun;
@@ -338,6 +338,7 @@ namespace Lotec.Lighting {
             _injectKernel = _computeShader.FindKernel("CSInject");
             _gatherKernel = _computeShader.FindKernel("CSGather");
             _blurKernel = _computeShader.FindKernel("CSBlur");
+            _initFineKernel = _computeShader.FindKernel("CSInitFineFromCoarse");
 
             // uint material, uint2 radiance/irradiance. Sized for all fields (concatenated slices).
             _materialBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));
@@ -362,13 +363,30 @@ namespace Lotec.Lighting {
             for (int f = 0; f < FieldCount; f++) ClearField(f * VoxelCount);
         }
 
-        // Zero one field's radiance + irradiance slice (resets its temporal sample count to 0).
+        // Zero one field's radiance + irradiance + blur slice (the blur too, so CSBlur's confidence
+        // ease starts from black rather than a stale/garbage value).
         void ClearField(int fieldOffset) {
             if (_clearKernel < 0) return;
             _computeShader.SetBuffer(_clearKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_clearKernel, s_irradiance, _irradianceBuffer);
+            _computeShader.SetBuffer(_clearKernel, s_irradianceBlur, _irradianceBlurBuffer);
             _computeShader.SetInt(s_fieldOffset, fieldOffset);
             _computeShader.Dispatch(_clearKernel, Groups, 1, 1);
+        }
+
+        // Seed the (freshly-switched) fine slice from the coarse field's displayed values, so the fine
+        // box starts from the coarse approximation instead of black while it re-converges. Runs after
+        // Voxelize so the fine material slice already matches the new bounds.
+        void InitFineFromCoarse() {
+            if (_initFineKernel < 0) return;
+            SetGridUniforms(GridOrigin, GridSize, VoxelSize); // fine grid = voxel world positions
+            _computeShader.SetVector(s_coarseGridOrigin, CoarseOrigin);
+            _computeShader.SetVector(s_coarseGridVoxelSize, CoarseVoxelSize);
+            _computeShader.SetBuffer(_initFineKernel, s_material, _materialBuffer);
+            _computeShader.SetBuffer(_initFineKernel, s_radiance, _radianceBuffer);
+            _computeShader.SetBuffer(_initFineKernel, s_irradiance, _irradianceBuffer);
+            _computeShader.SetBuffer(_initFineKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _computeShader.Dispatch(_initFineKernel, Groups, 1, 1);
         }
 
         // GPU 3-axis rasterization of the volume's mesh geometry into each field's material slice.
@@ -474,22 +492,22 @@ namespace Lotec.Lighting {
 
             // Per-frame shared uniforms (same for every field).
             _computeShader.SetInt(s_frameCount, Time.frameCount);
-            _computeShader.SetInt(s_raysPerFrame, Mathf.Max(1, _raysPerFrame));
-            _computeShader.SetInt(s_maxSamples, Mathf.Max(1, _maxSamples));
+            _computeShader.SetInt(s_samplesPerFrame, Mathf.Max(1, _samplesPerFrame));
+            // Progressive gather weight (CSGather) + convergence confidence 0->1 (CSBlur, hides the
+            // noisy warm-up). Both derive from _collectedSamples so they stay aligned.
+            _computeShader.SetFloat(s_emaWeight, EmaWeight);
+            _computeShader.SetFloat(s_confidence, Confidence);
             _computeShader.SetInt(s_raymarchMaxSteps, Mathf.Max(1, _raymarchMaxSteps));
             _computeShader.SetFloat(s_giFireflyClamp, _giFireflyClamp);
             _computeShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
             SetDirectionalLightUniforms();
             Manager?.LocalLights?.ApplyToCompute(_computeShader);
 
-            // Fine field every frame, then the coarse field every frame (when assigned).
+            // The EMA blend weight (samplesPerFrame/maxSamples) is computed in the compute itself.
             SolveField(GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
             if (HasCoarse) {
                 SolveField(CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount);
             }
-
-            if (_solveFrames < _maxSamples) _solveFrames++;
-            if (_fineSolveFrames < _maxSamples) _fineSolveFrames++;
         }
 
         // Inject -> gather -> (optional) blur for one field's slice.
@@ -509,14 +527,12 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
             _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
 
-            // Blur: occupancy-gated spatial smoothing into the buffer the fragment read samples
-            // (hides per-frame temporal shimmer). Optional, for A/B.
-            if (_spatialBlur) {
-                _computeShader.SetBuffer(_blurKernel, s_material, _materialBuffer);
-                _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
-                _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
-                _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
-            }
+            // Blur: occupancy-gated spatial smoothing into the buffer the fragment read samples, and
+            // the confidence ease (CSBlur) that hides the warm-up. Required, always run.
+            _computeShader.SetBuffer(_blurKernel, s_material, _materialBuffer);
+            _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
+            _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
         }
 
         void SetDirectionalLightUniforms() {
@@ -557,10 +573,8 @@ namespace Lotec.Lighting {
             _irradianceBuffer = null;
             _irradianceBlurBuffer = null;
             _materialBaked = false;
-            _solveFrames = 0;
-            _fineSolveFrames = 0;
             _resetFineField = false;
-            _transitionFramesRemaining = 0;
+            _collectedSamples = 0; // gather from scratch while the freshly-cleared field fills in
         }
     }
 }

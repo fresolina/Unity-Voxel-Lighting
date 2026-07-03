@@ -63,7 +63,7 @@ namespace Lotec.Lighting.Samples
         float _lastEnabledLightIntensity;
         bool _lastFlashlightEnabled;
         bool _lastCandleEnabled;
-        int _lastRaysPerFrame;
+        int _lastSamplesPerFrame;
 
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
@@ -247,9 +247,9 @@ namespace Lotec.Lighting.Samples
             Toggle flashlightToggle = root.Q<Toggle>("flashlight-toggle");
             Toggle candleToggle = root.Q<Toggle>("candle-toggle");
             EnumField shadowModeField = root.Q<EnumField>("shadow-mode-enum");
-            IntegerField raysPerFrameField = root.Q<IntegerField>("rays-per-frame-field");
+            IntegerField samplesPerFrameField = root.Q<IntegerField>("samples-per-frame-field");
 
-            if (giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || raysPerFrameField == null || !TryCacheFrameTimeLabels(root))
+            if (giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || samplesPerFrameField == null || !TryCacheFrameTimeLabels(root))
             {
                 UnbindUi();
                 return;
@@ -296,7 +296,7 @@ namespace Lotec.Lighting.Samples
                 _boundRoot.Q<Toggle>("flashlight-toggle")?.ClearBindings();
                 _boundRoot.Q<Toggle>("candle-toggle")?.ClearBindings();
                 _boundRoot.Q<EnumField>("shadow-mode-enum")?.ClearBindings();
-                _boundRoot.Q<IntegerField>("rays-per-frame-field")?.ClearBindings();
+                _boundRoot.Q<IntegerField>("samples-per-frame-field")?.ClearBindings();
                 _boundRoot.dataSource = null;
             }
 
@@ -375,12 +375,12 @@ namespace Lotec.Lighting.Samples
         }
 
         [CreateProperty]
-        int RaysPerFrame
+        int SamplesPerFrame
         {
             get
             {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
-                return gi != null ? gi.RaysPerFrame : 1;
+                return gi != null ? gi.SamplesPerFrame : 1;
             }
             set
             {
@@ -390,7 +390,7 @@ namespace Lotec.Lighting.Samples
                     return;
                 }
 
-                gi.RaysPerFrame = value;
+                gi.SamplesPerFrame = value;
                 RefreshUi(true);
             }
         }
@@ -548,7 +548,7 @@ namespace Lotec.Lighting.Samples
             bool flashlightEnabled = FlashlightEnabled;
             bool candleEnabled = CandleEnabled;
             LightingManager.ShadowSource shadowMode = ShadowMode;
-            int raysPerFrame = RaysPerFrame;
+            int samplesPerFrame = SamplesPerFrame;
 
             if (!_hasBindingSnapshot)
             {
@@ -557,7 +557,7 @@ namespace Lotec.Lighting.Samples
                 _lastFlashlightEnabled = flashlightEnabled;
                 _lastCandleEnabled = candleEnabled;
                 _lastShadowMode = shadowMode;
-                _lastRaysPerFrame = raysPerFrame;
+                _lastSamplesPerFrame = samplesPerFrame;
                 _hasBindingSnapshot = true;
                 return;
             }
@@ -567,7 +567,7 @@ namespace Lotec.Lighting.Samples
             UpdateBoolSnapshot(ref _lastFlashlightEnabled, flashlightEnabled, notifyChanges, nameof(FlashlightEnabled));
             UpdateBoolSnapshot(ref _lastCandleEnabled, candleEnabled, notifyChanges, nameof(CandleEnabled));
             UpdateShadowModeSnapshot(ref _lastShadowMode, shadowMode, notifyChanges, nameof(ShadowMode));
-            UpdateIntSnapshot(ref _lastRaysPerFrame, raysPerFrame, notifyChanges, nameof(RaysPerFrame));
+            UpdateIntSnapshot(ref _lastSamplesPerFrame, samplesPerFrame, notifyChanges, nameof(SamplesPerFrame));
         }
 
         void UpdateShadowModeSnapshot(ref LightingManager.ShadowSource currentValue, LightingManager.ShadowSource nextValue, bool notifyChanges, string propertyName)

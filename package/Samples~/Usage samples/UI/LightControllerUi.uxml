@@ -10,9 +10,9 @@
                         <ui:DataBinding property="value" data-source-path="LightingMethod" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
-                <ui:IntegerField name="rays-per-frame-field" label="GI Rays/Frame" is-delayed="true" tooltip="Buffer GI gather rays per voxel per frame. Higher converges faster but costs more (1 for Quest)." tabindex="-1" class="setting-field">
+                <ui:IntegerField name="samples-per-frame-field" label="GI Samples/Frame" is-delayed="true" tooltip="Buffer GI samples (rays) gathered per voxel per frame. Higher converges faster but costs more (1 for Quest)." tabindex="-1" class="setting-field">
                     <Bindings>
-                        <ui:DataBinding property="value" data-source-path="RaysPerFrame" binding-mode="TwoWay"/>
+                        <ui:DataBinding property="value" data-source-path="SamplesPerFrame" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:IntegerField>
                 <ui:EnumField label="Shadow Mode" value="SDF" type="Lotec.Lighting.LightingManager+ShadowSource, Lotec.Lighting" name="shadow-mode-enum" class="setting-field">

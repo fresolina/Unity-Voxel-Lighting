@@ -10,6 +10,7 @@
 #pragma kernel CSInject
 #pragma kernel CSGather
 #pragma kernel CSBlur
+#pragma kernel CSInitFineFromCoarse
 
 #define MAX_POINT_LIGHTS 4
 #define MAX_SPOT_LIGHTS 4
@@ -25,8 +26,12 @@ StructuredBuffer<uint>    _Material;      // occupancy/material (voxelized by Bu
 
 // --- Solve uniforms ---
 uint  _FrameCount;
-uint  _RaysPerFrame;
-uint  _MaxSamples;
+uint  _SamplesPerFrame;
+float _Confidence; // 0 at a light change, 1 when converged; CSBlur eases the displayed field by this
+float _EmaWeight;  // progressive gather blend weight (samplesPerFrame/totalSamples), from C#
+// Coarse grid mapping for CSInitFineFromCoarse (that dispatch's _BgiGrid* uniforms are the FINE grid).
+float3 _CoarseGridOrigin;
+float3 _CoarseGridVoxelSize;
 uint  _RaymarchMaxSteps;
 float _GiFireflyClamp;
 float3 _DirectLightDir;   // toward the light
@@ -96,8 +101,11 @@ int MarchOccupancy(int3 start, float3 worldDir, float maxDist, out int3 hitCell)
     return 0;
 }
 
-// Surface normal from the occupancy gradient: sum the directions toward empty neighbors.
-// Out-of-grid neighbors count as empty (open). Interior voxels return up as a harmless default.
+// Surface normal from the occupancy gradient: sum the directions toward empty neighbors. Out-of-grid
+// neighbors count as empty (open). Returns 0 when the gradient is AMBIGUOUS - air on opposite sides
+// (a 1-voxel-thick wall) or a fully-enclosed interior, where no single outward face exists. Callers
+// must handle 0: the gather rejects such a hit (-> ambient floor, so a thin wall can't leak its
+// room-lit front value to air trapped behind it); inject falls back to up.
 float3 OccupancyNormal(int3 c)
 {
     const int3 axes[6] = {
@@ -110,7 +118,7 @@ float3 OccupancyNormal(int3 c)
         bool solid = BgiInBounds(nb) && BgiIsSolid(_Material[BgiSlot((uint3)nb)]);
         if (!solid) n += (float3)axes[i];
     }
-    return (dot(n, n) > 1e-6) ? normalize(n) : float3(0, 1, 0);
+    return (dot(n, n) > 1e-6) ? normalize(n) : float3(0, 0, 0);
 }
 
 // Evaluate the environment ambient-probe SH in a direction (matches Unity's ShadeSH9).
@@ -220,6 +228,7 @@ void CSClear(uint3 id : SV_DispatchThreadID)
     if (i >= BGI_COUNT) return;
     _Radiance[_FieldOffset + i] = uint2(0u, 0u);
     _Irradiance[_FieldOffset + i] = uint2(0u, 0u);
+    _IrradianceBlur[_FieldOffset + i] = uint2(0u, 0u);
 }
 
 // ----------------------------------------------------------
@@ -236,6 +245,7 @@ void CSInject(uint3 id : SV_DispatchThreadID)
 
     int3 cell = (int3)BgiCoord(i);
     float3 normal = OccupancyNormal(cell);
+    if (dot(normal, normal) < 1e-6) normal = float3(0, 1, 0); // ambiguous -> harmless up for direct/bounce
     float3 albedo = BgiAlbedo(mat);
     float emissionIntensity = DecodeEmissionIntensityFrom8Bit(BgiEmission8(mat));
     float3 emissive = albedo * emissionIntensity;
@@ -272,17 +282,18 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     int3 cell = (int3)c;
 
     float3 incoming = 0;
-    uint rayCount = max(_RaysPerFrame, 1u);
+    uint sampleCount = max(_SamplesPerFrame, 1u);
     [loop]
-    for (uint r = 0u; r < rayCount; r++) {
+    for (uint r = 0u; r < sampleCount; r++) {
         float2 noise = GiSampleNoise(c, _FrameCount, r);
         float3 dir = GetRandomDirectionFromNoise2(noise); // omnidirectional irradiance probe
         int3 hit;
         if (MarchOccupancy(cell, dir, BGI_MAX_RAY_DIST, hit)) {
-            // FRONT hit: see the surface's room-lit radiance. BACK hit: the ray is heading into
-            // geometry, so contribute the ambient-floor "interior color" instead. Voxels enclosed
-            // inside geometry (all rays hit back faces) therefore converge to _AmbientFloor, and
-            // rays tunnelling through a thin shell into a far wall's back don't leak room light.
+            // FRONT hit (dot(dir,N) < 0): see the surface's room-lit radiance. BACK hit, or an
+            // AMBIGUOUS normal (N==0: a 1-voxel wall with air on both sides, or an enclosed interior)
+            // where dot == 0: contribute the ambient-floor "interior color" instead. So enclosed air
+            // converges to _AmbientFloor, and air trapped behind a thin wall can't read the wall's
+            // room-lit front value through it (the leak this guards against).
             float3 hitNormal = OccupancyNormal(hit);
             if (dot(dir, hitNormal) < 0.0) {
                 float3 rad; float w;
@@ -295,21 +306,26 @@ void CSGather(uint3 id : SV_DispatchThreadID)
             incoming += GetIndirectSkyLight(dir);
         }
     }
-    incoming *= rcp((float)rayCount);
+    incoming *= rcp((float)sampleCount); // this frame's estimate = mean of sampleCount samples
 
-    // Temporal EMA, progressive average floored at 1/maxSamples so it keeps adapting.
+    // Temporal PROGRESSIVE average: fold this frame's sampleCount-ray estimate into the running mean of
+    // all rays gathered so far, weight = sampleCount/totalSamples (_EmaWeight from C#). The field
+    // ACCUMULATES so variance ~1/totalSamples -> it keeps getting cleaner and converges (not a fixed
+    // window that shimmers forever). The first frame is ~weight 1 (noisy), but CSBlur's Confidence≈0
+    // hides that warm-up. No per-voxel count stored (packed 4th channel = 0).
     float3 oldC; float oldN;
-    BgiUnpackRgb(_Irradiance[_FieldOffset + i], oldC, oldN);
-    float n = min(oldN + 1.0, (float)max(_MaxSamples, 1u));
-    float weight = max(rcp(n), rcp((float)max(_MaxSamples, 1u)));
+    BgiUnpackRgb(_Irradiance[_FieldOffset + i], oldC, oldN); // oldN unused
+    float weight = min(1.0, _EmaWeight);
     float3 newC = SanitizeColor(lerp(oldC, incoming, weight));
-    _Irradiance[_FieldOffset + i] = BgiPackRgb(newC, n);
+    _Irradiance[_FieldOffset + i] = BgiPackRgb(newC, 0.0);
 }
 
 // ----------------------------------------------------------
-// BLUR: occupancy-gated box blur of the air-voxel irradiance into _IrradianceBlur (what the
-// fragment read samples). Gating skips solid neighbors so dark/zero solid voxels and across-wall
-// values can't bleed in. Averaging decorrelated neighbours hides the 1-ray/frame temporal shimmer.
+// BLUR: occupancy-gated box blur of the air-voxel irradiance into _IrradianceBlur (what the fragment
+// read samples). Gating skips solid neighbors so dark/zero solid voxels and across-wall values can't
+// bleed in. Averaging decorrelated neighbours hides the 1-ray/frame temporal shimmer. The result is
+// then eased toward from the PREVIOUS _IrradianceBlur by _Confidence (0 at a light change -> 1 when
+// converged), so the displayed field transitions smoothly and only fully lands once GI has converged.
 // ----------------------------------------------------------
 [numthreads(64, 1, 1)]
 void CSBlur(uint3 id : SV_DispatchThreadID)
@@ -338,5 +354,70 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
         wsum += 1.0;
     }
 
-    _IrradianceBlur[_FieldOffset + i] = BgiPackRgb(sum / wsum, count);
+    // Ease the displayed value from its previous state toward the freshly-blurred one by confidence,
+    // so a light change fades in and completes exactly when the field has converged (confidence == 1).
+    float3 blurred = sum / wsum;
+    float3 prevBlur; float pw;
+    BgiUnpackRgb(_IrradianceBlur[_FieldOffset + i], prevBlur, pw);
+    _IrradianceBlur[_FieldOffset + i] = BgiPackRgb(lerp(prevBlur, blurred, _Confidence), 0.0);
+}
+
+// ----------------------------------------------------------
+// INIT FINE FROM COARSE: seed a freshly-switched fine field with the coarse field's DISPLAYED value
+// (its _IrradianceBlur) so the fine box starts from the coarse approximation instead of black, then
+// refines as the fine gather re-converges (the CSBlur confidence ease departs from this seed). The
+// dispatch's _BgiGrid* uniforms are the FINE grid; _CoarseGrid* map into the coarse field.
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSInitFineFromCoarse(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+
+    uint fineSlot = BGI_FINE_OFFSET + i;
+    _Radiance[fineSlot] = uint2(0u, 0u);
+    if (BgiIsSolid(_Material[fineSlot])) { // irradiance lives only in air voxels
+        _Irradiance[fineSlot] = uint2(0u, 0u);
+        _IrradianceBlur[fineSlot] = uint2(0u, 0u);
+        return;
+    }
+
+    // Coarse cell containing this fine voxel's world center.
+    float3 world = BgiVoxelCenter(BgiCoord(i));
+    int3 cc = (int3)floor(BgiWorldToGridAt(world, _CoarseGridOrigin, _CoarseGridVoxelSize));
+
+    // Displayed coarse value there. Coarse voxels are big, so a fine air voxel near geometry can land
+    // in a SOLID coarse cell (zero) - fall back to the average of that cell's air neighbours so
+    // near-surface seeds aren't black.
+    float3 seed = 0;
+    if (BgiInBounds(cc)) {
+        uint coarseSlot = BGI_COARSE_OFFSET + BgiIndex((uint3)cc);
+        if (!BgiIsSolid(_Material[coarseSlot])) {
+            float w;
+            BgiUnpackRgb(_IrradianceBlur[coarseSlot], seed, w);
+        } else {
+            const int3 axes[6] = {
+                int3(1,0,0), int3(-1,0,0), int3(0,1,0), int3(0,-1,0), int3(0,0,1), int3(0,0,-1)
+            };
+            float wsum = 0.0;
+            [unroll]
+            for (int k = 0; k < 6; k++) {
+                int3 nb = cc + axes[k];
+                if (!BgiInBounds(nb)) continue;
+                uint nbSlot = BGI_COARSE_OFFSET + BgiIndex((uint3)nb);
+                if (BgiIsSolid(_Material[nbSlot])) continue;
+                float3 c; float w;
+                BgiUnpackRgb(_IrradianceBlur[nbSlot], c, w);
+                seed += c;
+                wsum += 1.0;
+            }
+            seed = (wsum > 0.0) ? seed / wsum : 0.0;
+        }
+    }
+
+    // Seed both: the blur is the displayed start value (the confidence ease departs from it), and the
+    // raw irradiance keeps the first inject's bounce read consistent with it.
+    uint2 packed = BgiPackRgb(seed, 0.0);
+    _Irradiance[fineSlot] = packed;
+    _IrradianceBlur[fineSlot] = packed;
 }

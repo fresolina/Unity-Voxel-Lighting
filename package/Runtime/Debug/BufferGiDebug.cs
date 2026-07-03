@@ -6,13 +6,11 @@ namespace Lotec.Lighting {
     /// <summary>
     /// GPU buffer-GI debug viewer. Draws one cube per voxel via <see cref="Graphics.RenderPrimitives"/>,
     /// building the cube in the vertex shader and reading the voxel color straight from the GI
-    /// StructuredBuffers on the GPU - no CPU readback, so it scales to the full grid. Based on
-    /// <see cref="GpuVoxelCubeVisualizer"/> but retargeted from the directional 6-face textures to
-    /// the single-value buffer fields owned by <see cref="BufferGiUpdater"/>.
+    /// StructuredBuffers on the GPU - no CPU readback, so it scales to the full grid.
     /// </summary>
     [ExecuteAlways]
-    [AddComponentMenu("Lotec/Voxel Lighting/Debug/Buffer GI Cube Visualizer")]
-    public class BufferGiCubeVisualizer : MonoBehaviour {
+    [AddComponentMenu("Lotec/Voxel Lighting/Debug/Buffer GI Debug")]
+    public class BufferGiDebug : MonoBehaviour {
         public enum Mode { Occupancy = 0, Irradiance = 1, Radiance = 2 }
         public enum Field { Fine = 0, Coarse = 1 }
 
@@ -53,6 +51,13 @@ namespace Lotec.Lighting {
         static readonly int s_wireSize0 = Shader.PropertyToID("_WireSize0");
         static readonly int s_wireOrigin1 = Shader.PropertyToID("_WireOrigin1");
         static readonly int s_wireSize1 = Shader.PropertyToID("_WireSize1");
+
+        void Reset() {
+            // Auto-set the default shader if not already assigned
+            if (_shader == null) {
+                _shader = Shader.Find("Hidden/Lotec/BufferGiCubeDebug");
+            }
+        }
 
         void OnDisable() {
             if (_material != null) {

@@ -1916,7 +1916,7 @@ Transform:
   m_GameObject: {fileID: 659102737}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0.563, y: 2.765, z: -2.453}
+  m_LocalPosition: {x: 0.6, y: 2.6, z: -2.4}
   m_LocalScale: {x: 0.5, y: 0.5, z: 0.5}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -2355,13 +2355,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 784264324}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.9258706, y: 0, z: 0, w: 0.3778408}
+  m_LocalRotation: {x: 0.9396927, y: 0, z: 0, w: 0.34202018}
   m_LocalPosition: {x: 0, y: 3.8, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 135.6, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 140, y: 0, z: 0}
 --- !u!114 &784264327
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4117,13 +4117,13 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 6653e61db895d8a44bd1f642f9e2b3d3, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiCubeVisualizer
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiDebug
   _shader: {fileID: 4800000, guid: 2812d0b83a01c5f4a9ff6e4ecd95957c, type: 3}
   mode: 1
   field: 1
   showWireframe: 1
   stride: 1
-  cubeFill: 0.31
+  cubeFill: 0.1
   intensity: 1
   minLuminance: 0.02
 --- !u!114 &1437948845
@@ -4141,15 +4141,14 @@ MonoBehaviour:
   _computeShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
   _voxelizeShader: {fileID: 4800000, guid: fb19bf6e7b7d7e24bb740879f668a9bd, type: 3}
   _exposure: 0
-  _maxSamples: 450
-  _raysPerFrame: 1
+  _maxSamples: 500
+  _samplesPerFrame: 1
+  _confidenceCurve: 3
   _continuousGi: 0
   _giFireflyClamp: 3
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
-  _spatialBlur: 1
   _raymarchMaxSteps: 96
   _coarseVolume: {fileID: 896086980}
-  _blendBand: 0.1
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0
@@ -4528,7 +4527,7 @@ Transform:
   m_GameObject: {fileID: 1588789276}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 3.448, y: 2.701, z: -2.497}
+  m_LocalPosition: {x: 3.4, y: 2.6, z: -2.4}
   m_LocalScale: {x: 0.5, y: 0.5, z: 0.5}
   m_ConstrainProportionsScale: 1
   m_Children: []
