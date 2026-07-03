@@ -63,9 +63,6 @@ namespace Lotec.Lighting {
                  "of a surface contributes this instead of the surface's room-lit value. Voxels " +
                  "fully enclosed in geometry converge to this color. Black = dark interiors.")]
         [SerializeField] Color _ambientFloor = Color.black;
-        [Tooltip("Max DDA steps per ray. The grid diagonal crosses up to ~96 cells, so 96 covers " +
-                 "corner-to-corner; lower trades reach for cost.")]
-        [Min(1)][SerializeField] int _raymarchMaxSteps = 96;
 
         [Header("Coarse field")]
         [Tooltip("A separate VoxelVolume covering the whole scene, used as the coarse (low-detail, " +
@@ -156,7 +153,6 @@ namespace Lotec.Lighting {
         static readonly int s_material = Shader.PropertyToID("_Material");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_samplesPerFrame = Shader.PropertyToID("_SamplesPerFrame");
-        static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
         static readonly int s_giFireflyClamp = Shader.PropertyToID("_GiFireflyClamp");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
@@ -497,7 +493,6 @@ namespace Lotec.Lighting {
             // noisy warm-up). Both derive from _collectedSamples so they stay aligned.
             _computeShader.SetFloat(s_emaWeight, EmaWeight);
             _computeShader.SetFloat(s_confidence, Confidence);
-            _computeShader.SetInt(s_raymarchMaxSteps, Mathf.Max(1, _raymarchMaxSteps));
             _computeShader.SetFloat(s_giFireflyClamp, _giFireflyClamp);
             _computeShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
             SetDirectionalLightUniforms();
