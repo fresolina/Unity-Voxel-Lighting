@@ -3596,6 +3596,58 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1323876192
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1323876193}
+  - component: {fileID: 1323876194}
+  m_Layer: 0
+  m_Name: Debug
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1323876193
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1323876192}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1628000040}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1323876194
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1323876192}
+  m_Enabled: 0
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6653e61db895d8a44bd1f642f9e2b3d3, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiDebug
+  _shader: {fileID: 4800000, guid: 2812d0b83a01c5f4a9ff6e4ecd95957c, type: 3}
+  mode: 0
+  field: 0
+  showWireframe: 1
+  stride: 1
+  cubeFill: 0.85
+  intensity: 1
+  minLuminance: 0.02
 --- !u!1 &1337109695
 GameObject:
   m_ObjectHideFlags: 0
@@ -4056,7 +4108,6 @@ GameObject:
   - component: {fileID: 1437948842}
   - component: {fileID: 1437948843}
   - component: {fileID: 1437948845}
-  - component: {fileID: 1437948846}
   m_Layer: 0
   m_Name: Lighting manager
   m_TagString: Untagged
@@ -4129,26 +4180,6 @@ MonoBehaviour:
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
   _raymarchMaxSteps: 96
   _coarseVolume: {fileID: 896086980}
---- !u!114 &1437948846
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1437948840}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6653e61db895d8a44bd1f642f9e2b3d3, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiDebug
-  _shader: {fileID: 4800000, guid: 2812d0b83a01c5f4a9ff6e4ecd95957c, type: 3}
-  mode: 0
-  field: 0
-  showWireframe: 1
-  stride: 1
-  cubeFill: 0.85
-  intensity: 1
-  minLuminance: 0.02
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0
@@ -4641,6 +4672,7 @@ Transform:
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 1500960147}
+  - {fileID: 1323876193}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1635818836
