@@ -20,6 +20,8 @@ namespace Lotec.Lighting {
         [Min(4)]
         [SerializeField] int _maxResolution = 128;
 
+        [SerializeField] bool _autoRegisterWithManager = true;
+
         [Header("Baked static fields")]
         public Texture3D sdfHiresTexture;
         public Texture3D sdfLowresTexture;
@@ -69,15 +71,18 @@ namespace Lotec.Lighting {
         }
 
         void OnEnable() {
-            LightingManager.Instance?.RegisterVolume(this);
+            if (_autoRegisterWithManager)
+                LightingManager.Instance?.RegisterVolume(this);
         }
 
         void Start() {
-            LightingManager.Instance?.RegisterVolume(this);
+            if (_autoRegisterWithManager)
+                LightingManager.Instance?.RegisterVolume(this);
         }
 
         void OnDisable() {
-            LightingManager.Instance?.UnregisterVolume(this);
+            if (_autoRegisterWithManager)
+                LightingManager.Instance?.UnregisterVolume(this);
         }
 
         public void RecomputeBoundsAndResolution() {
