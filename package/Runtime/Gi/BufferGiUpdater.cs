@@ -36,10 +36,6 @@ namespace Lotec.Lighting {
         [SerializeField] Shader _voxelizeShader;
 
         [Header("Solve")]
-        [Tooltip("Scene display exposure in EV stops, published as the _Exposure global. The lit " +
-                 "shader applies exp2(_Exposure) whenever GI is on, so this must be set explicitly " +
-                 "(otherwise a stale value from a previous GI updater darkens the image).")]
-        [SerializeField] float _exposure;
         [Tooltip("Total ray budget per voxel (quality): the field is a progressive average that " +
                  "accumulates rays until it reaches this many, then the solve idles. Quality depends " +
                  "on total rays, so bigger = cleaner. It's reached after maxSamples/samplesPerFrame frames.")]
@@ -63,6 +59,12 @@ namespace Lotec.Lighting {
                  "fully enclosed in geometry converge to this color. Black = dark interiors.")]
         [SerializeField] Color _ambientFloor = Color.black;
 
+        [Header("Lighting")]
+        [Tooltip("Display transform (exposure + tonemap), with optional auto-exposure. Published as " +
+                 "the _Exposure global + TONEMAP_OFF keyword; the lit shader applies exp2(_Exposure) " +
+                 "whenever GI is on. Set explicitly so a stale value can't darken the image.")]
+        [SerializeField] AutoExposure _exposureControl = new AutoExposure();
+
         [Header("Coarse field")]
         [Tooltip("MeshBounds covering the whole scene, used as the coarse (low-detail, far) GI " +
                  "field - a 32^3 grid over its larger bounds (bigger voxels). Should be larger " +
@@ -84,6 +86,7 @@ namespace Lotec.Lighting {
         int _gatherKernel = -1;
         int _blurKernel = -1;
         int _initFineKernel = -1;
+        int _averageLuminanceKernel = -1;
         bool _resetFineField;
         bool _hasLoggedMissingReferences;
         // Progressive accumulation in SAMPLES (rays): _collectedSamples = total rays gathered since the last
@@ -175,7 +178,10 @@ namespace Lotec.Lighting {
         };
         static readonly int s_ambientFloor = Shader.PropertyToID("_AmbientFloor");
         static readonly int s_intensity = Shader.PropertyToID("_BgiIntensity");
-        static readonly int s_exposure = Shader.PropertyToID("_Exposure");
+        static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
+        static readonly int s_cameraPosition = Shader.PropertyToID("_CameraPosition");
+        static readonly int s_cameraForward = Shader.PropertyToID("_CameraForward");
+        static readonly int s_luminanceRadius = Shader.PropertyToID("_LuminanceRadius");
         #endregion
 
         void OnEnable() {
@@ -201,6 +207,8 @@ namespace Lotec.Lighting {
             UnityEditor.EditorApplication.update -= EditorPump;
 #endif
             SetGiBufferKeyword(false);
+            _exposureControl.ResetKeyword();
+            _exposureControl.Release();
             ReleaseBuffers();
             if (_voxelizeMaterial != null) {
                 if (Application.isPlaying) Destroy(_voxelizeMaterial); else DestroyImmediate(_voxelizeMaterial);
@@ -306,6 +314,25 @@ namespace Lotec.Lighting {
 
             SetGlobals();
             SetGiBufferKeyword(true);
+            // Display transform (exposure + tonemap); runs every frame so auto-exposure keeps
+            // adapting even when the solve is idle (a static scene the camera moves through).
+            _exposureControl.Apply(DispatchLuminance);
+        }
+
+        // Backend luminance measurement for AutoExposure: average the DISPLAYED fine field's air-voxel
+        // luminance in a camera-centred radius into the controller's 2-uint buffer. AutoExposure owns
+        // the clear + readback + adaptation; this only binds + dispatches the fine-field kernel.
+        void DispatchLuminance(ComputeBuffer luminanceBuffer) {
+            if (_averageLuminanceKernel < 0 || _irradianceBlurBuffer == null || Camera.main == null) return;
+            SetGridUniforms(GridOrigin, GridSize, VoxelSize);
+            _computeShader.SetInt(s_fieldOffset, FineField * VoxelCount);
+            _computeShader.SetBuffer(_averageLuminanceKernel, s_material, _materialBuffer);
+            _computeShader.SetBuffer(_averageLuminanceKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _computeShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, luminanceBuffer);
+            _computeShader.SetVector(s_cameraPosition, Camera.main.transform.position);
+            _computeShader.SetVector(s_cameraForward, Camera.main.transform.forward);
+            _computeShader.SetFloat(s_luminanceRadius, _exposureControl.MeasureRadius);
+            _computeShader.Dispatch(_averageLuminanceKernel, Groups, 1, 1);
         }
 
         // Publish the buffers + grid mapping + confidence the lit shader's SampleBufferGI reads.
@@ -323,9 +350,8 @@ namespace Lotec.Lighting {
             // Unity control for indirect strength, used instead of a custom field.
             Light sun = RenderSettings.sun;
             Shader.SetGlobalFloat(s_intensity, sun != null ? sun.bounceIntensity : 1f);
-            // The lit shader applies exp2(_Exposure) in GI mode; publish it explicitly so a stale
-            // value (e.g. a negative auto-exposure left by GiFieldUpdater) can't darken the image.
-            Shader.SetGlobalFloat(s_exposure, _exposure);
+            // The display transform (_Exposure + TONEMAP_OFF) is published by _exposureControl.Apply
+            // in Update - explicitly, so a stale value (e.g. left by GiFieldUpdater) can't darken it.
         }
 
         bool IsReady(out string reason) {
@@ -347,6 +373,7 @@ namespace Lotec.Lighting {
             _gatherKernel = _computeShader.FindKernel("CSGather");
             _blurKernel = _computeShader.FindKernel("CSBlur");
             _initFineKernel = _computeShader.FindKernel("CSInitFineFromCoarse");
+            _averageLuminanceKernel = _computeShader.FindKernel("CSAverageLuminance");
 
             // uint material, uint2 radiance/irradiance. Sized for all fields (concatenated slices).
             _materialBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));

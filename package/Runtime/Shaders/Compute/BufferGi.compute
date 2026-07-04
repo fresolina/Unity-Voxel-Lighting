@@ -14,6 +14,7 @@
 #pragma kernel CSGather
 #pragma kernel CSBlur
 #pragma kernel CSInitFineFromCoarse
+#pragma kernel CSAverageLuminance
 
 #define MAX_POINT_LIGHTS 4
 #define MAX_SPOT_LIGHTS 4
@@ -25,6 +26,7 @@
 RWStructuredBuffer<uint2> _Radiance;    // outgoing radiance (fp16x3), stored in solid voxels
 RWStructuredBuffer<uint2> _Irradiance;  // accumulated incoming light (rgb) + sample count (w)
 RWStructuredBuffer<uint2> _IrradianceBlur; // spatially blurred irradiance, sampled by the fragment read
+RWStructuredBuffer<uint>  _LuminanceResult; // [0] = encoded log-luminance sum, [1] = sample count (auto-exposure)
 StructuredBuffer<uint>    _Material;      // occupancy/material (voxelized by BufferGiVoxelize.shader)
 
 // --- Solve uniforms ---
@@ -35,6 +37,10 @@ float _EmaWeight;  // progressive gather blend weight (samplesPerFrame/totalSamp
 // Coarse grid mapping for CSInitFineFromCoarse (that dispatch's _BgiGrid* uniforms are the FINE grid).
 float3 _CoarseGridOrigin;
 float3 _CoarseGridVoxelSize;
+// Auto-exposure (CSAverageLuminance): sample the displayed field near the camera.
+float3 _CameraPosition;
+float3 _CameraForward;
+float  _LuminanceRadius;
 float _GiFireflyClamp;
 float3 _DirectLightDir;   // toward the light
 float4 _DirectLightColor;
@@ -455,4 +461,38 @@ void CSInitFineFromCoarse(uint3 id : SV_DispatchThreadID)
     uint2 packed = BgiPackRgb(seed, 0.0);
     _Irradiance[fineSlot] = packed;
     _IrradianceBlur[fineSlot] = packed;
+}
+
+// ----------------------------------------------------------
+// AVERAGE LUMINANCE (auto-exposure): accumulate the encoded log-luminance of the DISPLAYED field
+// (_IrradianceBlur) over air voxels within _LuminanceRadius of the camera and in front of it,
+// cosine-weighted by view alignment, into _LuminanceResult ([0] = encoded sum, [1] = count). The C#
+// AutoExposure decodes avg log2 = (sum/count)/1024 - 16 (must match the texture-GI kernel's encoding).
+// Dispatched per FIELD via _FieldOffset (the fine field near the camera).
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSAverageLuminance(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+
+    uint slot = _FieldOffset + i;
+    if (BgiIsSolid(_Material[slot])) return; // GI lives in air voxels
+
+    float3 voxelCenter = BgiVoxelCenter(BgiCoord(i));
+    float3 offset = voxelCenter - _CameraPosition;
+    float distSq = dot(offset, offset);
+    if (distSq > _LuminanceRadius * _LuminanceRadius) return; // outside the sampling radius
+
+    float invDist = rsqrt(max(distSq, 1e-6));
+    float cosAngle = dot(offset * invDist, _CameraForward);
+    if (cosAngle < 0.0) return; // behind the camera
+
+    float3 irr; float w;
+    BgiUnpackRgb(_IrradianceBlur[slot], irr, w);
+    float lum = GetRec709Luminance(irr) * cosAngle; // cosine-weight: off-axis voxels count less
+    float logLum = log2(max(lum, 1e-4));
+    uint encoded = (uint)((logLum + 16.0) * 1024.0);
+    InterlockedAdd(_LuminanceResult[0], encoded);
+    InterlockedAdd(_LuminanceResult[1], 1u);
 }

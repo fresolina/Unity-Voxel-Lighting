@@ -4173,13 +4173,20 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiUpdater
   _computeShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
   _voxelizeShader: {fileID: 4800000, guid: fb19bf6e7b7d7e24bb740879f668a9bd, type: 3}
-  _exposure: 0
   _maxSamples: 500
   _samplesPerFrame: 1
   _confidenceCurve: 3
   _continuousGi: 0
-  _giFireflyClamp: 3
+  _giFireflyClamp: 13
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
+  _exposureControl:
+    _tonemapInShader: 1
+    _exposure: 0
+    _auto: 1
+    _min: -2
+    _max: 4
+    _adaptationSpeed: 2
+    _measureRadius: 3
   _coarseBounds: {fileID: 896086983}
 --- !u!114 &1437948850
 MonoBehaviour:
@@ -4247,13 +4254,14 @@ MonoBehaviour:
   _raysPerFrame: 1
   _giFireflyClamp: 3
   _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
-  _tonemapInShader: 1
-  _exposure: 0
-  _autoExposure: 1
-  _autoExposureMin: -2
-  _autoExposureMax: 4
-  _adaptationSpeed: 2
-  _autoExposureRadius: 3
+  _exposureControl:
+    _tonemapInShader: 1
+    _exposure: 0
+    _auto: 1
+    _min: -2
+    _max: 4
+    _adaptationSpeed: 2
+    _measureRadius: 3
   _lightingMethod: 0
   _lpvDecay: 0.97
   _raymarchMaxSteps: 64

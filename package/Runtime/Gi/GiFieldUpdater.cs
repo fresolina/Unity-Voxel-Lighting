@@ -1,4 +1,3 @@
-using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
@@ -43,22 +42,7 @@ namespace Lotec.Lighting {
         [SerializeField] Texture2D _blueNoiseTexture;
 
         [Header("Lighting")]
-        [Tooltip("Apply the display transform (exposure + tonemap) in the lit shader. Turn off to " +
-                 "output linear HDR for a post-processing stack to expose/tonemap once - this also " +
-                 "skips the auto-exposure luminance pass.")]
-        [SerializeField] bool _tonemapInShader = true;
-        [Tooltip("Manual exposure offset in EV stops (added on top of auto-exposure).")]
-        [SerializeField] float _exposure;
-        [Tooltip("Automatically adapt exposure based on average scene luminance.")]
-        [SerializeField] bool _autoExposure;
-        [Tooltip("Minimum auto-exposure in EV stops.")]
-        [SerializeField] float _autoExposureMin = -2f;
-        [Tooltip("Maximum auto-exposure in EV stops.")]
-        [SerializeField] float _autoExposureMax = 4f;
-        [Tooltip("How quickly exposure adapts (higher = faster). Roughly seconds to adapt.")]
-        [SerializeField][Range(0.5f, 10f)] float _adaptationSpeed = 2f;
-        [Tooltip("Radius around the camera (in meters) to sample for auto-exposure.")]
-        [SerializeField] float _autoExposureRadius = 3f;
+        [SerializeField] AutoExposure _exposureControl = new AutoExposure();
         [Tooltip("Select GI solve method.")]
         [SerializeField] LightingMethod _lightingMethod = LightingMethod.PathTracing;
         [Range(0f, 1f)]
@@ -94,9 +78,6 @@ namespace Lotec.Lighting {
         RenderTexture _irradianceFieldA;  // Ping
         RenderTexture _irradianceFieldB;  // Pong
         RenderTexture _irradianceFieldFinal; // Blurred final
-        ComputeBuffer _luminanceBuffer;
-        bool _luminanceReadbackPending;
-        float _autoExposureEV;
         bool _isEvenFrame = true;
         // Number of EMA time constants to keep solving after a light change. ~4 reaches >98% of
         // the new lighting (1 - e^-4), so the transition visually completes before the solver idles.
@@ -144,7 +125,6 @@ namespace Lotec.Lighting {
         // Property IDs Globals for Fragment Shaders
         static readonly int s_radianceFieldVoxelSize = Shader.PropertyToID("_RadianceFieldVoxelSize");
         static readonly int s_giConfidence = Shader.PropertyToID("_GiConfidence");
-        static readonly int s_exposure = Shader.PropertyToID("_Exposure");
         static readonly int s_volumeBoundsMin = Shader.PropertyToID("_VoxelVolumeBoundsMin");
         static readonly int s_volumeBoundsSize = Shader.PropertyToID("_VoxelVolumeBoundsSize");
         #endregion
@@ -310,7 +290,7 @@ namespace Lotec.Lighting {
                 _isEvenFrame = !_isEvenFrame;
             }
 
-            ApplyDisplayTransform();
+            _exposureControl.Apply(DispatchLuminanceReduction);
             SetGlobalShaderVariables();
 
             _prevLightSettings = new LightSettings {
@@ -337,7 +317,8 @@ namespace Lotec.Lighting {
             // GI is the sole GI / display-transform authority; with it gone, fall back to the
             // direct-only path with the in-shader tonemap so HDR still gets tonemapped.
             SetGiKeyword(false);
-            Shader.DisableKeyword("TONEMAP_OFF");
+            _exposureControl.ResetKeyword();
+            _exposureControl.Release();
             ReleaseBuffers();
         }
 
@@ -580,9 +561,6 @@ namespace Lotec.Lighting {
             _irradianceFieldB = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_B");
             _irradianceFieldFinal = CreateRadianceTexture(_giTextureFormat, "GI_Irradiance_Final");
 
-            _luminanceBuffer?.Release();
-            _luminanceBuffer = new ComputeBuffer(2, sizeof(uint));
-
             ClearVolume(_radianceField);
             ClearVolume(_irradianceFieldA);
             ClearVolume(_irradianceFieldB);
@@ -602,8 +580,6 @@ namespace Lotec.Lighting {
                 _irradianceFieldA.Release();
             if (_irradianceFieldFinal != null)
                 _irradianceFieldFinal.Release();
-            _luminanceBuffer?.Release();
-            _luminanceBuffer = null;
             _radianceField = null;
             _irradianceFieldB = null;
             _irradianceFieldA = null;
@@ -733,51 +709,23 @@ namespace Lotec.Lighting {
             _giComputeShader.Dispatch(_clearVolumeKernel, groupsX, groupsY, groupsZ);
         }
 
-        void DispatchLuminanceReduction() {
-            if (_luminanceBuffer == null || _luminanceReadbackPending) return;
-
-            // Clear the accumulation buffer.
-            _luminanceBuffer.SetData(new uint[] { 0, 0 });
+        // Backend luminance measurement for AutoExposure: average the irradiance texture's luminance
+        // in a camera-centred cone/radius into the controller's 2-uint buffer (encoded sum, count).
+        // AutoExposure owns the clear + readback + adaptation; this only binds + dispatches the kernel.
+        void DispatchLuminanceReduction(ComputeBuffer luminanceBuffer) {
+            if (Camera.main == null) return; // no view -> leave the buffer empty (count 0 -> no adapt)
 
             int groupsX = Mathf.CeilToInt(_radianceTextureResolution.x / 8.0f);
             int groupsY = Mathf.CeilToInt(_radianceTextureResolution.y / 8.0f);
             int groupsZ = Mathf.CeilToInt(_radianceTextureResolution.z / 8.0f);
 
-            _giComputeShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, _luminanceBuffer);
+            _giComputeShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, luminanceBuffer);
             _giComputeShader.SetTexture(_averageLuminanceKernel, s_irradianceFieldInput, IrradianceFinal);
             _giComputeShader.SetTexture(_averageLuminanceKernel, s_sdfLowres, SurfaceDistanceFieldLowRes);
             _giComputeShader.SetVector(s_cameraPosition, Camera.main.transform.position);
             _giComputeShader.SetVector(s_cameraForward, Camera.main.transform.forward);
-            _giComputeShader.SetFloat(s_luminanceRadius, _autoExposureRadius);
+            _giComputeShader.SetFloat(s_luminanceRadius, _exposureControl.MeasureRadius);
             _giComputeShader.Dispatch(_averageLuminanceKernel, groupsX, groupsY, groupsZ);
-
-            _luminanceReadbackPending = true;
-            AsyncGPUReadback.Request(_luminanceBuffer, OnLuminanceReadback);
-        }
-
-        void OnLuminanceReadback(AsyncGPUReadbackRequest request) {
-            _luminanceReadbackPending = false;
-            if (request.hasError) return;
-
-            NativeArray<uint> data = request.GetData<uint>();
-            uint encodedSum = data[0];
-            uint count = data[1];
-            if (count == 0) return;
-
-            // Decode: encoded = (log2(lum) + 16) * 1024, so avg log2 = (sum/count)/1024 - 16.
-            float avgLog2Luminance = (encodedSum / (float)count) / 1024f - 16f;
-            // Target: we want the geometric mean luminance to map to ~0.18 (mid-grey) after exposure.
-            // exposed = lum * 2^EV, and we want exposed ≈ 0.18
-            // => 2^avgLog2 * 2^EV = 0.18  => EV = log2(0.18) - avgLog2
-            float targetEV = -2.474f - avgLog2Luminance; // log2(0.18) ≈ -2.474
-            _autoExposureEV = Mathf.Clamp(targetEV, _autoExposureMin, _autoExposureMax);
-        }
-
-        void UpdateAutoExposure() {
-            float targetExposure = _autoExposureEV + _exposure;
-            float currentExposure = Shader.GetGlobalFloat(s_exposure);
-            float speed = 1f - Mathf.Exp(-Time.deltaTime * _adaptationSpeed);
-            Shader.SetGlobalFloat(s_exposure, Mathf.Lerp(currentExposure, targetExposure, speed));
         }
 
         void SetDirectionalLightUniforms() {
@@ -820,24 +768,6 @@ namespace Lotec.Lighting {
             // shared _VoxelVolumeBounds* globals, published by LightingManager for the active
             // volume - GI no longer republishes them. Likewise the point/spot light globals for
             // fragment direct lighting are published by LightingManager.
-        }
-
-        // In-shader display transform: when on, publish exposure (auto-adapted or manual) and keep
-        // the shader's tonemap on. When off, output linear HDR for a post stack to do exposure +
-        // tonemap once - and skip the auto-exposure luminance pass entirely.
-        void ApplyDisplayTransform() {
-            if (!_tonemapInShader) {
-                Shader.EnableKeyword("TONEMAP_OFF");
-                return;
-            }
-
-            Shader.DisableKeyword("TONEMAP_OFF");
-            if (_autoExposure) {
-                DispatchLuminanceReduction();
-                UpdateAutoExposure();
-            } else {
-                Shader.SetGlobalFloat(s_exposure, _exposure);
-            }
         }
     }
 
