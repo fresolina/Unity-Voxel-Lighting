@@ -10,7 +10,7 @@ namespace Lotec.Lighting {
     /// Supports 8-bit (R8), 32-bit (RG16), and 64-bit (RGBA16) bitmask textures.
     /// </summary>
     [Serializable]
-    public class OcclusionBitmaskBaker {
+    public class OcclusionBitmaskBake {
         public enum BitmaskDirectionCount {
             Dir8 = 8,
             Dir32 = 32,
@@ -55,15 +55,15 @@ namespace Lotec.Lighting {
             error = "";
 
             if (sourceVolume == null) {
-                error = "OcclusionBitmaskBaker: sourceVolume is null";
+                error = "OcclusionBitmaskBake: sourceVolume is null";
                 return false;
             }
             if (bitmaskBakeCompute == null) {
-                error = "OcclusionBitmaskBaker: bitmaskBakeCompute not assigned";
+                error = "OcclusionBitmaskBake: bitmaskBakeCompute not assigned";
                 return false;
             }
             if (sourceVolume.sdfHiresTexture == null) {
-                error = "OcclusionBitmaskBaker: sourceVolume has no sdfHiresTexture";
+                error = "OcclusionBitmaskBake: sourceVolume has no sdfHiresTexture";
                 return false;
             }
 
@@ -73,13 +73,13 @@ namespace Lotec.Lighting {
             int bitmaskSize = resolution.x * resolution.y * resolution.z;
 
             if (bounds.size.magnitude < 0.01f || resolution.x < 2) {
-                error = "OcclusionBitmaskBaker: invalid bounds or resolution";
+                error = "OcclusionBitmaskBake: invalid bounds or resolution";
                 return false;
             }
 
             GraphicsFormat bitmaskFormat = GetTextureFormat(dirCount);
             if (!SystemInfo.IsFormatSupported(bitmaskFormat, GraphicsFormatUsage.Sample)) {
-                error = $"OcclusionBitmaskBaker: format {bitmaskFormat} not supported for sampling on this platform";
+                error = $"OcclusionBitmaskBake: format {bitmaskFormat} not supported for sampling on this platform";
                 return false;
             }
 
@@ -116,14 +116,14 @@ namespace Lotec.Lighting {
             readbackRequest.WaitForCompletion();
 
             if (readbackRequest.hasError) {
-                error = "OcclusionBitmaskBaker: readback failed";
+                error = "OcclusionBitmaskBake: readback failed";
                 bitmaskBuffer.Dispose();
                 return false;
             }
 
             var readbackData = readbackRequest.GetData<uint>();
             if (readbackData.Length != bitmaskSize * 2) {
-                error = $"OcclusionBitmaskBaker: readback size mismatch (got {readbackData.Length}, expected {bitmaskSize * 2})";
+                error = $"OcclusionBitmaskBake: readback size mismatch (got {readbackData.Length}, expected {bitmaskSize * 2})";
                 bitmaskBuffer.Dispose();
                 return false;
             }
@@ -132,7 +132,7 @@ namespace Lotec.Lighting {
             bakedDirections = fibDirs;
 
             bitmaskBuffer.Dispose();
-            Debug.Log($"OcclusionBitmaskBaker: baked {dirCount} directions ({resolution.x}x{resolution.y}x{resolution.z} = {bitmaskSize} voxels, format={bitmaskFormat})");
+            Debug.Log($"OcclusionBitmaskBake: baked {dirCount} directions ({resolution.x}x{resolution.y}x{resolution.z} = {bitmaskSize} voxels, format={bitmaskFormat})");
             return true;
         }
 

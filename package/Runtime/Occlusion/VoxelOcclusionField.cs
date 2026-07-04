@@ -7,8 +7,9 @@ namespace Lotec.Lighting {
     /// globals, so the shadow term comes from the field with no SDF texture bound at runtime.
     /// The shared volume bounds it samples against are published by <see cref="LightingManager"/>.
     ///
-    /// Added automatically by <see cref="VoxelOcclusionFieldBaker"/> when it bakes. Its
-    /// presence is what tells <see cref="LightingManager"/> to select the OCC_FIELD path.
+    /// Added automatically by the occlusion-field baker when it bakes. The ENABLED binder on the
+    /// active volume selects the OCC_FIELD shadow path (it owns the shadow keyword group); with no
+    /// enabled binder the SDF default is used. Mutually exclusive with the bitmask binder.
     /// </summary>
     [ExecuteInEditMode]
     [RequireComponent(typeof(VoxelVolume))]
@@ -39,11 +40,27 @@ namespace Lotec.Lighting {
             occlusionFieldTextures != null && occlusionFieldTextures.Length > 0
             && occlusionFieldDirections != null && occlusionFieldDirections.Length > 0;
 
+        void OnEnable() {
+            // Shadow sources are mutually exclusive: enabling this binder turns the bitmask off.
+            if (TryGetComponent(out VoxelOcclusionBitmask bitmask) && bitmask.enabled)
+                bitmask.enabled = false;
+        }
+
+        void OnDisable() {
+            LightingKeywords.ReleaseShadow(this);
+        }
+
         void Update() {
-            // Shader globals are singular, so only the active volume's binder publishes.
+            // Shader globals are singular, so only the active volume's binder publishes (and only
+            // the publishing binder holds the shadow-keyword claim).
             LightingManager manager = LightingManager.Instance;
-            if (manager != null && manager.Volume != Volume) return;
-            if (HasData) Bind();
+            bool active = (manager == null || manager.Volume == Volume) && HasData;
+            if (!active) {
+                LightingKeywords.ReleaseShadow(this);
+                return;
+            }
+            LightingKeywords.ClaimShadow(this, LightingKeywords.ShadowOcclusionField);
+            Bind();
         }
 
         /// <summary>Publish the occlusion-field globals + the occlusion-grid inverse voxel size

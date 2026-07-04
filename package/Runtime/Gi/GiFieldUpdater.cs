@@ -298,9 +298,9 @@ namespace Lotec.Lighting {
 
             EnsureInitialized();
             if (isConverging || isTransitioning || _continuousGi) {
-                // Reuse the light data the manager already collected this frame (for fragment
+                // Reuse the light data the publisher already collected this frame (for fragment
                 // direct lighting) and push it to the GI compute - no second collect.
-                Manager?.LocalLights?.ApplyToCompute(_giComputeShader);
+                LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_giComputeShader);
                 SetDirectionalLightUniforms();
                 DispatchGIUpdate();
                 _irradianceFieldSampleCount++;
@@ -323,6 +323,13 @@ namespace Lotec.Lighting {
 
         void OnEnable() {
             Instance = this;
+            // GI methods are mutually exclusive - the enabled component selects the method, so
+            // enabling this one turns the buffer GI off.
+            BufferGiUpdater other = FindAnyObjectByType<BufferGiUpdater>();
+            if (other != null && other.enabled) {
+                Debug.LogWarning("Texture GI enabled - disabling the buffer GI (BufferGiUpdater); only one GI method can be active.", this);
+                other.enabled = false;
+            }
         }
 
         void OnDisable() {
@@ -334,8 +341,11 @@ namespace Lotec.Lighting {
             ReleaseBuffers();
         }
 
-        static void SetGiKeyword(bool on) {
-            if (on) { Shader.EnableKeyword("GI_ON"); Shader.DisableKeyword("GI_OFF"); } else { Shader.DisableKeyword("GI_ON"); Shader.EnableKeyword("GI_OFF"); }
+        // Change-only + ownership-aware GI keyword claim (also disables GI_VOXEL_BUFFER, which the
+        // old pairwise toggle missed), safe to call every frame.
+        void SetGiKeyword(bool on) {
+            if (on) LightingKeywords.ClaimGi(this, LightingKeywords.GiTexture);
+            else LightingKeywords.ReleaseGi(this);
         }
 
         bool IsRuntimeGiReady(out string reason) {
@@ -417,7 +427,8 @@ namespace Lotec.Lighting {
         }
 
         int GetLocalLightStateHash() {
-            if (Manager == null) {
+            LocalLightsPublisher lights = LocalLightsPublisher.Instance;
+            if (lights == null) {
                 return 0;
             }
 
@@ -425,7 +436,7 @@ namespace Lotec.Lighting {
                 int hash = 17;
                 int pointLightCount = 0;
                 int spotLightCount = 0;
-                var additionalLights = Manager.AdditionalLights;
+                var additionalLights = lights.AdditionalLights;
 
                 for (int i = 0; i < additionalLights.Count; i++) {
                     Light light = additionalLights[i];

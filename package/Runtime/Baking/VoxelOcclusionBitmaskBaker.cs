@@ -7,11 +7,11 @@ namespace Lotec.Lighting {
     /// </summary>
     [AddComponentMenu("Lotec/Voxel Lighting/Bakers/Voxel Occlusion Bitmask Baker")]
     public class VoxelOcclusionBitmaskBaker : VoxelBakerBase {
-        [SerializeField] OcclusionBitmaskBaker _baker = new OcclusionBitmaskBaker();
+        [SerializeField] OcclusionBitmaskBake _baker = new OcclusionBitmaskBake();
         [HideInInspector][SerializeField] bool _hemisphereInitialized;
         [HideInInspector][SerializeField] bool _lastHemisphereOnly;
 
-        public OcclusionBitmaskBaker Baker => _baker;
+        public OcclusionBitmaskBake Baker => _baker;
         public override int BakeOrder => 10;
         public override string BakeLabel => "Occlusion Bitmask";
 

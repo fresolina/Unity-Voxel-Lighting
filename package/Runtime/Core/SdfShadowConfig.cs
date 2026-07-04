@@ -3,11 +3,11 @@ using UnityEngine;
 namespace Lotec.Lighting {
     [System.Serializable]
     public class SdfShadowConfig {
-        static readonly int sMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
-        static readonly int sSoftness = Shader.PropertyToID("_RaymarchSoftness");
-        static readonly int sEpsilon = Shader.PropertyToID("_RaymarchEpsilon");
-        static readonly int sMinStep = Shader.PropertyToID("_RaymarchMinStep");
-        static readonly int sStartOffset = Shader.PropertyToID("_RaymarchStartOffset");
+        static readonly int s_sMaxSteps = Shader.PropertyToID("_RaymarchMaxSteps");
+        static readonly int s_sSoftness = Shader.PropertyToID("_RaymarchSoftness");
+        static readonly int s_sEpsilon = Shader.PropertyToID("_RaymarchEpsilon");
+        static readonly int s_sMinStep = Shader.PropertyToID("_RaymarchMinStep");
+        static readonly int s_sStartOffset = Shader.PropertyToID("_RaymarchStartOffset");
 
         // Epsilon: hard-hit threshold for the raymarcher (d <= epsilon → full shadow).
         // The hi-res SDF uses high softness for penumbra, so the explicit epsilon only
@@ -26,11 +26,11 @@ namespace Lotec.Lighting {
         [field: SerializeField] public float MinStep { get; set; } = 0.1f;
 
         public void ApplyShaderGlobals(float voxelSize) {
-            Shader.SetGlobalInt(sMaxSteps, MaxSteps);
-            Shader.SetGlobalFloat(sSoftness, Softness);
-            Shader.SetGlobalFloat(sEpsilon, voxelSize * EpsilonScale);
-            Shader.SetGlobalFloat(sMinStep, voxelSize * MinStep);
-            Shader.SetGlobalFloat(sStartOffset, voxelSize * StartOffset);
+            Shader.SetGlobalInt(s_sMaxSteps, MaxSteps);
+            Shader.SetGlobalFloat(s_sSoftness, Softness);
+            Shader.SetGlobalFloat(s_sEpsilon, voxelSize * EpsilonScale);
+            Shader.SetGlobalFloat(s_sMinStep, voxelSize * MinStep);
+            Shader.SetGlobalFloat(s_sStartOffset, voxelSize * StartOffset);
         }
     }
 }

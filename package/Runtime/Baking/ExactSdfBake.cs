@@ -10,7 +10,7 @@ namespace Lotec.Lighting {
     /// Bakes signed distance fields (SDF).
     /// </summary>
     [Serializable]
-    public class SdfBaker : ISdfBaker {
+    public class ExactSdfBake : ISdfBake {
         public ComputeShader sdfBakeCompute;
 
         // Hard-invalid triangles are excluded from the bake. A degenerate triangle has
@@ -49,7 +49,7 @@ namespace Lotec.Lighting {
             Debug.Log($"Starting SDF bake (exact) with resolution {resolution} for volume '{volume.name}'", volume);
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             if (volume == null) {
-                error = "Target SdfVolume is null.";
+                error = "Target VoxelVolume is null.";
                 return false;
             }
             Transform root = volume.BakeRoot;
@@ -163,7 +163,7 @@ namespace Lotec.Lighting {
         // shell search touches only a handful of triangles per voxel, while still
         // finding the exact nearest triangle (triangles outside the bounds clamp into
         // border cells, where they remain reachable by edge voxels).
-        // Internal so alternative bakers (e.g. JfaSdfBaker) can share the grid build.
+        // Internal so alternative bakers (e.g. JfaSdfBake) can share the grid build.
         internal static void BuildUniformGrid(
             Vector3[] triVerts,
             Bounds bounds,
@@ -276,7 +276,7 @@ namespace Lotec.Lighting {
 
         // Builds the world-space triangle list used by the compute shader and gathers
         // per-mesh diagnostics so problematic imported geometry can be identified.
-        // Internal so alternative bakers (e.g. JfaSdfBaker) can share triangle gathering.
+        // Internal so alternative bakers (e.g. JfaSdfBake) can share triangle gathering.
         internal static bool TryBuildTriangleListWorld(
             Transform root,
             Bounds bakeBounds,
@@ -294,7 +294,7 @@ namespace Lotec.Lighting {
             foreach (MeshRenderer mr in meshRenderers) {
                 if (mr == null)
                     continue;
-                if (!IsBakeEligible(mr))
+                if (!MeshBounds.IsBakeEligible(mr))
                     continue;
                 if (!mr.TryGetComponent(out MeshFilter mf))
                     continue;
@@ -317,11 +317,6 @@ namespace Lotec.Lighting {
             LogSuspiciousTriangleDiagnostics(diagnostics, bakeBounds);
 
             return true;
-        }
-
-        static bool IsBakeEligible(Renderer renderer) {
-            GameObject gameObject = renderer.gameObject;
-            return gameObject.activeInHierarchy && gameObject.isStatic;
         }
 
         // Reads one mesh into the flattened world-space triangle buffer used by the SDF bake.

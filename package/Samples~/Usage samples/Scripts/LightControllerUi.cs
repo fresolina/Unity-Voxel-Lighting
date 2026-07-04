@@ -58,8 +58,9 @@ namespace Lotec.Lighting.Samples
         string _frameTimeLastSecondLowText = UnavailableFrameTimeText;
         string _frameTimeLastSecondHighText = UnavailableFrameTimeText;
         string _frameTimeLastSecondAverageText = UnavailableFrameTimeText;
+        GiMethod _lastGiMethod;
         GiFieldUpdater.LightingMethod _lastLightingMethod;
-        LightingManager.ShadowSource _lastShadowMode;
+        ShadowSourceMode _lastShadowMode;
         float _lastEnabledLightIntensity;
         bool _lastFlashlightEnabled;
         bool _lastCandleEnabled;
@@ -242,6 +243,8 @@ namespace Lotec.Lighting.Samples
 
             UnbindUi();
 
+
+            EnumField giField = root.Q<EnumField>("gi-enum");
             EnumField giMethodField = root.Q<EnumField>("lighting-method-enum");
             FloatField enabledLightIntensityField = root.Q<FloatField>("enabled-light-intensity-field");
             Toggle flashlightToggle = root.Q<Toggle>("flashlight-toggle");
@@ -249,7 +252,7 @@ namespace Lotec.Lighting.Samples
             EnumField shadowModeField = root.Q<EnumField>("shadow-mode-enum");
             IntegerField samplesPerFrameField = root.Q<IntegerField>("samples-per-frame-field");
 
-            if (giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || samplesPerFrameField == null || !TryCacheFrameTimeLabels(root))
+            if (giField == null || giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || samplesPerFrameField == null || !TryCacheFrameTimeLabels(root))
             {
                 UnbindUi();
                 return;
@@ -291,6 +294,7 @@ namespace Lotec.Lighting.Samples
         {
             if (_boundRoot != null)
             {
+                _boundRoot.Q<EnumField>("gi-enum")?.ClearBindings();
                 _boundRoot.Q<EnumField>("lighting-method-enum")?.ClearBindings();
                 _boundRoot.Q<FloatField>("enabled-light-intensity-field")?.ClearBindings();
                 _boundRoot.Q<Toggle>("flashlight-toggle")?.ClearBindings();
@@ -319,6 +323,17 @@ namespace Lotec.Lighting.Samples
 
             return focusedElement is VisualElement focusedVisualElement
                 && focusedVisualElement.name == TextField.textInputUssName;
+        }
+
+        [CreateProperty]
+        GiMethod Gi
+        {
+            get => GiMethodSelector.Get();
+            set
+            {
+                GiMethodSelector.Set(value);
+                RefreshUi(true);
+            }
         }
 
         [CreateProperty]
@@ -396,22 +411,12 @@ namespace Lotec.Lighting.Samples
         }
 
         [CreateProperty]
-        LightingManager.ShadowSource ShadowMode
+        ShadowSourceMode ShadowMode
         {
-            get
-            {
-                LightingManager manager = LightingManager.Instance;
-                return manager != null ? manager.ShadowMode : LightingManager.ShadowSource.SDF;
-            }
+            get => ShadowSourceSelector.Get();
             set
             {
-                LightingManager manager = LightingManager.Instance;
-                if (manager == null)
-                {
-                    return;
-                }
-
-                manager.ShadowMode = value;
+                ShadowSourceSelector.Set(value);
                 RefreshUi(true);
             }
         }
@@ -543,15 +548,17 @@ namespace Lotec.Lighting.Samples
 
         void UpdateBindingSnapshot(bool notifyChanges)
         {
+            GiMethod giMethod = Gi;
             GiFieldUpdater.LightingMethod lightingMethod = LightingMethod;
             float enabledLightIntensity = EnabledLightIntensity;
             bool flashlightEnabled = FlashlightEnabled;
             bool candleEnabled = CandleEnabled;
-            LightingManager.ShadowSource shadowMode = ShadowMode;
+            ShadowSourceMode shadowMode = ShadowMode;
             int samplesPerFrame = SamplesPerFrame;
 
             if (!_hasBindingSnapshot)
             {
+                _lastGiMethod = giMethod;
                 _lastLightingMethod = lightingMethod;
                 _lastEnabledLightIntensity = enabledLightIntensity;
                 _lastFlashlightEnabled = flashlightEnabled;
@@ -562,31 +569,18 @@ namespace Lotec.Lighting.Samples
                 return;
             }
 
-            UpdateLightingMethodSnapshot(ref _lastLightingMethod, lightingMethod, notifyChanges, nameof(LightingMethod));
+            UpdateEnumSnapshot(ref _lastGiMethod, giMethod, notifyChanges, nameof(Gi));
+            UpdateEnumSnapshot(ref _lastLightingMethod, lightingMethod, notifyChanges, nameof(LightingMethod));
             UpdateFloatSnapshot(ref _lastEnabledLightIntensity, enabledLightIntensity, notifyChanges, nameof(EnabledLightIntensity));
             UpdateBoolSnapshot(ref _lastFlashlightEnabled, flashlightEnabled, notifyChanges, nameof(FlashlightEnabled));
             UpdateBoolSnapshot(ref _lastCandleEnabled, candleEnabled, notifyChanges, nameof(CandleEnabled));
-            UpdateShadowModeSnapshot(ref _lastShadowMode, shadowMode, notifyChanges, nameof(ShadowMode));
+            UpdateEnumSnapshot(ref _lastShadowMode, shadowMode, notifyChanges, nameof(ShadowMode));
             UpdateIntSnapshot(ref _lastSamplesPerFrame, samplesPerFrame, notifyChanges, nameof(SamplesPerFrame));
         }
 
-        void UpdateShadowModeSnapshot(ref LightingManager.ShadowSource currentValue, LightingManager.ShadowSource nextValue, bool notifyChanges, string propertyName)
+        void UpdateEnumSnapshot<T>(ref T currentValue, T nextValue, bool notifyChanges, string propertyName) where T : struct, System.Enum
         {
-            if (currentValue == nextValue)
-            {
-                return;
-            }
-
-            currentValue = nextValue;
-            if (notifyChanges)
-            {
-                NotifyBindingChanged(propertyName);
-            }
-        }
-
-        void UpdateLightingMethodSnapshot(ref GiFieldUpdater.LightingMethod currentValue, GiFieldUpdater.LightingMethod nextValue, bool notifyChanges, string propertyName)
-        {
-            if (currentValue == nextValue)
+            if (System.Collections.Generic.EqualityComparer<T>.Default.Equals(currentValue, nextValue))
             {
                 return;
             }

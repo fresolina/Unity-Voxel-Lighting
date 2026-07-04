@@ -26,7 +26,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
 
             HLSLPROGRAM
             // 4.5 (SM5.0) required: SampleBufferGI reads StructuredBuffers in the fragment stage
-            // (GI_BUFFER). The package already targets compute-capable hardware, so this is safe.
+            // (GI_VOXEL_BUFFER). The package already targets compute-capable hardware, so this is safe.
             #pragma target 4.5
             #pragma vertex vert
             #pragma fragment frag
@@ -49,12 +49,13 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
 
             // Shadow source (default = SDF): directional bitmask (point / 8-tap) or occlusion field.
             #pragma multi_compile __ BITMASK_POINT BITMASK_8TAP OCC_FIELD
-            // Ambient occlusion quality (off / low / high), modulates the GI term.
-            #pragma multi_compile SDF_AO_OFF SDF_AO_LQ SDF_AO_HQ
-            // GI_OFF (default): direct lighting only. GI_ON: texture irradiance field + AO
-            // (GiFieldUpdater). GI_BUFFER: the buffer GI read filter (BufferGiUpdater). Mutually
-            // exclusive - whichever updater is active enables its keyword.
-            #pragma multi_compile GI_OFF GI_ON GI_BUFFER
+            // Ambient occlusion quality: bare default = off (no keyword), low, or high; modulates
+            // the GI term.
+            #pragma multi_compile __ SDF_AO_LQ SDF_AO_HQ
+            // GI_OFF (default): direct lighting only. GI_VOXEL_TEXTURE: texture irradiance field +
+            // AO (GiFieldUpdater). GI_VOXEL_BUFFER: the buffer GI read filter (BufferGiUpdater).
+            // Mutually exclusive - whichever updater is active enables its keyword.
+            #pragma multi_compile GI_OFF GI_VOXEL_TEXTURE GI_VOXEL_BUFFER
             // Global (set by GiFieldUpdater): the in-shader display transform = exposure +
             // tonemap. TONEMAP_OFF outputs linear HDR for a post-processing stack instead.
             #pragma multi_compile _ TONEMAP_OFF
@@ -138,12 +139,12 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 lit += GetPointLightDirect(IN.positionWS, N, albedo);
                 lit += GetSpotLightDirect(IN.positionWS, N, albedo);
 
-                #if defined(GI_ON)
+                #if defined(GI_VOXEL_TEXTURE)
                     // Indirect lit (texture Voxel GI field) modulated by SDF ambient occlusion.
                     float3 gi = SampleVoxelGI(IN.positionWS, N);
                     float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
                     lit += albedo * gi * ao;
-                #elif defined(GI_BUFFER)
+                #elif defined(GI_VOXEL_BUFFER)
                     // Indirect lit (buffer GI) modulated by SDF ambient occlusion.
                     float3 gi = SampleBufferGI(IN.positionWS, N);
                     float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
@@ -159,7 +160,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 // In-shader display transform (exposure + Reinhard tonemap). Skipped when a
                 // post-processing stack does it on the composited HDR (GiFieldUpdater toggle).
                 #if !defined(TONEMAP_OFF)
-                    #if defined(GI_ON) || defined(GI_BUFFER)
+                    #if defined(GI_VOXEL_TEXTURE) || defined(GI_VOXEL_BUFFER)
                         lit *= exp2(_Exposure);   // exposure only meaningful when GI drives it
                     #endif
                     lit = lit / (1.0h + lit);

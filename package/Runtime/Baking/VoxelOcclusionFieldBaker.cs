@@ -8,11 +8,11 @@ namespace Lotec.Lighting {
     /// </summary>
     [AddComponentMenu("Lotec/Voxel Lighting/Bakers/Voxel Occlusion Field Baker")]
     public class VoxelOcclusionFieldBaker : VoxelBakerBase {
-        [SerializeField] OcclusionFieldBaker _baker = new OcclusionFieldBaker();
+        [SerializeField] OcclusionFieldBake _baker = new OcclusionFieldBake();
         [HideInInspector][SerializeField] bool _hemisphereInitialized;
         [HideInInspector][SerializeField] bool _lastHemisphereOnly;
 
-        public OcclusionFieldBaker Baker => _baker;
+        public OcclusionFieldBake Baker => _baker;
         public override int BakeOrder => 10;
         public override string BakeLabel => "Occlusion Field";
 

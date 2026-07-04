@@ -3,7 +3,7 @@ using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Driver for the buffer-based GI (the textureless, cache-resident GI that runs behind the GI_BUFFER shader keyword).
+    /// Driver for the buffer-based GI (the textureless, cache-resident GI that runs behind the GI_VOXEL_BUFFER shader keyword).
     /// Owns the ComputeBuffers, voxelizes the scene mesh into the occupancy/albedo buffer once (GPU 3-axis
     /// raster, BufferGiVoxelize.shader), and runs the per-frame solve: inject (solid voxels
     /// emit/reflect) then gather (air voxels integrate 1 ray/frame with the temporal resolve fused
@@ -15,9 +15,8 @@ namespace Lotec.Lighting {
     /// </summary>
     [DisallowMultipleComponent]
     [ExecuteAlways]
-    // Run after GiFieldUpdater (order 0) so our globals - especially _Exposure and the GI keyword
-    // - win when both happen to be present.
-    [DefaultExecutionOrder(1000)]
+    // GI methods are mutually exclusive: enabling this component disables GiFieldUpdater (and vice
+    // versa), and the enabled updater owns the GI keyword group + the _Exposure global.
     [AddComponentMenu("Lotec/Voxel Lighting/Buffer GI")]
     public class BufferGiUpdater : MonoBehaviour {
         public const int Grid = 32;
@@ -65,16 +64,18 @@ namespace Lotec.Lighting {
         [SerializeField] Color _ambientFloor = Color.black;
 
         [Header("Coarse field")]
-        [Tooltip("A separate VoxelVolume covering the whole scene, used as the coarse (low-detail, " +
-                 "far) GI field - a 32^3 grid over its larger bounds (bigger voxels). Should be a " +
-                 "different, larger volume than the active fine volume. Leave null for fine only.")]
-        [SerializeField] VoxelVolume _coarseVolume;
+        [Tooltip("MeshBounds covering the whole scene, used as the coarse (low-detail, far) GI " +
+                 "field - a 32^3 grid over its larger bounds (bigger voxels). Should be larger " +
+                 "than the active fine volume. Leave null for fine only.")]
+        [SerializeField] MeshBounds _coarseBounds;
 
         ComputeBuffer _materialBuffer;
         ComputeBuffer _radianceBuffer;
         ComputeBuffer _irradianceBuffer;
         ComputeBuffer _irradianceBlurBuffer;
         bool _materialBaked;
+        // The fine field's volume (the manager's active volume); its Bounds already carry the
+        // volume's own border, so the fine grid uses them as-is.
         VoxelVolume _volume;
         Material _voxelizeMaterial;
         uint[] _materialClear;
@@ -124,11 +125,22 @@ namespace Lotec.Lighting {
             set => _samplesPerFrame = Mathf.Max(1, value);
         }
 
-        // Coarse field: its own scene-covering VoxelVolume (32^3 grid, larger voxels). Falls back to
-        // the fine bounds when unassigned so the read/visualizer degrade gracefully (empty slice -> 0).
-        public bool HasCoarse => _coarseVolume != null;
-        public Vector3 CoarseOrigin => _coarseVolume != null ? _coarseVolume.Bounds.min : GridOrigin;
-        public Vector3 CoarseSize => _coarseVolume != null ? _coarseVolume.Bounds.size : GridSize;
+        // Coarse field: a scene-covering MeshBounds (32^3 grid, larger voxels). Falls back to the
+        // fine bounds when unassigned so the read/visualizer degrade gracefully (empty slice -> 0).
+        // MeshBounds is tight, so grow it by a border of coarse grid cells here (geometry exactly
+        // on the boundary sits in half-clipped voxels): solving size' = size + 2*P*(size'/G) gives
+        // the closed form size' = size * G/(G - 2P) per axis.
+        const float CoarsePaddingVoxels = 2f;
+        Bounds CoarseWorldBounds {
+            get {
+                Bounds b = _coarseBounds.Bounds;
+                b.size *= Grid / (Grid - 2f * CoarsePaddingVoxels);
+                return b;
+            }
+        }
+        public bool HasCoarse => _coarseBounds != null;
+        public Vector3 CoarseOrigin => HasCoarse ? CoarseWorldBounds.min : GridOrigin;
+        public Vector3 CoarseSize => HasCoarse ? CoarseWorldBounds.size : GridSize;
         public Vector3 CoarseVoxelSize => CoarseSize / Grid;
 
         LightingManager Manager => LightingManager.Instance;
@@ -168,6 +180,13 @@ namespace Lotec.Lighting {
 
         void OnEnable() {
             Instance = this;
+            // GI methods are mutually exclusive - the enabled component selects the method, so
+            // enabling this one turns the texture GI off.
+            GiFieldUpdater other = FindAnyObjectByType<GiFieldUpdater>();
+            if (other != null && other.enabled) {
+                Debug.LogWarning("Buffer GI enabled - disabling the texture GI (GiFieldUpdater); only one GI method can be active.", this);
+                other.enabled = false;
+            }
 #if UNITY_EDITOR
             // In edit mode the editor only ticks Update sporadically, so the temporal solve never
             // accumulates and the visualizer's per-frame draw is missed. Pumping the player loop
@@ -197,19 +216,12 @@ namespace Lotec.Lighting {
         }
 #endif
 
-        static void SetGiBufferKeyword(bool on) {
-            // GI_OFF / GI_ON / GI_BUFFER share one multi_compile set, but Shader.EnableKeyword does
-            // NOT enforce mutual exclusivity for global keywords - the siblings must be disabled
-            // explicitly or the default GI_OFF variant keeps running (no GI at all).
-            if (on) {
-                Shader.EnableKeyword("GI_BUFFER");
-                Shader.DisableKeyword("GI_ON");
-                Shader.DisableKeyword("GI_OFF");
-            } else {
-                Shader.DisableKeyword("GI_BUFFER");
-                Shader.DisableKeyword("GI_ON");
-                Shader.EnableKeyword("GI_OFF");
-            }
+        // GI_VOXEL_BUFFER only while this updater is actually solving/publishing (buffers bound); the
+        // claim is change-only and ownership-aware, so this is safe to call every frame and safe
+        // against the old owner clobbering the keyword while switching GI methods.
+        void SetGiBufferKeyword(bool on) {
+            if (on) LightingKeywords.ClaimGi(this, LightingKeywords.GiBuffer);
+            else LightingKeywords.ReleaseGi(this);
         }
 
         void OnValidate() {
@@ -319,7 +331,7 @@ namespace Lotec.Lighting {
         bool IsReady(out string reason) {
             if (_computeShader == null) { reason = "ComputeShader"; return false; }
             if (_voxelizeShader == null) { reason = "Voxelize Shader (Hidden/Lotec/BufferGiVoxelize)"; return false; }
-            if (_volume.BakeRoot == null) { reason = "VoxelVolume.BakeRoot (mesh geometry to voxelize)"; return false; }
+            if (_volume.BakeRoot == null) { reason = "the volume's MeshBounds root (mesh geometry to voxelize)"; return false; }
             reason = null;
             return true;
         }
@@ -409,9 +421,9 @@ namespace Lotec.Lighting {
             cmd.SetRandomWriteTarget(1, _materialBuffer);
 
             // Each field rasterizes its OWN volume's geometry into its slice (coarse = a separate,
-            // scene-covering VoxelVolume with its own BakeRoot).
+            // scene-covering MeshBounds with its own root).
             VoxelizeFieldInto(cmd, fineRoot, GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
-            Transform coarseRoot = _coarseVolume != null ? _coarseVolume.BakeRoot : null;
+            Transform coarseRoot = _coarseBounds != null ? _coarseBounds.Root : null;
             if (coarseRoot != null) {
                 VoxelizeFieldInto(cmd, coarseRoot, CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount);
             }
@@ -426,7 +438,10 @@ namespace Lotec.Lighting {
         // Rasterize a volume's geometry into one field's slice. The voxelize shader reads the grid +
         // field offset as globals (BgiWorldToGrid / BgiSlot), so set them before the draws.
         void VoxelizeFieldInto(CommandBuffer cmd, Transform root, Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset) {
-            MeshRenderer[] renderers = root.GetComponentsInChildren<MeshRenderer>(true);
+            // Same eligibility as the volume bounds / SDF bake (active + static): inactive meshes
+            // must not light the scene, and non-static ones wouldn't track movement anyway (the
+            // voxelization only reruns on a re-bake).
+            MeshRenderer[] renderers = root.GetComponentsInChildren<MeshRenderer>();
             cmd.SetGlobalVector(s_gridOrigin, origin);
             cmd.SetGlobalVector(s_gridSize, size);
             cmd.SetGlobalVector(s_voxelSize, voxelSize);
@@ -435,7 +450,7 @@ namespace Lotec.Lighting {
             for (int axis = 0; axis < 3; axis++) {
                 cmd.SetGlobalInt(s_voxAxis, axis);
                 foreach (MeshRenderer mr in renderers) {
-                    if (mr == null || !mr.TryGetComponent(out MeshFilter mf)) continue;
+                    if (mr == null || !MeshBounds.IsBakeEligible(mr) || !mr.TryGetComponent(out MeshFilter mf)) continue;
                     Mesh mesh = mf.sharedMesh;
                     if (mesh == null) continue;
                     Matrix4x4 l2w = mr.transform.localToWorldMatrix;
@@ -496,7 +511,7 @@ namespace Lotec.Lighting {
             _computeShader.SetFloat(s_giFireflyClamp, _giFireflyClamp);
             _computeShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
             SetDirectionalLightUniforms();
-            Manager?.LocalLights?.ApplyToCompute(_computeShader);
+            LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_computeShader);
 
             // The EMA blend weight (samplesPerFrame/maxSamples) is computed in the compute itself.
             SolveField(GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
