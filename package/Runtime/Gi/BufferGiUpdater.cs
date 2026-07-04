@@ -525,13 +525,15 @@ namespace Lotec.Lighting {
             SetGridUniforms(origin, size, voxelSize);
             _computeShader.SetInt(s_fieldOffset, fieldOffset);
 
-            // Inject: solid voxels emit/reflect. Reads _Material + last-frame _Irradiance, writes _Radiance.
+            // Inject: solid voxels emit/reflect. Bounce = the surface's own last-frame incident
+            // irradiance (its _Irradiance slot, built by gather); reads _Material, writes _Radiance.
             _computeShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
             _computeShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
             _computeShader.Dispatch(_injectKernel, Groups, 1, 1);
 
-            // Gather: air voxels integrate 1 ray/frame off the fresh _Radiance, fold into _Irradiance.
+            // Gather: off the fresh _Radiance, fold into _Irradiance - AIR voxels omnidirectionally
+            // (the read field), SOLID voxels over their front hemisphere (next frame's inject bounce).
             _computeShader.SetBuffer(_gatherKernel, s_material, _materialBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
