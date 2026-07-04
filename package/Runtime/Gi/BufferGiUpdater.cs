@@ -58,6 +58,12 @@ namespace Lotec.Lighting {
                  "of a surface contributes this instead of the surface's room-lit value. Voxels " +
                  "fully enclosed in geometry converge to this color. Black = dark interiors.")]
         [SerializeField] Color _ambientFloor = Color.black;
+        [Tooltip("Non-physical 'reach' fill: how far light spreads into shadow. 1 = off (physical); " +
+                 "higher weights DISTANT gather hits up (toward this multiplier at the grid diagonal), " +
+                 "so bright surfaces seen from deep in shadow bleed more light in. Applied only to the " +
+                 "displayed field, not the bounce feedback, so it can't diverge - but it fights " +
+                 "auto-exposure (a brighter field pulls exposure down).")]
+        [Min(1f)][SerializeField] float _reachBoost = 1f;
 
         [Header("Lighting")]
         [Tooltip("Display transform (exposure + tonemap), with optional auto-exposure. Published as " +
@@ -169,6 +175,7 @@ namespace Lotec.Lighting {
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_samplesPerFrame = Shader.PropertyToID("_SamplesPerFrame");
         static readonly int s_giFireflyClamp = Shader.PropertyToID("_GiFireflyClamp");
+        static readonly int s_reachBoost = Shader.PropertyToID("_ReachBoost");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
         static readonly int[] s_envSh = {
@@ -536,6 +543,7 @@ namespace Lotec.Lighting {
             _computeShader.SetFloat(s_emaWeight, EmaWeight);
             _computeShader.SetFloat(s_confidence, Confidence);
             _computeShader.SetFloat(s_giFireflyClamp, _giFireflyClamp);
+            _computeShader.SetFloat(s_reachBoost, _reachBoost);
             _computeShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
             SetDirectionalLightUniforms();
             LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_computeShader);
