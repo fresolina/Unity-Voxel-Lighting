@@ -4182,6 +4182,7 @@ MonoBehaviour:
   _giFireflyClamp: 10
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
   _reachBoost: 1
+  _bakedNormals: 1
   _exposureControl:
     _tonemapInShader: 1
     _exposure: 0
@@ -4252,7 +4253,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.GiFieldUpdater
   _giComputeShader: {fileID: 7200000, guid: 02f9a08ea0218754cac3ba8d03fd4a99, type: 3}
-  _continuousGi: 0
+  _continuousGi: 1
   _maxSamples: 90
   _raysPerFrame: 1
   _giFireflyClamp: 3

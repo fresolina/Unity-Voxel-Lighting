@@ -24,6 +24,8 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             StructuredBuffer<uint>  _DbgMaterial;
             StructuredBuffer<uint2> _DbgRadiance;
             StructuredBuffer<uint2> _DbgIrradiance;
+            StructuredBuffer<uint>  _DbgNormal;      // baked oct normals (bound valid but unread when off)
+            float _DbgBakedNormal;                   // 1 = read baked _DbgNormal, 0 = occupancy gradient
 
             float3 _DbgGridDims;  // strided instance grid (gx,gy,gz); instanceCount = product
             float _DbgStride;
@@ -73,10 +75,13 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                 float3(1,0,1), float3(1,1,1), float3(0,0,1), float3(0,1,1)  // verticals
             };
 
-            // Occupancy normal (matches OccupancyNormal in BufferGi.compute): sum the axes toward
-            // empty/out-of-bounds neighbours. 0 when ambiguous (thin slab / enclosed). Reads the
-            // debug material buffer + field offset (the compute's version reads _Material/_FieldOffset).
+            // Surface normal for a solid voxel (mirrors SurfaceNormal in BufferGi.compute): the baked
+            // oct normal when _DbgBakedNormal, else the occupancy gradient (sum axes toward empty/OOB
+            // neighbours; 0 when ambiguous). Reads the debug material/normal buffers + field offset.
             float3 DbgOccupancyNormal(uint3 c) {
+                if (_DbgBakedNormal > 0.5)
+                    return BgiUnpackNormal(_DbgNormal[(uint)_DbgFieldOffset + BgiIndex(c)]);
+
                 const int3 axes[6] = {
                     int3(1,0,0), int3(-1,0,0), int3(0,1,0), int3(0,-1,0), int3(0,0,1), int3(0,0,-1)
                 };

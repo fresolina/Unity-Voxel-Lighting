@@ -102,4 +102,29 @@ void BgiUnpackRgb(uint2 p, out float3 c, out float w) {
     w = f16tof32(p.y >> 16);
 }
 
+// --- Baked surface normal: octahedral-encoded unit vector packed into one uint (16 bits/axis) ---
+// A per-voxel alternative to the runtime occupancy-gradient normal, for the BGI_BAKED_NORMALS path.
+// Voxel normals only need coarse fidelity, but 16-bit oct is free here (one uint either way) and
+// exact enough. Cost: 4 bytes/voxel.
+float2 BgiOctWrap(float2 v) {
+    return (1.0 - abs(v.yx)) * float2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+}
+
+uint BgiPackNormal(float3 n) {
+    n /= max(abs(n.x) + abs(n.y) + abs(n.z), 1e-8);
+    float2 e = (n.z >= 0.0) ? n.xy : BgiOctWrap(n.xy);
+    e = e * 0.5 + 0.5; // [-1,1] -> [0,1]
+    uint2 q = (uint2)(saturate(e) * 65535.0 + 0.5);
+    return q.x | (q.y << 16);
+}
+
+float3 BgiUnpackNormal(uint p) {
+    float2 e = float2(p & 0xffffu, (p >> 16) & 0xffffu) * (1.0 / 65535.0);
+    e = e * 2.0 - 1.0; // [0,1] -> [-1,1]
+    float3 n = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    float t = saturate(-n.z);
+    n.xy += float2(n.x >= 0.0 ? -t : t, n.y >= 0.0 ? -t : t);
+    return normalize(n);
+}
+
 #endif // LOTEC_BUFFER_GI_FIELD_INCLUDED

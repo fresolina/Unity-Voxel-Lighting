@@ -20,12 +20,17 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
             #pragma target 4.5
             #pragma vertex vert
             #pragma fragment frag
+            // BGI_BAKED_NORMALS: bake a per-voxel oct normal instead of thickening the solid inward.
+            #pragma multi_compile _ BGI_BAKED_NORMALS
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Includes/BufferGiField.hlsl"
 
             // Bound via CommandBuffer.SetRandomWriteTarget(1, ...). u1 = first free UAV slot after
             // the one color render target (u0).
             RWStructuredBuffer<uint> _MaterialWrite : register(u1);
+            #if defined(BGI_BAKED_NORMALS)
+            RWStructuredBuffer<uint> _NormalWrite : register(u2); // oct-packed per-voxel surface normal
+            #endif
 
             float4 _VoxAlbedo;   // rgb base color of the submesh being drawn
             float  _VoxEmission8; // 8-bit log-encoded emission intensity
@@ -54,6 +59,13 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                     uint packed = BgiPackMaterial(albedo, _VoxEmission8);
                     _MaterialWrite[BgiSlot((uint3)c)] = packed;
 
+                #if defined(BGI_BAKED_NORMALS)
+                    // Bake the surface normal per voxel; the runtime reads it instead of the occupancy
+                    // gradient, so walls need NOT be thickened (hollow 1-voxel shells keep correct
+                    // normals). Multiple triangles per voxel: last-write-wins (fine for flat surfaces).
+                    if (dot(i.wn, i.wn) > 1e-6)
+                        _NormalWrite[BgiSlot((uint3)c)] = BgiPackNormal(normalize(i.wn));
+                #else
                     // Thicken one voxel INWARD (opposite the surface normal) so a wall is solid-backed
                     // instead of a 1-voxel hollow shell. Without this, a surface voxel of a thick mesh
                     // has air on BOTH the room side and the hollow interior, so the runtime occupancy-
@@ -65,6 +77,7 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                         if (all(back >= 0) && all(back < (int)BGI_GRID))
                             _MaterialWrite[BgiSlot((uint3)back)] = packed;
                     }
+                #endif
                 }
                 return 0;
             }

@@ -15,6 +15,8 @@
 #pragma kernel CSBlur
 #pragma kernel CSInitFineFromCoarse
 #pragma kernel CSAverageLuminance
+// BGI_BAKED_NORMALS: read the per-voxel baked normal (_Normal) instead of the occupancy gradient.
+#pragma multi_compile _ BGI_BAKED_NORMALS
 
 #define MAX_POINT_LIGHTS 4
 #define MAX_SPOT_LIGHTS 4
@@ -28,6 +30,9 @@ RWStructuredBuffer<uint2> _Irradiance;  // accumulated incoming light (rgb) + sa
 RWStructuredBuffer<uint2> _IrradianceBlur; // spatially blurred irradiance, sampled by the fragment read
 RWStructuredBuffer<uint>  _LuminanceResult; // [0] = encoded log-luminance sum, [1] = sample count (auto-exposure)
 StructuredBuffer<uint>    _Material;      // occupancy/material (voxelized by BufferGiVoxelize.shader)
+#if defined(BGI_BAKED_NORMALS)
+StructuredBuffer<uint>    _Normal;        // oct-packed per-voxel surface normal (baked at voxelize)
+#endif
 
 // --- Solve uniforms ---
 uint  _FrameCount;
@@ -134,6 +139,18 @@ float3 OccupancyNormal(int3 c)
         if (!solid) n += (float3)axes[i];
     }
     return (dot(n, n) > 1e-6) ? normalize(n) : float3(0, 0, 0);
+}
+
+// The surface normal for a solid voxel: the baked per-voxel normal (BGI_BAKED_NORMALS - exact mesh
+// normal, one buffer read, and correct on hollow/thin walls the gradient reads as ambiguous), else
+// the runtime occupancy gradient. Callers still handle a 0 result (only possible in the gradient path).
+float3 SurfaceNormal(int3 c)
+{
+#if defined(BGI_BAKED_NORMALS)
+    return BgiUnpackNormal(_Normal[BgiSlot((uint3)c)]);
+#else
+    return OccupancyNormal(c);
+#endif
 }
 
 // Evaluate the environment ambient-probe SH in a direction (matches Unity's ShadeSH9).
@@ -263,7 +280,7 @@ float3 GatherRayRadiance(int3 fromCell, float3 dir, float reachBoost)
     int3 hit;
     float3 result;
     if (MarchOccupancy(fromCell, dir, BGI_MAX_RAY_DIST, hit)) {
-        float3 hitNormal = OccupancyNormal(hit);
+        float3 hitNormal = SurfaceNormal(hit);
         float3 faceN = (dot(hitNormal, hitNormal) > 1e-6) ? hitNormal : float3(0, 1, 0); // ambiguous -> up (matches inject)
         if (dot(dir, faceN) < 0.0) {
             float3 rad; float w;
@@ -304,7 +321,7 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     if (!BgiIsSolid(mat)) { _Radiance[_FieldOffset + i] = uint2(0u, 0u); return; }
 
     int3 cell = (int3)BgiCoord(i);
-    float3 normal = OccupancyNormal(cell);
+    float3 normal = SurfaceNormal(cell);
     if (dot(normal, normal) < 1e-6) normal = float3(0, 1, 0); // ambiguous -> harmless up for direct/bounce
     float3 albedo = BgiAlbedo(mat);
     float emissionIntensity = DecodeEmissionIntensityFrom8Bit(BgiEmission8(mat));
@@ -351,7 +368,7 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     // leave the surface into the room and never read it back). Ambiguous normal -> up, matching inject.
     float3 normal = float3(0, 1, 0);
     if (solid) {
-        normal = OccupancyNormal(cell);
+        normal = SurfaceNormal(cell);
         if (dot(normal, normal) < 1e-6) normal = float3(0, 1, 0);
     }
 
