@@ -102,24 +102,27 @@ void BgiUnpackRgb(uint2 p, out float3 c, out float w) {
     w = f16tof32(p.y >> 16);
 }
 
-// --- Baked surface normal: octahedral-encoded unit vector packed into one uint (16 bits/axis) ---
-// A per-voxel alternative to the runtime occupancy-gradient normal, for the BGI_BAKED_NORMALS path.
-// Voxel normals only need coarse fidelity, but 16-bit oct is free here (one uint either way) and
-// exact enough. Cost: 4 bytes/voxel.
+// --- Per-voxel SURFACE word (32 bits/voxel), baked at voxelize/build time, read once per hit ---
+// bits  0-15 : octahedral surface normal, 8 bits/axis (~1-2 deg - plenty for a voxel GI normal)
+// bits 16-23 : reserved (openness / static AO on solids, air-distance on air - later phase)
+// bits 24-31 : reserved (flags: thin/ambiguous, two-sided, emissive, boundary - later phase)
+// Split from occupancy (which is the hot 1-bit/voxel bitfield) so this cold 4 B word is touched
+// only per ray-hit / per voxel, never in the DDA loop.
 float2 BgiOctWrap(float2 v) {
     return (1.0 - abs(v.yx)) * float2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
 }
 
-uint BgiPackNormal(float3 n) {
+// Pack a unit normal into the low 16 bits (leaves bits 16-31 for the caller to OR in later).
+uint BgiPackSurfaceNormal(float3 n) {
     n /= max(abs(n.x) + abs(n.y) + abs(n.z), 1e-8);
     float2 e = (n.z >= 0.0) ? n.xy : BgiOctWrap(n.xy);
     e = e * 0.5 + 0.5; // [-1,1] -> [0,1]
-    uint2 q = (uint2)(saturate(e) * 65535.0 + 0.5);
-    return q.x | (q.y << 16);
+    uint2 q = (uint2)(saturate(e) * 255.0 + 0.5);
+    return q.x | (q.y << 8);
 }
 
-float3 BgiUnpackNormal(uint p) {
-    float2 e = float2(p & 0xffffu, (p >> 16) & 0xffffu) * (1.0 / 65535.0);
+float3 BgiSurfaceNormal(uint word) {
+    float2 e = float2(word & 0xffu, (word >> 8) & 0xffu) * (1.0 / 255.0);
     e = e * 2.0 - 1.0; // [0,1] -> [-1,1]
     float3 n = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
     float t = saturate(-n.z);
