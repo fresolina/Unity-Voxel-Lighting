@@ -11,9 +11,9 @@ namespace Lotec.Lighting {
         [Range(1, 6)]
         public int LowresDownscaleFactor = 2;
 
-        [SerializeField] MaterialBaker _baker = new MaterialBaker();
+        [SerializeField] MaterialBake _baker = new MaterialBake();
 
-        public MaterialBaker Baker => _baker;
+        public MaterialBake Baker => _baker;
         public override int BakeOrder => 10;
         public override string BakeLabel => "Material";
 

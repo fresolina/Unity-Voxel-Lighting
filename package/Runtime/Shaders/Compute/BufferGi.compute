@@ -1,7 +1,10 @@
 // Buffer-GI compute: the textureless, cache-resident voxel GI solve.
 //   CSClear     - zero the dynamic fields.
-//   CSInject    - per solid voxel: outgoing radiance = emissive + albedo*(direct + bounce).
-//   CSGather    - per air voxel: 1 ray/frame DDA gather + in-place temporal EMA (resolve fused).
+//   CSInject    - per solid voxel: outgoing radiance = emissive + albedo*(direct + bounce), where
+//                 bounce is the surface's own front-hemisphere incident irradiance (from CSGather).
+//   CSGather    - per voxel, 1+ rays/frame + in-place temporal EMA: AIR = omnidirectional irradiance
+//                 probe (sampled by the fragment read); SOLID = front-hemisphere incident irradiance
+//                 (feeds CSInject's bounce, so a surface no longer reads its own radiance back).
 //   CSBlur      - occupancy-gated spatial blur into _IrradianceBlur (hides the 1-ray/frame shimmer
 //                 the temporal EMA leaves behind); the fragment read samples the blurred buffer.
 // Occupancy/albedo (_Material) is voxelized separately by BufferGiVoxelize.shader (GPU raster).
@@ -11,6 +14,7 @@
 #pragma kernel CSGather
 #pragma kernel CSBlur
 #pragma kernel CSInitFineFromCoarse
+#pragma kernel CSAverageLuminance
 
 #define MAX_POINT_LIGHTS 4
 #define MAX_SPOT_LIGHTS 4
@@ -22,6 +26,7 @@
 RWStructuredBuffer<uint2> _Radiance;    // outgoing radiance (fp16x3), stored in solid voxels
 RWStructuredBuffer<uint2> _Irradiance;  // accumulated incoming light (rgb) + sample count (w)
 RWStructuredBuffer<uint2> _IrradianceBlur; // spatially blurred irradiance, sampled by the fragment read
+RWStructuredBuffer<uint>  _LuminanceResult; // [0] = encoded log-luminance sum, [1] = sample count (auto-exposure)
 StructuredBuffer<uint>    _Material;      // occupancy/material (voxelized by BufferGiVoxelize.shader)
 
 // --- Solve uniforms ---
@@ -32,6 +37,14 @@ float _EmaWeight;  // progressive gather blend weight (samplesPerFrame/totalSamp
 // Coarse grid mapping for CSInitFineFromCoarse (that dispatch's _BgiGrid* uniforms are the FINE grid).
 float3 _CoarseGridOrigin;
 float3 _CoarseGridVoxelSize;
+// Auto-exposure (CSAverageLuminance): sample the displayed field near the camera.
+float3 _CameraPosition;
+float3 _CameraForward;
+float  _LuminanceRadius;
+// Non-physical "reach" fill: max multiplier applied to a gather hit at the grid-diagonal distance
+// (1 = off/physical). Only the AIR gather uses it, so it brightens the displayed field WITHOUT
+// entering the surface bounce feedback (which would diverge if its per-bounce gain exceeded 1).
+float _ReachBoost;
 float _GiFireflyClamp;
 float3 _DirectLightDir;   // toward the light
 float4 _DirectLightColor;
@@ -134,14 +147,6 @@ float3 EvalEnvSH(float3 n)
     return max(0.0, l);
 }
 
-// Environment radiance for a ray that escaped to "sky": the ambient-probe SH in that direction plus
-// a broad sun lobe (the directional sun is separate from the low-frequency probe).
-float3 GetIndirectSkyLight(float3 rayDir)
-{
-    float sunLobe = saturate(dot(rayDir, _DirectLightDir));
-    return EvalEnvSH(rayDir) + _DirectLightColor.rgb * (sunLobe * sunLobe);
-}
-
 float3 ClampFirefly(float3 color, float maxLuminance)
 {
     // Single return point (an early return lowers to a return-slot variable that the WebGPU
@@ -172,11 +177,21 @@ float3 GetDirectLight(int3 cell, float3 normal)
     float3 voxelCenter = BgiVoxelCenter((uint3)cell);
     int3 hit;
 
+    // Cast the shadow rays from the AIR voxel one step along the normal, not from this solid cell:
+    // a surface voxel's ray toward an overhead light otherwise immediately hits the solid voxel that
+    // continues the wall ABOVE it, self-shadowing every row but the top. Starting one voxel out in
+    // air clears that (the same front-face offset the fragment read uses). Fall back to the cell
+    // itself when there's no air in front (concave/enclosed, or a thin wall whose ambiguous normal
+    // points into more solid).
+    int3 shadowStart = cell + int3(round(normal));
+    if (!BgiInBounds(shadowStart) || BgiIsSolid(_Material[BgiSlot((uint3)shadowStart)]))
+        shadowStart = cell;
+
     // Sun
     float3 total = 0;
     float ndlSun = saturate(dot(normal, _DirectLightDir));
     if (ndlSun > 0.0) {
-        float vis = MarchOccupancy(cell, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0 : 1.0;
+        float vis = MarchOccupancy(shadowStart, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0 : 1.0;
         total += _DirectLightColor.rgb * (ndlSun * vis);
     }
 
@@ -194,7 +209,7 @@ float3 GetDirectLight(int3 cell, float3 normal)
         float ndl = saturate(dot(normal, L));
         if (ndl <= 0.0) continue;
         float worldDist = distSq * invD; // = sqrt(distSq), distance to the light
-        float vis = MarchOccupancy(cell, L, worldDist, hit) ? 0.0 : 1.0;
+        float vis = MarchOccupancy(shadowStart, L, worldDist, hit) ? 0.0 : 1.0;
         total += _PointLightColor[p].rgb * (ndl * vis * GetLocalLightRangeAttenuation(distSq, rangeSq));
     }
 
@@ -216,11 +231,54 @@ float3 GetDirectLight(int3 cell, float3 normal)
         float cone = saturate(dot(-L, dirAngleScale.xyz) * dirAngleScale.w + colAngleOffset.a);
         if (cone <= 0.0) continue;
         float worldDist = distSq * invD; // = sqrt(distSq), distance to the light
-        float vis = MarchOccupancy(cell, L, worldDist, hit) ? 0.0 : 1.0;
+        float vis = MarchOccupancy(shadowStart, L, worldDist, hit) ? 0.0 : 1.0;
         total += colAngleOffset.rgb * (ndl * vis * (cone * cone) * GetLocalLightRangeAttenuation(distSq, rangeSq));
     }
 
     return total;
+}
+
+// One gather ray's contribution from `fromCell` in world direction `dir`: the room-lit radiance of
+// the surface it hits (if it crossed that surface's FRONT/lit face), the ambient-floor "interior
+// color" for a back-face hit, or the environment sky if the ray escapes the grid. Shared by the air
+// probe (omnidirectional) and the surface incident gather (front hemisphere).
+//
+// Front/back is decided by the hit voxel's occupancy normal. A THIN SLAB with air on BOTH sides
+// (a 1-voxel floor/ceiling/wall) has an AMBIGUOUS (zero) occupancy normal; inject computed its
+// radiance with an UP fallback normal, so we test against UP here too for consistency: a ray
+// arriving from above (dot(dir,up) < 0 = it crossed the lit top face) reads the radiance, while the
+// dark underside and horizontally-hit thin vertical walls (dot(dir,up) ~ 0) stay rejected -> ambient
+// floor (still blocks the thin-wall leak this originally guarded). Without this, a thin SUNLIT FLOOR
+// emits bright radiance but contributes NOTHING to the air above it (bright floor, black irradiance).
+//
+// `reachBoost` (>= 1) is a non-physical distance fill: a surface hit is weighted up toward reachBoost
+// as its distance approaches the grid diagonal, so bright surfaces seen from deep in shadow spread
+// more light in. Pass 1 for the physical result (the surface bounce gather does, to stay stable).
+//
+// A ray that ESCAPES the grid returns the environment SH in its direction: the sky acts as an AREA
+// light, so it belongs in the averaged estimate (unbiased at any sample count). The SUN is handled
+// separately (deterministic visibility ray in CSGather), so no sun lobe here.
+float3 GatherRayRadiance(int3 fromCell, float3 dir, float reachBoost)
+{
+    int3 hit;
+    float3 result;
+    if (MarchOccupancy(fromCell, dir, BGI_MAX_RAY_DIST, hit)) {
+        float3 hitNormal = OccupancyNormal(hit);
+        float3 faceN = (dot(hitNormal, hitNormal) > 1e-6) ? hitNormal : float3(0, 1, 0); // ambiguous -> up (matches inject)
+        if (dot(dir, faceN) < 0.0) {
+            float3 rad; float w;
+            BgiUnpackRgb(_Radiance[BgiSlot((uint3)hit)], rad, w);
+            // Distance-weighted reach fill (t = hit distance / grid diagonal, clamped 0..1). Applied
+            // BEFORE the firefly clamp so a boosted-then-bright sample still can't spike.
+            float t = saturate(length(BgiVoxelCenter((uint3)hit) - BgiVoxelCenter((uint3)fromCell)) / BGI_MAX_RAY_DIST);
+            result = ClampFirefly(rad * lerp(1.0, reachBoost, t), _GiFireflyClamp);
+        } else {
+            result = _AmbientFloor;
+        }
+    } else {
+        result = EvalEnvSH(dir); // escaped -> sky (area light, averaged like any other sample)
+    }
+    return result;
 }
 
 [numthreads(64, 1, 1)]
@@ -252,16 +310,19 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     float emissionIntensity = DecodeEmissionIntensityFrom8Bit(BgiEmission8(mat));
     float3 emissive = albedo * emissionIntensity;
 
-    // Bounce arriving at this surface = irradiance from the adjacent air voxel along the normal.
-    int3 airCell = cell + int3(round(normal));
-    float3 bounce = 0;
-    if (BgiInBounds(airCell) && !BgiIsSolid(_Material[BgiSlot((uint3)airCell)])) {
-        float w;
-        BgiUnpackRgb(_Irradiance[BgiSlot((uint3)airCell)], bounce, w);
-    }
+    // Bounce arriving at this surface = its incident irradiance, gathered over the FRONT hemisphere
+    // by CSGather (previous frame) and stored in this solid voxel's own _Irradiance slot. Reading
+    // that - instead of the adjacent AIR voxel's OMNIDIRECTIONAL probe - means the surface no longer
+    // sees its own outgoing radiance (that probe's back hemisphere is this very wall), which was an
+    // F_ii self-illumination loop: energy the wall emits came back as "incident" and re-lit it. It
+    // also restores directionality, so light from an opening propagates inward instead of averaging
+    // flat against dark neighbours (helps cavern/indirect fill).
+    float3 bounce; float bw;
+    BgiUnpackRgb(_Irradiance[_FieldOffset + i], bounce, bw);
 
     // Clamp reflectance below 1: with albedo == 1 the bounce feedback is a lossless cavity that
-    // diverges to Inf/NaN ("black plague"). Emission is unaffected (added separately).
+    // diverges to Inf/NaN ("black plague"). Still cheap insurance for concave corners even though the
+    // front-hemisphere gather removed the dominant self-term. Emission is unaffected (added separately).
     float3 safeAlbedo = min(albedo, 0.95);
     float3 direct = GetDirectLight(cell, normal);
     float3 outgoing = SanitizeColor(emissive + safeAlbedo * (direct + bounce));
@@ -269,7 +330,12 @@ void CSInject(uint3 id : SV_DispatchThreadID)
 }
 
 // ----------------------------------------------------------
-// GATHER: 1 ray/frame for air voxels, with the temporal resolve fused in (in-place EMA).
+// GATHER: 1+ rays/frame per voxel, with the temporal resolve fused in (in-place EMA). Two roles by
+// occupancy: AIR voxels build the OMNIDIRECTIONAL irradiance probe the fragment read samples; SOLID
+// (surface) voxels build their INCIDENT irradiance over the FRONT hemisphere (cosine-weighted around
+// the surface normal), stored in the same buffer slot and read by CSInject as the surface's `bounce`.
+// The surface gather runs here (not in CSInject) so it reads this frame's _Radiance from a completed
+// dispatch rather than racing the same one.
 // ----------------------------------------------------------
 [numthreads(64, 1, 1)]
 void CSGather(uint3 id : SV_DispatchThreadID)
@@ -277,36 +343,29 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     uint i = id.x;
     if (i >= BGI_COUNT) return;
 
-    // Irradiance only lives in air voxels; solid voxels carry radiance instead.
-    if (BgiIsSolid(_Material[_FieldOffset + i])) { _Irradiance[_FieldOffset + i] = uint2(0u, 0u); return; }
-
     uint3 c = BgiCoord(i);
     int3 cell = (int3)c;
+    bool solid = BgiIsSolid(_Material[_FieldOffset + i]);
 
+    // For a solid voxel, gather rays into the front hemisphere around the surface normal (so they
+    // leave the surface into the room and never read it back). Ambiguous normal -> up, matching inject.
+    float3 normal = float3(0, 1, 0);
+    if (solid) {
+        normal = OccupancyNormal(cell);
+        if (dot(normal, normal) < 1e-6) normal = float3(0, 1, 0);
+    }
+
+    // BOUNCE radiance (surfaces, ambient floor, and the sky-as-area-light on escape) is a plain
+    // AVERAGE: unbiased at any sample count, so samplesPerFrame only affects noise, never brightness.
+    // Reach fill only on the AIR probe (display field); the surface bounce stays physical (1).
     float3 incoming = 0;
     uint sampleCount = max(_SamplesPerFrame, 1u);
     [loop]
     for (uint r = 0u; r < sampleCount; r++) {
         float2 noise = GiSampleNoise(c, _FrameCount, r);
-        float3 dir = GetRandomDirectionFromNoise2(noise); // omnidirectional irradiance probe
-        int3 hit;
-        if (MarchOccupancy(cell, dir, BGI_MAX_RAY_DIST, hit)) {
-            // FRONT hit (dot(dir,N) < 0): see the surface's room-lit radiance. BACK hit, or an
-            // AMBIGUOUS normal (N==0: a 1-voxel wall with air on both sides, or an enclosed interior)
-            // where dot == 0: contribute the ambient-floor "interior color" instead. So enclosed air
-            // converges to _AmbientFloor, and air trapped behind a thin wall can't read the wall's
-            // room-lit front value through it (the leak this guards against).
-            float3 hitNormal = OccupancyNormal(hit);
-            if (dot(dir, hitNormal) < 0.0) {
-                float3 rad; float w;
-                BgiUnpackRgb(_Radiance[BgiSlot((uint3)hit)], rad, w);
-                incoming += ClampFirefly(rad, _GiFireflyClamp);
-            } else {
-                incoming += _AmbientFloor;
-            }
-        } else {
-            incoming += GetIndirectSkyLight(dir);
-        }
+        float3 dir = solid ? CosineSampleHemisphere(normal, noise) // surface: front hemisphere
+                           : GetRandomDirectionFromNoise2(noise);  // air: omnidirectional probe
+        incoming += GatherRayRadiance(cell, dir, solid ? 1.0 : _ReachBoost);
     }
     incoming *= rcp((float)sampleCount); // this frame's estimate = mean of sampleCount samples
 
@@ -422,4 +481,38 @@ void CSInitFineFromCoarse(uint3 id : SV_DispatchThreadID)
     uint2 packed = BgiPackRgb(seed, 0.0);
     _Irradiance[fineSlot] = packed;
     _IrradianceBlur[fineSlot] = packed;
+}
+
+// ----------------------------------------------------------
+// AVERAGE LUMINANCE (auto-exposure): accumulate the encoded log-luminance of the DISPLAYED field
+// (_IrradianceBlur) over air voxels within _LuminanceRadius of the camera and in front of it,
+// cosine-weighted by view alignment, into _LuminanceResult ([0] = encoded sum, [1] = count). The C#
+// AutoExposure decodes avg log2 = (sum/count)/1024 - 16 (must match the texture-GI kernel's encoding).
+// Dispatched per FIELD via _FieldOffset (the fine field near the camera).
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSAverageLuminance(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+
+    uint slot = _FieldOffset + i;
+    if (BgiIsSolid(_Material[slot])) return; // GI lives in air voxels
+
+    float3 voxelCenter = BgiVoxelCenter(BgiCoord(i));
+    float3 offset = voxelCenter - _CameraPosition;
+    float distSq = dot(offset, offset);
+    if (distSq > _LuminanceRadius * _LuminanceRadius) return; // outside the sampling radius
+
+    float invDist = rsqrt(max(distSq, 1e-6));
+    float cosAngle = dot(offset * invDist, _CameraForward);
+    if (cosAngle < 0.0) return; // behind the camera
+
+    float3 irr; float w;
+    BgiUnpackRgb(_IrradianceBlur[slot], irr, w);
+    float lum = GetRec709Luminance(irr) * cosAngle; // cosine-weight: off-axis voxels count less
+    float logLum = log2(max(lum, 1e-4));
+    uint encoded = (uint)((logLum + 16.0) * 1024.0);
+    InterlockedAdd(_LuminanceResult[0], encoded);
+    InterlockedAdd(_LuminanceResult[1], 1u);
 }

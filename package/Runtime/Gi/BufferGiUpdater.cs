@@ -3,7 +3,7 @@ using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Driver for the buffer-based GI (the textureless, cache-resident GI that runs behind the GI_BUFFER shader keyword).
+    /// Driver for the buffer-based GI (the textureless, cache-resident GI that runs behind the GI_VOXEL_BUFFER shader keyword).
     /// Owns the ComputeBuffers, voxelizes the scene mesh into the occupancy/albedo buffer once (GPU 3-axis
     /// raster, BufferGiVoxelize.shader), and runs the per-frame solve: inject (solid voxels
     /// emit/reflect) then gather (air voxels integrate 1 ray/frame with the temporal resolve fused
@@ -15,9 +15,8 @@ namespace Lotec.Lighting {
     /// </summary>
     [DisallowMultipleComponent]
     [ExecuteAlways]
-    // Run after GiFieldUpdater (order 0) so our globals - especially _Exposure and the GI keyword
-    // - win when both happen to be present.
-    [DefaultExecutionOrder(1000)]
+    // GI methods are mutually exclusive: enabling this component disables GiFieldUpdater (and vice
+    // versa), and the enabled updater owns the GI keyword group + the _Exposure global.
     [AddComponentMenu("Lotec/Voxel Lighting/Buffer GI")]
     public class BufferGiUpdater : MonoBehaviour {
         public const int Grid = 32;
@@ -37,10 +36,6 @@ namespace Lotec.Lighting {
         [SerializeField] Shader _voxelizeShader;
 
         [Header("Solve")]
-        [Tooltip("Scene display exposure in EV stops, published as the _Exposure global. The lit " +
-                 "shader applies exp2(_Exposure) whenever GI is on, so this must be set explicitly " +
-                 "(otherwise a stale value from a previous GI updater darkens the image).")]
-        [SerializeField] float _exposure;
         [Tooltip("Total ray budget per voxel (quality): the field is a progressive average that " +
                  "accumulates rays until it reaches this many, then the solve idles. Quality depends " +
                  "on total rays, so bigger = cleaner. It's reached after maxSamples/samplesPerFrame frames.")]
@@ -63,18 +58,32 @@ namespace Lotec.Lighting {
                  "of a surface contributes this instead of the surface's room-lit value. Voxels " +
                  "fully enclosed in geometry converge to this color. Black = dark interiors.")]
         [SerializeField] Color _ambientFloor = Color.black;
+        [Tooltip("Non-physical 'reach' fill: how far light spreads into shadow. 1 = off (physical); " +
+                 "higher weights DISTANT gather hits up (toward this multiplier at the grid diagonal), " +
+                 "so bright surfaces seen from deep in shadow bleed more light in. Applied only to the " +
+                 "displayed field, not the bounce feedback, so it can't diverge - but it fights " +
+                 "auto-exposure (a brighter field pulls exposure down).")]
+        [Min(1f)][SerializeField] float _reachBoost = 1f;
+
+        [Header("Lighting")]
+        [Tooltip("Display transform (exposure + tonemap), with optional auto-exposure. Published as " +
+                 "the _Exposure global + TONEMAP_OFF keyword; the lit shader applies exp2(_Exposure) " +
+                 "whenever GI is on. Set explicitly so a stale value can't darken the image.")]
+        [SerializeField] AutoExposure _exposureControl = new AutoExposure();
 
         [Header("Coarse field")]
-        [Tooltip("A separate VoxelVolume covering the whole scene, used as the coarse (low-detail, " +
-                 "far) GI field - a 32^3 grid over its larger bounds (bigger voxels). Should be a " +
-                 "different, larger volume than the active fine volume. Leave null for fine only.")]
-        [SerializeField] VoxelVolume _coarseVolume;
+        [Tooltip("MeshBounds covering the whole scene, used as the coarse (low-detail, far) GI " +
+                 "field - a 32^3 grid over its larger bounds (bigger voxels). Should be larger " +
+                 "than the active fine volume. Leave null for fine only.")]
+        [SerializeField] MeshBounds _coarseBounds;
 
         ComputeBuffer _materialBuffer;
         ComputeBuffer _radianceBuffer;
         ComputeBuffer _irradianceBuffer;
         ComputeBuffer _irradianceBlurBuffer;
         bool _materialBaked;
+        // The fine field's volume (the manager's active volume); its Bounds already carry the
+        // volume's own border, so the fine grid uses them as-is.
         VoxelVolume _volume;
         Material _voxelizeMaterial;
         uint[] _materialClear;
@@ -83,6 +92,7 @@ namespace Lotec.Lighting {
         int _gatherKernel = -1;
         int _blurKernel = -1;
         int _initFineKernel = -1;
+        int _averageLuminanceKernel = -1;
         bool _resetFineField;
         bool _hasLoggedMissingReferences;
         // Progressive accumulation in SAMPLES (rays): _collectedSamples = total rays gathered since the last
@@ -124,11 +134,22 @@ namespace Lotec.Lighting {
             set => _samplesPerFrame = Mathf.Max(1, value);
         }
 
-        // Coarse field: its own scene-covering VoxelVolume (32^3 grid, larger voxels). Falls back to
-        // the fine bounds when unassigned so the read/visualizer degrade gracefully (empty slice -> 0).
-        public bool HasCoarse => _coarseVolume != null;
-        public Vector3 CoarseOrigin => _coarseVolume != null ? _coarseVolume.Bounds.min : GridOrigin;
-        public Vector3 CoarseSize => _coarseVolume != null ? _coarseVolume.Bounds.size : GridSize;
+        // Coarse field: a scene-covering MeshBounds (32^3 grid, larger voxels). Falls back to the
+        // fine bounds when unassigned so the read/visualizer degrade gracefully (empty slice -> 0).
+        // MeshBounds is tight, so grow it by a border of coarse grid cells here (geometry exactly
+        // on the boundary sits in half-clipped voxels): solving size' = size + 2*P*(size'/G) gives
+        // the closed form size' = size * G/(G - 2P) per axis.
+        const float CoarsePaddingVoxels = 2f;
+        Bounds CoarseWorldBounds {
+            get {
+                Bounds b = _coarseBounds.Bounds;
+                b.size *= Grid / (Grid - 2f * CoarsePaddingVoxels);
+                return b;
+            }
+        }
+        public bool HasCoarse => _coarseBounds != null;
+        public Vector3 CoarseOrigin => HasCoarse ? CoarseWorldBounds.min : GridOrigin;
+        public Vector3 CoarseSize => HasCoarse ? CoarseWorldBounds.size : GridSize;
         public Vector3 CoarseVoxelSize => CoarseSize / Grid;
 
         LightingManager Manager => LightingManager.Instance;
@@ -154,6 +175,7 @@ namespace Lotec.Lighting {
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_samplesPerFrame = Shader.PropertyToID("_SamplesPerFrame");
         static readonly int s_giFireflyClamp = Shader.PropertyToID("_GiFireflyClamp");
+        static readonly int s_reachBoost = Shader.PropertyToID("_ReachBoost");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
         static readonly int[] s_envSh = {
@@ -163,11 +185,21 @@ namespace Lotec.Lighting {
         };
         static readonly int s_ambientFloor = Shader.PropertyToID("_AmbientFloor");
         static readonly int s_intensity = Shader.PropertyToID("_BgiIntensity");
-        static readonly int s_exposure = Shader.PropertyToID("_Exposure");
+        static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
+        static readonly int s_cameraPosition = Shader.PropertyToID("_CameraPosition");
+        static readonly int s_cameraForward = Shader.PropertyToID("_CameraForward");
+        static readonly int s_luminanceRadius = Shader.PropertyToID("_LuminanceRadius");
         #endregion
 
         void OnEnable() {
             Instance = this;
+            // GI methods are mutually exclusive - the enabled component selects the method, so
+            // enabling this one turns the texture GI off.
+            GiFieldUpdater other = FindAnyObjectByType<GiFieldUpdater>();
+            if (other != null && other.enabled) {
+                Debug.LogWarning("Buffer GI enabled - disabling the texture GI (GiFieldUpdater); only one GI method can be active.", this);
+                other.enabled = false;
+            }
 #if UNITY_EDITOR
             // In edit mode the editor only ticks Update sporadically, so the temporal solve never
             // accumulates and the visualizer's per-frame draw is missed. Pumping the player loop
@@ -182,6 +214,8 @@ namespace Lotec.Lighting {
             UnityEditor.EditorApplication.update -= EditorPump;
 #endif
             SetGiBufferKeyword(false);
+            _exposureControl.ResetKeyword();
+            _exposureControl.Release();
             ReleaseBuffers();
             if (_voxelizeMaterial != null) {
                 if (Application.isPlaying) Destroy(_voxelizeMaterial); else DestroyImmediate(_voxelizeMaterial);
@@ -197,19 +231,12 @@ namespace Lotec.Lighting {
         }
 #endif
 
-        static void SetGiBufferKeyword(bool on) {
-            // GI_OFF / GI_ON / GI_BUFFER share one multi_compile set, but Shader.EnableKeyword does
-            // NOT enforce mutual exclusivity for global keywords - the siblings must be disabled
-            // explicitly or the default GI_OFF variant keeps running (no GI at all).
-            if (on) {
-                Shader.EnableKeyword("GI_BUFFER");
-                Shader.DisableKeyword("GI_ON");
-                Shader.DisableKeyword("GI_OFF");
-            } else {
-                Shader.DisableKeyword("GI_BUFFER");
-                Shader.DisableKeyword("GI_ON");
-                Shader.EnableKeyword("GI_OFF");
-            }
+        // GI_VOXEL_BUFFER only while this updater is actually solving/publishing (buffers bound); the
+        // claim is change-only and ownership-aware, so this is safe to call every frame and safe
+        // against the old owner clobbering the keyword while switching GI methods.
+        void SetGiBufferKeyword(bool on) {
+            if (on) LightingKeywords.ClaimGi(this, LightingKeywords.GiBuffer);
+            else LightingKeywords.ReleaseGi(this);
         }
 
         void OnValidate() {
@@ -294,6 +321,25 @@ namespace Lotec.Lighting {
 
             SetGlobals();
             SetGiBufferKeyword(true);
+            // Display transform (exposure + tonemap); runs every frame so auto-exposure keeps
+            // adapting even when the solve is idle (a static scene the camera moves through).
+            _exposureControl.Apply(DispatchLuminance);
+        }
+
+        // Backend luminance measurement for AutoExposure: average the DISPLAYED fine field's air-voxel
+        // luminance in a camera-centred radius into the controller's 2-uint buffer. AutoExposure owns
+        // the clear + readback + adaptation; this only binds + dispatches the fine-field kernel.
+        void DispatchLuminance(ComputeBuffer luminanceBuffer) {
+            if (_averageLuminanceKernel < 0 || _irradianceBlurBuffer == null || Camera.main == null) return;
+            SetGridUniforms(GridOrigin, GridSize, VoxelSize);
+            _computeShader.SetInt(s_fieldOffset, FineField * VoxelCount);
+            _computeShader.SetBuffer(_averageLuminanceKernel, s_material, _materialBuffer);
+            _computeShader.SetBuffer(_averageLuminanceKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _computeShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, luminanceBuffer);
+            _computeShader.SetVector(s_cameraPosition, Camera.main.transform.position);
+            _computeShader.SetVector(s_cameraForward, Camera.main.transform.forward);
+            _computeShader.SetFloat(s_luminanceRadius, _exposureControl.MeasureRadius);
+            _computeShader.Dispatch(_averageLuminanceKernel, Groups, 1, 1);
         }
 
         // Publish the buffers + grid mapping + confidence the lit shader's SampleBufferGI reads.
@@ -311,15 +357,14 @@ namespace Lotec.Lighting {
             // Unity control for indirect strength, used instead of a custom field.
             Light sun = RenderSettings.sun;
             Shader.SetGlobalFloat(s_intensity, sun != null ? sun.bounceIntensity : 1f);
-            // The lit shader applies exp2(_Exposure) in GI mode; publish it explicitly so a stale
-            // value (e.g. a negative auto-exposure left by GiFieldUpdater) can't darken the image.
-            Shader.SetGlobalFloat(s_exposure, _exposure);
+            // The display transform (_Exposure + TONEMAP_OFF) is published by _exposureControl.Apply
+            // in Update - explicitly, so a stale value (e.g. left by GiFieldUpdater) can't darken it.
         }
 
         bool IsReady(out string reason) {
             if (_computeShader == null) { reason = "ComputeShader"; return false; }
             if (_voxelizeShader == null) { reason = "Voxelize Shader (Hidden/Lotec/BufferGiVoxelize)"; return false; }
-            if (_volume.BakeRoot == null) { reason = "VoxelVolume.BakeRoot (mesh geometry to voxelize)"; return false; }
+            if (_volume.BakeRoot == null) { reason = "the volume's MeshBounds root (mesh geometry to voxelize)"; return false; }
             reason = null;
             return true;
         }
@@ -335,6 +380,7 @@ namespace Lotec.Lighting {
             _gatherKernel = _computeShader.FindKernel("CSGather");
             _blurKernel = _computeShader.FindKernel("CSBlur");
             _initFineKernel = _computeShader.FindKernel("CSInitFineFromCoarse");
+            _averageLuminanceKernel = _computeShader.FindKernel("CSAverageLuminance");
 
             // uint material, uint2 radiance/irradiance. Sized for all fields (concatenated slices).
             _materialBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));
@@ -409,9 +455,9 @@ namespace Lotec.Lighting {
             cmd.SetRandomWriteTarget(1, _materialBuffer);
 
             // Each field rasterizes its OWN volume's geometry into its slice (coarse = a separate,
-            // scene-covering VoxelVolume with its own BakeRoot).
+            // scene-covering MeshBounds with its own root).
             VoxelizeFieldInto(cmd, fineRoot, GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
-            Transform coarseRoot = _coarseVolume != null ? _coarseVolume.BakeRoot : null;
+            Transform coarseRoot = _coarseBounds != null ? _coarseBounds.Root : null;
             if (coarseRoot != null) {
                 VoxelizeFieldInto(cmd, coarseRoot, CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount);
             }
@@ -426,7 +472,10 @@ namespace Lotec.Lighting {
         // Rasterize a volume's geometry into one field's slice. The voxelize shader reads the grid +
         // field offset as globals (BgiWorldToGrid / BgiSlot), so set them before the draws.
         void VoxelizeFieldInto(CommandBuffer cmd, Transform root, Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset) {
-            MeshRenderer[] renderers = root.GetComponentsInChildren<MeshRenderer>(true);
+            // Same eligibility as the volume bounds / SDF bake (active + static): inactive meshes
+            // must not light the scene, and non-static ones wouldn't track movement anyway (the
+            // voxelization only reruns on a re-bake).
+            MeshRenderer[] renderers = root.GetComponentsInChildren<MeshRenderer>();
             cmd.SetGlobalVector(s_gridOrigin, origin);
             cmd.SetGlobalVector(s_gridSize, size);
             cmd.SetGlobalVector(s_voxelSize, voxelSize);
@@ -435,7 +484,7 @@ namespace Lotec.Lighting {
             for (int axis = 0; axis < 3; axis++) {
                 cmd.SetGlobalInt(s_voxAxis, axis);
                 foreach (MeshRenderer mr in renderers) {
-                    if (mr == null || !mr.TryGetComponent(out MeshFilter mf)) continue;
+                    if (mr == null || !MeshBounds.IsBakeEligible(mr) || !mr.TryGetComponent(out MeshFilter mf)) continue;
                     Mesh mesh = mf.sharedMesh;
                     if (mesh == null) continue;
                     Matrix4x4 l2w = mr.transform.localToWorldMatrix;
@@ -494,9 +543,10 @@ namespace Lotec.Lighting {
             _computeShader.SetFloat(s_emaWeight, EmaWeight);
             _computeShader.SetFloat(s_confidence, Confidence);
             _computeShader.SetFloat(s_giFireflyClamp, _giFireflyClamp);
+            _computeShader.SetFloat(s_reachBoost, _reachBoost);
             _computeShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
             SetDirectionalLightUniforms();
-            Manager?.LocalLights?.ApplyToCompute(_computeShader);
+            LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_computeShader);
 
             // The EMA blend weight (samplesPerFrame/maxSamples) is computed in the compute itself.
             SolveField(GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
@@ -510,13 +560,15 @@ namespace Lotec.Lighting {
             SetGridUniforms(origin, size, voxelSize);
             _computeShader.SetInt(s_fieldOffset, fieldOffset);
 
-            // Inject: solid voxels emit/reflect. Reads _Material + last-frame _Irradiance, writes _Radiance.
+            // Inject: solid voxels emit/reflect. Bounce = the surface's own last-frame incident
+            // irradiance (its _Irradiance slot, built by gather); reads _Material, writes _Radiance.
             _computeShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
             _computeShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
             _computeShader.Dispatch(_injectKernel, Groups, 1, 1);
 
-            // Gather: air voxels integrate 1 ray/frame off the fresh _Radiance, fold into _Irradiance.
+            // Gather: off the fresh _Radiance, fold into _Irradiance - AIR voxels omnidirectionally
+            // (the read field), SOLID voxels over their front hemisphere (next frame's inject bounce).
             _computeShader.SetBuffer(_gatherKernel, s_material, _materialBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);

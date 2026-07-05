@@ -7,9 +7,10 @@ namespace Lotec.Lighting {
     /// shader needs (the bitmask and the sun's nearest baked direction). The shared volume
     /// bounds it samples against are published by <see cref="LightingManager"/>.
     ///
-    /// Added automatically by <see cref="VoxelOcclusionBitmaskBaker"/> when it bakes. Its
-    /// presence (and the <see cref="Sampling"/> mode) tells <see cref="LightingManager"/> to
-    /// select the BITMASK_POINT / BITMASK_8TAP path.
+    /// Added automatically by the bitmask baker when it bakes. The ENABLED binder on the active
+    /// volume selects the BITMASK_POINT / BITMASK_8TAP shadow path per its <see cref="Sampling"/>
+    /// mode (it owns the shadow keyword group); with no enabled binder the SDF default is used.
+    /// Mutually exclusive with the occlusion-field binder.
     /// </summary>
     [ExecuteInEditMode]
     [RequireComponent(typeof(VoxelVolume))]
@@ -47,11 +48,29 @@ namespace Lotec.Lighting {
             occlusionBitmaskTexture != null
             && occlusionBitmaskDirections != null && occlusionBitmaskDirections.Length > 0;
 
+        void OnEnable() {
+            // Shadow sources are mutually exclusive: enabling this binder turns the field off.
+            if (TryGetComponent(out VoxelOcclusionField field) && field.enabled)
+                field.enabled = false;
+        }
+
+        void OnDisable() {
+            LightingKeywords.ReleaseShadow(this);
+        }
+
         void Update() {
-            // Shader globals are singular, so only the active volume's binder publishes.
+            // Shader globals are singular, so only the active volume's binder publishes (and only
+            // the publishing binder holds the shadow-keyword claim).
             LightingManager manager = LightingManager.Instance;
-            if (manager != null && manager.Volume != Volume) return;
-            if (HasData) Bind();
+            bool active = (manager == null || manager.Volume == Volume) && HasData;
+            if (!active) {
+                LightingKeywords.ReleaseShadow(this);
+                return;
+            }
+            LightingKeywords.ClaimShadow(this, sampling == Sampling.Point
+                ? LightingKeywords.ShadowBitmaskPoint
+                : LightingKeywords.ShadowBitmask8Tap);
+            Bind();
         }
 
         /// <summary>Publish the bitmask globals + the occlusion-grid uniforms (resolution +

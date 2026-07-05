@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace Lotec.Lighting {
     /// <summary>
@@ -8,14 +9,15 @@ namespace Lotec.Lighting {
     /// </summary>
     [AddComponentMenu("Lotec/Voxel Lighting/Bakers/Voxel SDF Baker")]
     public class VoxelSdfBaker : VoxelBakerBase {
-        public enum SdfBakerMode {
-            Exact, // SdfBaker: uniform-grid exact nearest-triangle search
-            Jfa,   // JfaSdfBaker: approximate jump-flooding (for evaluation)
+        public enum SdfBakeMode {
+            Exact, // ExactSdfBake: uniform-grid exact nearest-triangle search
+            Jfa,   // JfaSdfBake: approximate jump-flooding (for evaluation)
         }
 
         [Header("SDF Baker")]
-        [Tooltip("Which SDF baker to use. Exact is the reference; JFA is an approximate alternative kept for evaluation.")]
-        public SdfBakerMode sdfBakerMode = SdfBakerMode.Exact;
+        [Tooltip("Which SDF bake to use. Exact is the reference; JFA is an approximate alternative kept for evaluation.")]
+        [FormerlySerializedAs("sdfBakerMode")]
+        public SdfBakeMode sdfBakeMode = SdfBakeMode.Exact;
 
         [Tooltip("Also bake a low-res SDF used by GI. Disable for direct-lighting-only setups that never run GI.")]
         public bool bakeLowres = true;
@@ -24,8 +26,10 @@ namespace Lotec.Lighting {
         [Range(1, 6)]
         public int LowresDownscaleFactor = 2;
 
-        [SerializeField] SdfBaker _sdfBaker = new SdfBaker();
-        [SerializeField] JfaSdfBaker _sdfBakerJfa = new JfaSdfBaker();
+        [FormerlySerializedAs("_sdfBaker")]
+        [SerializeField] ExactSdfBake _exactBake = new ExactSdfBake();
+        [FormerlySerializedAs("_sdfBakerJfa")]
+        [SerializeField] JfaSdfBake _jfaBake = new JfaSdfBake();
 
         public override int BakeOrder => 0;
         public override string BakeLabel => "SDF";
@@ -41,14 +45,14 @@ namespace Lotec.Lighting {
             // depends on them, so recompute here rather than relying on a prior bake.
             volume.RecomputeBoundsAndResolution();
 
-            ISdfBaker baker = sdfBakerMode == SdfBakerMode.Jfa ? (ISdfBaker)_sdfBakerJfa : _sdfBaker;
+            ISdfBake bake = sdfBakeMode == SdfBakeMode.Jfa ? (ISdfBake)_jfaBake : _exactBake;
 
-            if (!baker.TryBake(volume, volume.TrimmedMaxResolution, volume.BakeRoot.name, out Texture3D bakedSdf, out error))
+            if (!bake.TryBake(volume, volume.TrimmedMaxResolution, volume.BakeRoot.name, out Texture3D bakedSdf, out error))
                 return false;
             volume.sdfHiresTexture = bakedSdf;
 
             if (bakeLowres) {
-                if (!baker.TryBake(volume, volume.TrimmedMaxResolution / LowresDownscaleFactor, volume.BakeRoot.name + "_Lowres", out Texture3D bakedLowres, out error))
+                if (!bake.TryBake(volume, volume.TrimmedMaxResolution / LowresDownscaleFactor, volume.BakeRoot.name + "_Lowres", out Texture3D bakedLowres, out error))
                     return false;
                 volume.sdfLowresTexture = bakedLowres;
             }
@@ -59,14 +63,14 @@ namespace Lotec.Lighting {
 #if UNITY_EDITOR
         protected override void Reset() {
             base.Reset();
-            if (_sdfBaker.sdfBakeCompute == null) {
+            if (_exactBake.sdfBakeCompute == null) {
                 ComputeShader cs = FindComputeShaderByExactName("SdfBake");
-                if (cs != null) _sdfBaker.sdfBakeCompute = cs;
+                if (cs != null) _exactBake.sdfBakeCompute = cs;
                 else Debug.LogWarning("VoxelSdfBaker: Could not find SdfBake compute shader. Assign it manually.", this);
             }
-            if (_sdfBakerJfa.sdfBakeJfaCompute == null) {
+            if (_jfaBake.sdfBakeJfaCompute == null) {
                 ComputeShader cs = FindComputeShaderByExactName("SdfBakeJfa");
-                if (cs != null) _sdfBakerJfa.sdfBakeJfaCompute = cs;
+                if (cs != null) _jfaBake.sdfBakeJfaCompute = cs;
                 else Debug.LogWarning("VoxelSdfBaker: Could not find SdfBakeJfa compute shader. Assign it manually.", this);
             }
         }

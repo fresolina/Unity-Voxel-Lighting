@@ -5,7 +5,12 @@
             <ui:Label text="Lighting Controls" class="panel-title"/>
             <ui:VisualElement class="panel-accent"/>
             <ui:VisualElement name="settings-container" class="section-body">
-                <ui:EnumField label="GI Method [§]" value="LPV" type="Lotec.Lighting.GiFieldUpdater+LightingMethod, Lotec.Lighting" name="lighting-method-enum" class="setting-field">
+                <ui:EnumField label="GI" value="BufferGi" type="Lotec.Lighting.GiMethod, Lotec.Lighting" name="gi-enum" tooltip="Which GI system runs (toggles the GI updater components)." class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="Gi" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:EnumField>
+                <ui:EnumField label="Voxel GI Method [§]" value="LPV" type="Lotec.Lighting.GiFieldUpdater+LightingMethod, Lotec.Lighting" name="lighting-method-enum" tooltip="Solve method of the texture Voxel GI (only when GI = VoxelGi)." class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="LightingMethod" binding-mode="TwoWay"/>
                     </Bindings>
@@ -15,7 +20,7 @@
                         <ui:DataBinding property="value" data-source-path="SamplesPerFrame" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:IntegerField>
-                <ui:EnumField label="Shadow Mode" value="SDF" type="Lotec.Lighting.LightingManager+ShadowSource, Lotec.Lighting" name="shadow-mode-enum" class="setting-field">
+                <ui:EnumField label="Shadow Mode" value="SDF" type="Lotec.Lighting.ShadowSourceMode, Lotec.Lighting" name="shadow-mode-enum" class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="ShadowMode" binding-mode="TwoWay"/>
                     </Bindings>

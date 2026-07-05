@@ -1,21 +1,31 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Baked lighting volume: bake input, computed bounds/resolution, and the baked SDF
-    /// textures. Owns the volume-derived shader globals (bounds, voxel grid, SDF texture) and
-    /// how to publish them via <see cref="ApplyShaderGlobals"/> - but LightingManager decides
-    /// *when* and for *which* volume to call it, so the singular globals reflect the active
-    /// volume only. GiFieldUpdater publishes the GI-grid globals separately.
+    /// SDF-baked lighting volume. Reads the tight mesh bounds off the <see cref="MeshBounds"/>
+    /// on the same GameObject and derives its own grid from them: bake resolution, a voxel
+    /// border and cubic-voxel alignment (stored in <see cref="Bounds"/>), plus the baked SDF
+    /// textures. Owns the volume-derived shader globals (bounds, SDF texture) and how to publish
+    /// them via <see cref="ApplyShaderGlobals"/> - but LightingManager decides *when* and for
+    /// *which* volume to call it, so the singular globals reflect the active volume only.
     /// </summary>
+    [DisallowMultipleComponent]
+    [RequireComponent(typeof(MeshBounds))]
+    [ExecuteAlways] // registration + globals must also work in edit mode (GI solves there too)
+    [AddComponentMenu("Lotec/Voxel Lighting/Voxel Volume")]
     public class VoxelVolume : MonoBehaviour {
         static readonly int s_sdfHires = Shader.PropertyToID("_SdfHires");
         static readonly int s_boundsMin = Shader.PropertyToID("_VoxelVolumeBoundsMin");
         static readonly int s_boundsSize = Shader.PropertyToID("_VoxelVolumeBoundsSize");
 
-        [Header("Bake Input")]
-        [SerializeField] Transform _root;
+        // Self-registry: every enabled volume adds itself here (no manager dependency, so
+        // registration can't race the manager's initialization order).
+        static readonly List<VoxelVolume> s_all = new List<VoxelVolume>();
+        /// <summary>All enabled, registered volumes in the scene.</summary>
+        public static IReadOnlyList<VoxelVolume> All => s_all;
 
+        [Header("Bake Input")]
         [Tooltip("Maximum voxel resolution along the largest axis.")]
         [Min(4)]
         [SerializeField] int _maxResolution = 128;
@@ -28,14 +38,35 @@ namespace Lotec.Lighting {
 
         [HideInInspector]
         [SerializeField] Vector3Int _trimmedMaxResolution;
+        // The volume's OWN bounds: the MeshBounds' tight bounds grown by the voxel border and
+        // aligned to whole cubic voxels. Serialized so builds don't recompute.
         [HideInInspector]
         [SerializeField] Bounds _bounds = new Bounds(Vector3.zero, Vector3.one);
-        Vector3 _voxelSize;
+
+        MeshBounds _meshBounds;
 
         // Fixed border around the geometry, so the SDF have valid distances at the boundary.
         // 2.0 (not 1.5): at concave corners a thinner border let GI rays leak exterior light.
         // NOTE: This can be reduced when GI light is tracked in all 6 axes.
         const float PaddingVoxels = 2f;
+
+        MeshBounds SourceBounds {
+            get {
+                if (_meshBounds == null) _meshBounds = GetComponent<MeshBounds>();
+                return _meshBounds;
+            }
+        }
+
+        /// <summary>The mesh root, delegated to the MeshBounds on this GameObject.</summary>
+        public Transform BakeRoot {
+            get => SourceBounds != null ? SourceBounds.Root : null;
+            set { if (SourceBounds != null) SourceBounds.Root = value; }
+        }
+
+        /// <summary>Padded, cubic-voxel-aligned bounds the SDF/occlusion fields are baked in.</summary>
+        public Bounds Bounds => _bounds;
+
+        public Vector3Int TrimmedMaxResolution => _trimmedMaxResolution;
 
         /// <summary>Cubic voxel edge length in world units, derived from Bounds and TrimmedMaxResolution.</summary>
         public float VoxelSize => Bounds.size.x / Mathf.Max(1, TrimmedMaxResolution.x);
@@ -45,10 +76,6 @@ namespace Lotec.Lighting {
             TrimmedMaxResolution.x / Mathf.Max(1e-9f, Bounds.size.x),
             TrimmedMaxResolution.y / Mathf.Max(1e-9f, Bounds.size.y),
             TrimmedMaxResolution.z / Mathf.Max(1e-9f, Bounds.size.z));
-
-        public Transform BakeRoot { get => _root; set => _root = value; }
-        public Vector3Int TrimmedMaxResolution => _trimmedMaxResolution;
-        public Bounds Bounds => _bounds;
 
         /// <summary>Publish the universal volume-derived globals: world-space bounds and the
         /// hi-res SDF texture (needed by shadows + GI regardless of occlusion). Call from
@@ -64,62 +91,27 @@ namespace Lotec.Lighting {
 
         void OnValidate() {
             _maxResolution = Mathf.Max(4, _maxResolution);
-            if (BakeRoot == null) {
-                BakeRoot = transform;
-            }
             RecomputeBoundsAndResolution();
         }
 
         void OnEnable() {
-            if (_autoRegisterWithManager)
-                LightingManager.Instance?.RegisterVolume(this);
-        }
-
-        void Start() {
-            if (_autoRegisterWithManager)
-                LightingManager.Instance?.RegisterVolume(this);
+            if (_autoRegisterWithManager && !s_all.Contains(this))
+                s_all.Add(this);
         }
 
         void OnDisable() {
-            if (_autoRegisterWithManager)
-                LightingManager.Instance?.UnregisterVolume(this);
+            s_all.Remove(this);
         }
 
+        /// <summary>Refresh the MeshBounds, then derive this volume's grid from the tight bounds:
+        /// the voxel border and the cubic alignment. The SDF baker calls this before baking.</summary>
         public void RecomputeBoundsAndResolution() {
-            if (_root == null) return;
+            MeshBounds source = SourceBounds;
+            if (source == null || source.Root == null) return;
 
-            ComputeBounds();
+            source.Recompute();
+            _bounds = source.Bounds;
             ComputeMaxResolutionForBounds();
-        }
-
-        /// <summary>
-        /// Expands Bounds to encapsulate all meshes under _root
-        /// </summary>
-        void ComputeBounds() {
-            // Mutate the backing field directly. Encapsulate/Expand on the Bounds property
-            // would mutate the getter's struct copy and be lost.
-            _bounds = new Bounds();
-            MeshRenderer[] meshRenderers = _root.GetComponentsInChildren<MeshRenderer>();
-            foreach (MeshRenderer mr in meshRenderers) {
-                if (mr == null)
-                    continue;
-                if (!IsBakeEligible(mr))
-                    continue;
-                MeshFilter mf = mr.GetComponent<MeshFilter>();
-                if (mf == null || mf.sharedMesh == null)
-                    continue;
-
-                if (_bounds.size == Vector3.zero) {
-                    _bounds = mr.bounds;
-                } else {
-                    _bounds.Encapsulate(mr.bounds);
-                }
-            }
-        }
-
-        static bool IsBakeEligible(Renderer renderer) {
-            GameObject gameObject = renderer.gameObject;
-            return gameObject.activeInHierarchy && gameObject.isStatic;
         }
 
         /// <summary>
@@ -153,7 +145,6 @@ namespace Lotec.Lighting {
             // offsets, and distance thresholds.
             Vector3 alignedSize = new Vector3(rx * voxelSize, ry * voxelSize, rz * voxelSize);
             _bounds = new Bounds(_bounds.center, alignedSize);
-            _voxelSize = Vector3.one * voxelSize;
         }
     }
 }

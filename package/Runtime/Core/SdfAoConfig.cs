@@ -21,21 +21,9 @@ namespace Lotec.Lighting {
             Shader.SetGlobalFloat(s_aoStep, Step);
             Shader.SetGlobalFloat(s_aoIntensity, Intensity);
             switch (SampleQuality) {
-                case AoQuality.SDF_AO_OFF:
-                    Shader.EnableKeyword("SDF_AO_OFF");
-                    Shader.DisableKeyword("SDF_AO_LQ");
-                    Shader.DisableKeyword("SDF_AO_HQ");
-                    break;
-                case AoQuality.SDF_AO_LQ:
-                    Shader.DisableKeyword("SDF_AO_OFF");
-                    Shader.EnableKeyword("SDF_AO_LQ");
-                    Shader.DisableKeyword("SDF_AO_HQ");
-                    break;
-                case AoQuality.SDF_AO_HQ:
-                    Shader.DisableKeyword("SDF_AO_OFF");
-                    Shader.DisableKeyword("SDF_AO_LQ");
-                    Shader.EnableKeyword("SDF_AO_HQ");
-                    break;
+                case AoQuality.SDF_AO_LQ: LightingKeywords.SdfAo.Set(LightingKeywords.SdfAoLow); break;
+                case AoQuality.SDF_AO_HQ: LightingKeywords.SdfAo.Set(LightingKeywords.SdfAoHigh); break;
+                default: LightingKeywords.SdfAo.Reset(); break; // Off = bare default (no keyword)
             }
         }
     }

@@ -9,10 +9,10 @@ namespace Lotec.Lighting {
     /// Bakes a directional occlusion field where each direction gets a normalized RGBA channel.
     /// Stores the "lit" value (0 = shadow, 1 = fully lit) per Fibonacci direction per voxel.
     /// Output: N/4 normalized RGBA Texture3D assets (4 directions packed per texture).
-    /// Unlike OcclusionBitmaskBaker, this supports hardware trilinear interpolation.
+    /// Unlike OcclusionBitmaskBake, this supports hardware trilinear interpolation.
     /// </summary>
     [Serializable]
-    public class OcclusionFieldBaker {
+    public class OcclusionFieldBake {
         public enum DirectionCount {
             Dir1Sun = 1,
             Dir8 = 8,
@@ -92,15 +92,15 @@ namespace Lotec.Lighting {
             error = "";
 
             if (sourceVolume == null) {
-                error = "OcclusionFieldBaker: sourceVolume is null";
+                error = "OcclusionFieldBake: sourceVolume is null";
                 return false;
             }
             if (occlusionFieldBakeCompute == null) {
-                error = "OcclusionFieldBaker: occlusionFieldBakeCompute not assigned";
+                error = "OcclusionFieldBake: occlusionFieldBakeCompute not assigned";
                 return false;
             }
             if (sourceVolume.sdfHiresTexture == null) {
-                error = "OcclusionFieldBaker: sourceVolume has no sdfHiresTexture";
+                error = "OcclusionFieldBake: sourceVolume has no sdfHiresTexture";
                 return false;
             }
 
@@ -109,7 +109,7 @@ namespace Lotec.Lighting {
             int voxelCount = resolution.x * resolution.y * resolution.z;
 
             if (bounds.size.magnitude < 0.01f || resolution.x < 2) {
-                error = "OcclusionFieldBaker: invalid bounds or resolution";
+                error = "OcclusionFieldBake: invalid bounds or resolution";
                 return false;
             }
 
@@ -132,7 +132,7 @@ namespace Lotec.Lighting {
 
             GraphicsFormat textureFormat = GetOcclusionFieldFormat(isSingleDir);
             if (!SystemInfo.IsFormatSupported(textureFormat, GraphicsFormatUsage.Sample)) {
-                error = $"OcclusionFieldBaker: format {textureFormat} not supported for sampling on this platform";
+                error = $"OcclusionFieldBake: format {textureFormat} not supported for sampling on this platform";
                 return false;
             }
 
@@ -181,7 +181,7 @@ namespace Lotec.Lighting {
                     readbackRequest.WaitForCompletion();
 
                     if (readbackRequest.hasError) {
-                        error = $"OcclusionFieldBaker: readback failed for texture {texIdx}";
+                        error = $"OcclusionFieldBake: readback failed for texture {texIdx}";
                         outBuffer.Dispose();
                         DisposePartialResults(resultTextures, texIdx);
                         resultTextures = null;
@@ -190,7 +190,7 @@ namespace Lotec.Lighting {
 
                     var readbackData = readbackRequest.GetData<float>();
                     if (readbackData.Length != voxelCount * dirsPerBatch) {
-                        error = $"OcclusionFieldBaker: readback size mismatch for texture {texIdx} (got {readbackData.Length}, expected {voxelCount * dirsPerBatch})";
+                        error = $"OcclusionFieldBake: readback size mismatch for texture {texIdx} (got {readbackData.Length}, expected {voxelCount * dirsPerBatch})";
                         outBuffer.Dispose();
                         DisposePartialResults(resultTextures, texIdx);
                         resultTextures = null;
@@ -218,13 +218,13 @@ namespace Lotec.Lighting {
                     resultTextures[texIdx] = tex;
                     outBuffer.Dispose();
 
-                    Debug.Log($"OcclusionFieldBaker: baked texture {texIdx + 1}/{textureCount} (directions {dirOffset}..{dirOffset + dirsPerBatch - 1}, format={textureFormat})");
+                    Debug.Log($"OcclusionFieldBake: baked texture {texIdx + 1}/{textureCount} (directions {dirOffset}..{dirOffset + dirsPerBatch - 1}, format={textureFormat})");
                 }
             } finally {
                 dirBuffer.Dispose();
             }
 
-            Debug.Log($"OcclusionFieldBaker: baked {textureCount} textures ({numDirections} directions, {resolution.x}x{resolution.y}x{resolution.z} = {voxelCount} voxels, hemisphere={hemisphereOnly}, format={textureFormat})");
+            Debug.Log($"OcclusionFieldBake: baked {textureCount} textures ({numDirections} directions, {resolution.x}x{resolution.y}x{resolution.z} = {voxelCount} voxels, hemisphere={hemisphereOnly}, format={textureFormat})");
             return true;
         }
 

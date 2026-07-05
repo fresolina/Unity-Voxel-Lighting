@@ -6,7 +6,7 @@ using UnityEngine.Rendering;
 namespace Lotec.Lighting {
     /// <summary>
     /// Approximate SDF baker using the Jump Flooding Algorithm (JFA), provided as a
-    /// secondary implementation for evaluation against the exact <see cref="SdfBaker"/>.
+    /// secondary implementation for evaluation against the exact <see cref="ExactSdfBake"/>.
     ///
     /// It reuses the same triangle gathering and uniform grid as the exact baker, but
     /// only computes exact distances for a thin band around the surface and then floods
@@ -16,7 +16,7 @@ namespace Lotec.Lighting {
     /// are directly comparable.
     /// </summary>
     [Serializable]
-    public class JfaSdfBaker : ISdfBaker {
+    public class JfaSdfBake : ISdfBake {
         public ComputeShader sdfBakeJfaCompute;
 
         [Tooltip("Seed search radius in grid cells. Larger seeds a thicker exact band " +
@@ -75,7 +75,7 @@ namespace Lotec.Lighting {
                 _resolveKernel = sdfBakeJfaCompute.FindKernel("Resolve");
             }
 
-            if (!SdfBaker.TryBuildTriangleListWorld(root, volume.Bounds, out Vector3[] triVerts, out error))
+            if (!ExactSdfBake.TryBuildTriangleListWorld(root, volume.Bounds, out Vector3[] triVerts, out error))
                 return false;
 
             int triCount = triVerts.Length / 3;
@@ -90,7 +90,7 @@ namespace Lotec.Lighting {
                 return false;
             }
 
-            SdfBaker.BuildUniformGrid(triVerts, volume.Bounds, out Vector3Int gridDim, out float cellSize, out uint[] cellStart, out uint[] triIndices);
+            ExactSdfBake.BuildUniformGrid(triVerts, volume.Bounds, out Vector3Int gridDim, out float cellSize, out uint[] cellStart, out uint[] triIndices);
 
             var sdfBuffer = new ComputeBuffer(voxelCount, sizeof(uint), ComputeBufferType.Structured);
             var triBuffer = new ComputeBuffer(triVerts.Length, sizeof(float) * 3, ComputeBufferType.Structured);

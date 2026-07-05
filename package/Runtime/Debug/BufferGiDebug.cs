@@ -11,12 +11,13 @@ namespace Lotec.Lighting {
     [ExecuteAlways]
     [AddComponentMenu("Lotec/Voxel Lighting/Debug/Buffer GI Debug")]
     public class BufferGiDebug : MonoBehaviour {
-        public enum Mode { Occupancy = 0, Irradiance = 1, Radiance = 2 }
+        public enum Mode { Occupancy = 0, Irradiance = 1, Radiance = 2, Normals = 3 }
         public enum Field { Fine = 0, Coarse = 1 }
 
         [Tooltip("Shader 'Hidden/Lotec/BufferGiCubeDebug'.")]
         [SerializeField] Shader _shader;
-        [Tooltip("Which buffer to visualize.")]
+        [Tooltip("What to visualize: occupancy/albedo, irradiance, radiance, or the occupancy " +
+                 "normals (xyz->rgb; grey = ambiguous/zero normal on a thin slab or enclosed voxel).")]
         public Mode mode = Mode.Occupancy;
         [Tooltip("Which field to visualize: the fine volume or the coarse (large) box.")]
         public Field field = Field.Fine;
@@ -25,6 +26,10 @@ namespace Lotec.Lighting {
         [Tooltip("Draw every Nth voxel along each axis (1 = all).")]
         [Min(1)] public int stride = 1;
         [Range(0.1f, 1f)] public float cubeFill = 0.85f;
+        [Tooltip("Normals mode: also draw a line from each solid voxel along its occupancy normal. " +
+                 "Length is in voxel edges.")]
+        public bool showNormalLines = true;
+        [Range(0.5f, 4f)] public float normalLineLength = 1.5f;
         [Tooltip("Linear display multiplier for the irradiance/radiance modes (1 = neutral). " +
                  "Occupancy mode ignores it.")]
         [Min(0f)][FormerlySerializedAs("exposure")] public float intensity = 1f;
@@ -32,6 +37,7 @@ namespace Lotec.Lighting {
 
         Material _material;
         MaterialPropertyBlock _wireProps;
+        MaterialPropertyBlock _normalLineProps;
 
         static readonly int s_material = Shader.PropertyToID("_DbgMaterial");
         static readonly int s_radiance = Shader.PropertyToID("_DbgRadiance");
@@ -47,6 +53,8 @@ namespace Lotec.Lighting {
         static readonly int s_mode = Shader.PropertyToID("_DbgMode");
         static readonly int s_fieldOffset = Shader.PropertyToID("_DbgFieldOffset");
         static readonly int s_wire = Shader.PropertyToID("_DbgWire");
+        static readonly int s_normalLine = Shader.PropertyToID("_DbgNormalLine");
+        static readonly int s_normalLen = Shader.PropertyToID("_DbgNormalLen");
         static readonly int s_wireOrigin0 = Shader.PropertyToID("_WireOrigin0");
         static readonly int s_wireSize0 = Shader.PropertyToID("_WireSize0");
         static readonly int s_wireOrigin1 = Shader.PropertyToID("_WireOrigin1");
@@ -102,6 +110,7 @@ namespace Lotec.Lighting {
             _material.SetFloat(s_mode, (int)mode);
             _material.SetFloat(s_fieldOffset, fieldOffset);
             _material.SetFloat(s_wire, 0f);
+            _material.SetFloat(s_normalLine, 0f);
 
             // Bounds enclosing both fields, so neither the cubes nor the wireframe get culled.
             Bounds worldBounds = gi.Volume.Bounds;
@@ -131,6 +140,22 @@ namespace Lotec.Lighting {
                 // 24 line-list verts (12 edges) per box: fine always, coarse only when assigned.
                 int boxes = gi.HasCoarse ? 2 : 1;
                 Graphics.RenderPrimitives(wrp, MeshTopology.Lines, 24, boxes);
+            }
+
+            // Normals mode: a line per solid voxel along its occupancy normal (2 verts/instance).
+            if (mode == Mode.Normals && showNormalLines) {
+                if (_normalLineProps == null) _normalLineProps = new MaterialPropertyBlock();
+                _normalLineProps.SetFloat(s_normalLine, 1f);
+                float maxVoxelEdge = Mathf.Max(voxelSize.x, Mathf.Max(voxelSize.y, voxelSize.z));
+                _normalLineProps.SetFloat(s_normalLen, normalLineLength * maxVoxelEdge);
+
+                RenderParams lrp = new RenderParams(_material) {
+                    worldBounds = worldBounds,
+                    receiveShadows = false,
+                    shadowCastingMode = ShadowCastingMode.Off,
+                    matProps = _normalLineProps
+                };
+                Graphics.RenderPrimitives(lrp, MeshTopology.Lines, 2, instanceCount);
             }
         }
     }

@@ -6,7 +6,7 @@ using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
     [Serializable]
-    public class MaterialBaker {
+    public class MaterialBake {
         public ComputeShader MaterialBakeCompute;
 
         static readonly int s_triVerts = Shader.PropertyToID("_TriVerts");
@@ -30,7 +30,7 @@ namespace Lotec.Lighting {
         public string Bake(VoxelVolume volume, out Texture3D albedoIntensity, int downscaleFactor = 1) {
             albedoIntensity = null;
             Transform root = volume.BakeRoot;
-            if (volume == null) return "Target SdfVolume is null.";
+            if (volume == null) return "Target VoxelVolume is null.";
             if (MaterialBakeCompute == null) return "Material Bake Compute is not assigned.";
             if (root == null) return "Bake Root is null.";
 
@@ -120,7 +120,7 @@ namespace Lotec.Lighting {
 
                 // Read back RenderTexture3D outputs into CPU Texture3D using a shared helper.
                 if (!TryReadbackRenderTexture3D(rtAlbedoIntensity, lowRes, $"{root.name}_AlbedoIntensity", out albedoIntensity)) {
-                    return "MaterialBaker: failed to build CPU packed material Texture3D from RenderTexture.";
+                    return "MaterialBake: failed to build CPU packed material Texture3D from RenderTexture.";
                 }
 
                 return null;
@@ -153,9 +153,13 @@ namespace Lotec.Lighting {
 
             var albedoList = new List<Texture2D>();
 
-            MeshRenderer[] meshRenderers = root.GetComponentsInChildren<MeshRenderer>(true);
+            // Same eligibility as the SDF bake (active + static) - the material field must describe
+            // the same geometry the SDF represents.
+            MeshRenderer[] meshRenderers = root.GetComponentsInChildren<MeshRenderer>();
             foreach (MeshRenderer mr in meshRenderers) {
                 if (mr == null)
+                    continue;
+                if (!MeshBounds.IsBakeEligible(mr))
                     continue;
                 if (!mr.TryGetComponent(out MeshFilter mf))
                     continue;
@@ -336,13 +340,13 @@ namespace Lotec.Lighting {
                     AsyncGPUReadbackRequest req = AsyncGPUReadback.Request(tmpRT, 0);
                     req.WaitForCompletion();
                     if (req.hasError) {
-                        Debug.LogWarning($"MaterialBaker: AsyncGPUReadback failed for {name} slice {z}.");
+                        Debug.LogWarning($"MaterialBake: AsyncGPUReadback failed for {name} slice {z}.");
                         RenderTexture.ReleaseTemporary(tmpRT);
                         return false;
                     }
                     NativeArray<Color> data = req.GetData<Color>();
                     if (data == null || data.Length == 0) {
-                        Debug.LogWarning($"MaterialBaker: AsyncGPUReadback returned empty data for {name} slice {z}.");
+                        Debug.LogWarning($"MaterialBake: AsyncGPUReadback returned empty data for {name} slice {z}.");
                         RenderTexture.ReleaseTemporary(tmpRT);
                         return false;
                     }

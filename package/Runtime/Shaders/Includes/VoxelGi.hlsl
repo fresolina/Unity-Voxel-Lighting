@@ -2,6 +2,13 @@
 
 #include "VoxelGiField.hlsl"
 
+// The irradiance-field read only exists in the GI_VOXEL_TEXTURE variant (SampleVoxelGI is only
+// called there). Keep its texture out of the GI_OFF / GI_VOXEL_BUFFER variants so they don't
+// declare an unbound global - WebGPU validates declared globals against the bound pipeline layout
+// (D3D11/Vulkan don't). See the matching note in BufferGi.hlsl. (VoxelGiField's _SdfLowres stays
+// unguarded: the AO/shadow paths share SampleSDF, and it is bound whenever those run.)
+#if defined(GI_VOXEL_TEXTURE)
+
 // Bind these globals from C# script (Shader.SetGlobalTexture, etc.)
 Texture3D<float4> _IrradianceFieldFinal;
 SamplerState sampler_IrradianceFieldFinal; // Unity binds this automatically if named matches texture
@@ -70,3 +77,5 @@ float3 SampleVoxelGI(float3 worldPos, float3 normal)
     // Fade in by accumulation confidence so the noisy cold-start frames stay hidden.
     return _IrradianceFieldFinal.Sample(sampler_IrradianceFieldFinal, uvw).rgb * _GiConfidence;
 }
+
+#endif // GI_VOXEL_TEXTURE

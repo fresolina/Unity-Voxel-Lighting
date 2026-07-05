@@ -7,6 +7,15 @@
 // face with a quadratic B-spline. Samples the FINE field, falls back to the COARSE field outside it
 // (blended at the fine edges). No raymarching, no SDF, all cache-resident. The companion solve is
 // BufferGi.compute; layout is BufferGiField.hlsl.
+
+// Everything here is scoped to the GI_VOXEL_BUFFER variant. VoxelLit includes this header
+// unconditionally but only calls SampleBufferGI under GI_VOXEL_BUFFER, so the other variants
+// (GI_OFF / GI_VOXEL_TEXTURE) must not carry these fragment-stage StructuredBuffers: WebGPU
+// validates every declared global against the bound pipeline layout and fails pipeline creation
+// for a variant that declares _Material / _Irradiance while they are unbound (null). D3D11/Vulkan
+// silently strip/tolerate them, which is why this only bites in a WebGPU (browser) build.
+#if defined(GI_VOXEL_BUFFER)
+
 #include "BufferGiField.hlsl"
 
 // Bound as globals by BufferGiUpdater. The buffers are concatenated over all fields (fine at offset
@@ -93,5 +102,7 @@ float3 SampleBufferGI(float3 worldPos, float3 normal)
     result = (result < 1e8) ? max(result, 0.0) : 0.0;
     return result * _BgiIntensity;
 }
+
+#endif // GI_VOXEL_BUFFER
 
 #endif // LOTEC_BUFFER_GI_INCLUDED
