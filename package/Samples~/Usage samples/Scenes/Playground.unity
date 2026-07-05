@@ -23,7 +23,7 @@ RenderSettings:
   m_AmbientSkyColor: {r: 0.6872353, g: 1.1616935, b: 1.8364779, a: 1}
   m_AmbientEquatorColor: {r: 0.114, g: 0.125, b: 0.133, a: 1}
   m_AmbientGroundColor: {r: 0.047, g: 0.043, b: 0.035, a: 1}
-  m_AmbientIntensity: 1
+  m_AmbientIntensity: 2
   m_AmbientMode: 0
   m_SubtractiveShadowColor: {r: 0.42, g: 0.478, b: 0.627, a: 1}
   m_SkyboxMaterial: {fileID: 10304, guid: 0000000000000000f000000000000000, type: 0}
@@ -1916,7 +1916,7 @@ Transform:
   m_GameObject: {fileID: 659102737}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0.6, y: 2.6, z: -2.4}
+  m_LocalPosition: {x: 0.835, y: 2.6, z: -2.264}
   m_LocalScale: {x: 0.2, y: 0.2, z: 0.2}
   m_ConstrainProportionsScale: 1
   m_Children: []
@@ -2371,13 +2371,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 784264324}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.9396927, y: 0, z: 0, w: 0.34202018}
+  m_LocalRotation: {x: 0.7071068, y: 0, z: 0, w: 0.7071068}
   m_LocalPosition: {x: 0, y: 3.8, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 140, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 90, y: 0, z: 0}
 --- !u!114 &784264327
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3651,13 +3651,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiDebug
   _shader: {fileID: 4800000, guid: 2812d0b83a01c5f4a9ff6e4ecd95957c, type: 3}
-  mode: 0
+  mode: 3
   field: 0
   showWireframe: 1
   stride: 1
-  cubeFill: 0.85
+  cubeFill: 0.495
+  showNormalLines: 1
+  normalLineLength: 0.92
   intensity: 1
-  minLuminance: 0.02
+  minLuminance: 0.01
 --- !u!1 &1337109695
 GameObject:
   m_ObjectHideFlags: 0
@@ -4177,12 +4179,13 @@ MonoBehaviour:
   _samplesPerFrame: 1
   _confidenceCurve: 3
   _continuousGi: 0
-  _giFireflyClamp: 13
+  _giFireflyClamp: 8
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
+  _reachBoost: 1
   _exposureControl:
     _tonemapInShader: 1
     _exposure: 0
-    _auto: 1
+    _auto: 0
     _min: -2
     _max: 4
     _adaptationSpeed: 2
@@ -4257,7 +4260,7 @@ MonoBehaviour:
   _exposureControl:
     _tonemapInShader: 1
     _exposure: 0
-    _auto: 1
+    _auto: 0
     _min: -2
     _max: 4
     _adaptationSpeed: 2
@@ -4644,7 +4647,7 @@ Transform:
   m_GameObject: {fileID: 1588789276}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 3.4, y: 2.6, z: -2.4}
+  m_LocalPosition: {x: 3.358, y: 2.6, z: -2.281}
   m_LocalScale: {x: 0.2, y: 0.2, z: 0.2}
   m_ConstrainProportionsScale: 1
   m_Children: []
