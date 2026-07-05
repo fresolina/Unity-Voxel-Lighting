@@ -177,11 +177,21 @@ float3 GetDirectLight(int3 cell, float3 normal)
     float3 voxelCenter = BgiVoxelCenter((uint3)cell);
     int3 hit;
 
+    // Cast the shadow rays from the AIR voxel one step along the normal, not from this solid cell:
+    // a surface voxel's ray toward an overhead light otherwise immediately hits the solid voxel that
+    // continues the wall ABOVE it, self-shadowing every row but the top. Starting one voxel out in
+    // air clears that (the same front-face offset the fragment read uses). Fall back to the cell
+    // itself when there's no air in front (concave/enclosed, or a thin wall whose ambiguous normal
+    // points into more solid).
+    int3 shadowStart = cell + int3(round(normal));
+    if (!BgiInBounds(shadowStart) || BgiIsSolid(_Material[BgiSlot((uint3)shadowStart)]))
+        shadowStart = cell;
+
     // Sun
     float3 total = 0;
     float ndlSun = saturate(dot(normal, _DirectLightDir));
     if (ndlSun > 0.0) {
-        float vis = MarchOccupancy(cell, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0 : 1.0;
+        float vis = MarchOccupancy(shadowStart, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0 : 1.0;
         total += _DirectLightColor.rgb * (ndlSun * vis);
     }
 
@@ -199,7 +209,7 @@ float3 GetDirectLight(int3 cell, float3 normal)
         float ndl = saturate(dot(normal, L));
         if (ndl <= 0.0) continue;
         float worldDist = distSq * invD; // = sqrt(distSq), distance to the light
-        float vis = MarchOccupancy(cell, L, worldDist, hit) ? 0.0 : 1.0;
+        float vis = MarchOccupancy(shadowStart, L, worldDist, hit) ? 0.0 : 1.0;
         total += _PointLightColor[p].rgb * (ndl * vis * GetLocalLightRangeAttenuation(distSq, rangeSq));
     }
 
@@ -221,7 +231,7 @@ float3 GetDirectLight(int3 cell, float3 normal)
         float cone = saturate(dot(-L, dirAngleScale.xyz) * dirAngleScale.w + colAngleOffset.a);
         if (cone <= 0.0) continue;
         float worldDist = distSq * invD; // = sqrt(distSq), distance to the light
-        float vis = MarchOccupancy(cell, L, worldDist, hit) ? 0.0 : 1.0;
+        float vis = MarchOccupancy(shadowStart, L, worldDist, hit) ? 0.0 : 1.0;
         total += colAngleOffset.rgb * (ndl * vis * (cone * cone) * GetLocalLightRangeAttenuation(distSq, rangeSq));
     }
 
@@ -245,13 +255,13 @@ float3 GetDirectLight(int3 cell, float3 normal)
 // as its distance approaches the grid diagonal, so bright surfaces seen from deep in shadow spread
 // more light in. Pass 1 for the physical result (the surface bounce gather does, to stay stable).
 //
-// Returns TRUE and writes `radiance` if the ray hit a surface (front-face room-lit radiance, or the
-// ambient floor for a back/enclosed hit); returns FALSE if the ray ESCAPED the grid (open sky/sun) -
-// the caller adds those ONCE, undiluted by the surface average.
-bool GatherRaySurface(int3 fromCell, float3 dir, float reachBoost, out float3 radiance)
+// A ray that ESCAPES the grid returns the environment SH in its direction: the sky acts as an AREA
+// light, so it belongs in the averaged estimate (unbiased at any sample count). The SUN is handled
+// separately (deterministic visibility ray in CSGather), so no sun lobe here.
+float3 GatherRayRadiance(int3 fromCell, float3 dir, float reachBoost)
 {
     int3 hit;
-    bool hitSurface;
+    float3 result;
     if (MarchOccupancy(fromCell, dir, BGI_MAX_RAY_DIST, hit)) {
         float3 hitNormal = OccupancyNormal(hit);
         float3 faceN = (dot(hitNormal, hitNormal) > 1e-6) ? hitNormal : float3(0, 1, 0); // ambiguous -> up (matches inject)
@@ -261,16 +271,14 @@ bool GatherRaySurface(int3 fromCell, float3 dir, float reachBoost, out float3 ra
             // Distance-weighted reach fill (t = hit distance / grid diagonal, clamped 0..1). Applied
             // BEFORE the firefly clamp so a boosted-then-bright sample still can't spike.
             float t = saturate(length(BgiVoxelCenter((uint3)hit) - BgiVoxelCenter((uint3)fromCell)) / BGI_MAX_RAY_DIST);
-            radiance = ClampFirefly(rad * lerp(1.0, reachBoost, t), _GiFireflyClamp);
+            result = ClampFirefly(rad * lerp(1.0, reachBoost, t), _GiFireflyClamp);
         } else {
-            radiance = _AmbientFloor;
+            result = _AmbientFloor;
         }
-        hitSurface = true;
     } else {
-        radiance = float3(0, 0, 0);
-        hitSurface = false; // escaped the grid -> caller adds sky (this ray's env) once
+        result = EvalEnvSH(dir); // escaped -> sky (area light, averaged like any other sample)
     }
-    return hitSurface;
+    return result;
 }
 
 [numthreads(64, 1, 1)]
@@ -347,43 +355,19 @@ void CSGather(uint3 id : SV_DispatchThreadID)
         if (dot(normal, normal) < 1e-6) normal = float3(0, 1, 0);
     }
 
-    // SURFACE hits are AVERAGED (many dark walls -> a mean), but SKY and SUN are added ONCE at full
-    // strength on top - so a small opening still contributes the whole sky/sun instead of being
-    // diluted to ~1/N by the surrounding dark-surface rays. Both are ADDITIVE (not a >1 multiplier),
-    // so this is safe even in the surface bounce loop (it can't diverge). Reach fill only on the AIR
-    // probe (display field); the surface bounce stays physical (reachBoost 1).
-    float3 surfaceSum = 0;
-    uint surfaceCount = 0u;
-    bool sawSky = false;
-    float3 skyColor = 0;
-
+    // BOUNCE radiance (surfaces, ambient floor, and the sky-as-area-light on escape) is a plain
+    // AVERAGE: unbiased at any sample count, so samplesPerFrame only affects noise, never brightness.
+    // Reach fill only on the AIR probe (display field); the surface bounce stays physical (1).
+    float3 incoming = 0;
     uint sampleCount = max(_SamplesPerFrame, 1u);
     [loop]
     for (uint r = 0u; r < sampleCount; r++) {
         float2 noise = GiSampleNoise(c, _FrameCount, r);
         float3 dir = solid ? CosineSampleHemisphere(normal, noise) // surface: front hemisphere
                            : GetRandomDirectionFromNoise2(noise);  // air: omnidirectional probe
-        float3 rad;
-        if (GatherRaySurface(cell, dir, solid ? 1.0 : _ReachBoost, rad)) {
-            surfaceSum += rad;
-            surfaceCount++;
-        } else {
-            sawSky = true;          // escaped -> this voxel can see the sky
-            skyColor = EvalEnvSH(dir); // add-once: the environment along one open direction
-        }
+        incoming += GatherRayRadiance(cell, dir, solid ? 1.0 : _ReachBoost);
     }
-    float3 surfaceMean = (surfaceCount > 0u) ? surfaceSum / (float)surfaceCount : float3(0, 0, 0);
-
-    // SUN via an explicit visibility ray toward the light (a random gather ray can't reliably hit the
-    // sun disc). Unoccluded -> add the full sun color once. NOTE: for a surface that also faces the
-    // sun this double-counts the direct pass (GetDirectLight) - it only fires where the sun is visible
-    // (near an opening), so it's a bright fill there, not deep-cave reach.
-    int3 sunHit;
-    bool sawSun = !MarchOccupancy(cell, _DirectLightDir, BGI_MAX_RAY_DIST, sunHit);
-
-    float3 incoming = surfaceMean
-                    + (sawSky ? skyColor : float3(0, 0, 0))
-                    + (sawSun ? _DirectLightColor.rgb : float3(0, 0, 0));
+    incoming *= rcp((float)sampleCount); // this frame's estimate = mean of sampleCount samples
 
     // Temporal PROGRESSIVE average: fold this frame's sampleCount-ray estimate into the running mean of
     // all rays gathered so far, weight = sampleCount/totalSamples (_EmaWeight from C#). The field
