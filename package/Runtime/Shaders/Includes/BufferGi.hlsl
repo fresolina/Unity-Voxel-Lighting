@@ -12,16 +12,23 @@
 // unconditionally but only calls SampleBufferGI under GI_VOXEL_BUFFER, so the other variants
 // (GI_OFF / GI_VOXEL_TEXTURE) must not carry these fragment-stage StructuredBuffers: WebGPU
 // validates every declared global against the bound pipeline layout and fails pipeline creation
-// for a variant that declares _Material / _Irradiance while they are unbound (null). D3D11/Vulkan
+// for a variant that declares _Occupancy / _Irradiance while they are unbound (null). D3D11/Vulkan
 // silently strip/tolerate them, which is why this only bites in a WebGPU (browser) build.
 #if defined(GI_VOXEL_BUFFER)
 
 #include "BufferGiField.hlsl"
 
-// Bound as globals by BufferGiUpdater. The buffers are concatenated over all fields (fine at offset
-// 0, coarse at offset BGI_COUNT); the *fine* field's bounds are the shared _BgiGrid* (above).
-StructuredBuffer<uint>  _Material;   // occupancy (rgb != 0 = solid) - rejects solid probes
+// Bound as globals by BufferGiUpdater. The buffers are concatenated over all fields (coarse at
+// offset 0, fine at offset BGI_COUNT); the *fine* field's bounds are the shared _BgiGrid* (above).
+// Occupancy is the 1-bit/voxel bitfield (8 KB total - trivially cache-resident for the 9 taps);
+// the material buffer is no longer bound to the lit shader at all.
+StructuredBuffer<uint>  _Occupancy;  // 1 bit/voxel solidity - rejects solid probes
 StructuredBuffer<uint2> _Irradiance; // accumulated incoming light (rgb) + sample count (w)
+
+bool BgiSolidBit(uint slot)
+{
+    return (_Occupancy[slot >> 5] >> (slot & 31u)) & 1u;
+}
 
 // Coarse field bounds (the big box for far-off GI).
 float3 _BgiCoarseOrigin;
@@ -73,7 +80,7 @@ float3 BgiSampleField(float3 worldPos, float3 normal, float3 origin, float3 voxe
             int3 vi = nCell * absAxis + (cU + du) * uDir + (cV + dv) * vDir;
             if (!BgiInBounds(vi)) continue;
             uint idx = baseOffset + BgiIndex((uint3)vi);
-            if (BgiIsSolid(_Material[idx])) continue;
+            if (BgiSolidBit(idx)) continue;
 
             float w = wU[du + 1] * wV[dv + 1];
             float3 col; float n;
