@@ -1905,7 +1905,7 @@ GameObject:
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
+  m_StaticEditorFlags: 2147483647
   m_IsActive: 1
 --- !u!4 &659102738
 Transform:
@@ -2309,7 +2309,7 @@ Light:
   serializedVersion: 12
   m_Type: 1
   m_Color: {r: 1, g: 0.99825907, b: 0.9213836, a: 1}
-  m_Intensity: 10
+  m_Intensity: 4
   m_Range: 10
   m_SpotAngle: 30
   m_InnerSpotAngle: 21.80208
@@ -3651,7 +3651,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiDebug
   _shader: {fileID: 4800000, guid: 2812d0b83a01c5f4a9ff6e4ecd95957c, type: 3}
-  mode: 3
+  mode: 0
   field: 0
   showWireframe: 1
   stride: 1
@@ -4179,7 +4179,7 @@ MonoBehaviour:
   _samplesPerFrame: 1
   _confidenceCurve: 3
   _continuousGi: 0
-  _giFireflyClamp: 8
+  _giFireflyClamp: 10
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
   _reachBoost: 1
   _exposureControl:
@@ -4237,8 +4237,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.SdfAmbientOcclusion
   _config:
     <Step>k__BackingField: 0.08
-    <Intensity>k__BackingField: 1.7
-    <SampleQuality>k__BackingField: 0
+    <Intensity>k__BackingField: 2
+    <SampleQuality>k__BackingField: 1
 --- !u!114 &1437948853
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4636,7 +4636,7 @@ GameObject:
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
+  m_StaticEditorFlags: 2147483647
   m_IsActive: 1
 --- !u!4 &1588789277
 Transform:
