@@ -2371,13 +2371,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 784264324}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.7071068, y: 0, z: 0, w: 0.7071068}
+  m_LocalRotation: {x: 0.6427876, y: 0, z: 0, w: 0.7660445}
   m_LocalPosition: {x: 0, y: 3.8, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 90, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 80, y: 0, z: 0}
 --- !u!114 &784264327
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3651,15 +3651,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiDebug
   _shader: {fileID: 4800000, guid: 2812d0b83a01c5f4a9ff6e4ecd95957c, type: 3}
-  mode: 0
-  field: 0
+  mode: 4
+  field: 1
   showWireframe: 1
   stride: 1
-  cubeFill: 0.495
+  cubeFill: 0.124
   showNormalLines: 1
   normalLineLength: 0.92
   intensity: 1
-  minLuminance: 0.01
+  minLuminance: 0.0001
 --- !u!1 &1337109695
 GameObject:
   m_ObjectHideFlags: 0
@@ -4121,9 +4121,9 @@ GameObject:
   - component: {fileID: 1437948843}
   - component: {fileID: 1437948845}
   - component: {fileID: 1437948853}
+  - component: {fileID: 1437948854}
+  - component: {fileID: 1437948855}
   - component: {fileID: 1437948850}
-  - component: {fileID: 1437948851}
-  - component: {fileID: 1437948852}
   m_Layer: 0
   m_Name: Lighting manager
   m_TagString: Untagged
@@ -4159,7 +4159,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.LightingManager
   _volume: {fileID: 1127919670}
-  _autoSwitchToClosestVolume: 1
+  _autoSwitchToClosestVolume: 0
   _updateInEditor: 1
 --- !u!114 &1437948845
 MonoBehaviour:
@@ -4184,6 +4184,8 @@ MonoBehaviour:
   _reachBoost: 1
   _bakedNormals: 1
   _aoStrength: 0
+  _fineShadow: 0
+  _coarseShadow: 1
   _exposureControl:
     _tonemapInShader: 1
     _exposure: 0
@@ -4208,39 +4210,6 @@ MonoBehaviour:
   _additionalLights:
   - {fileID: 1697248655}
   - {fileID: 333063937}
---- !u!114 &1437948851
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1437948840}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 4a9b32c8dae15f60b7c8d9e0f1020314, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.SdfShadow
-  _config:
-    <MaxSteps>k__BackingField: 64
-    <Softness>k__BackingField: 20
-    <StartOffset>k__BackingField: 0.8
-    <MinStep>k__BackingField: 0.4
---- !u!114 &1437948852
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1437948840}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5bac43d9ebf2607108d9e0f102031425, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.SdfAmbientOcclusion
-  _config:
-    <Step>k__BackingField: 0.08
-    <Intensity>k__BackingField: 2
-    <SampleQuality>k__BackingField: 1
 --- !u!114 &1437948853
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4271,6 +4240,39 @@ MonoBehaviour:
   _lpvDecay: 0.97
   _raymarchMaxSteps: 64
   _raymarchSoftness: 0.5
+--- !u!114 &1437948854
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1437948840}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4a9b32c8dae15f60b7c8d9e0f1020314, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.SdfShadow
+  _config:
+    <MaxSteps>k__BackingField: 64
+    <Softness>k__BackingField: 13
+    <StartOffset>k__BackingField: 0.5
+    <MinStep>k__BackingField: 0.1
+--- !u!114 &1437948855
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1437948840}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5bac43d9ebf2607108d9e0f102031425, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.SdfAmbientOcclusion
+  _config:
+    <Step>k__BackingField: 0.08
+    <Intensity>k__BackingField: 1.95
+    <SampleQuality>k__BackingField: 0
 --- !u!1 &1451824435
 GameObject:
   m_ObjectHideFlags: 0

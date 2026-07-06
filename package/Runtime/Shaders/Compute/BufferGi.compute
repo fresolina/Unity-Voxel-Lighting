@@ -203,8 +203,10 @@ float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
     return distanceAtten * rangeFade * rangeFade;
 }
 
-// Direct lighting at a surface voxel, with DDA shadow rays and an N.L cosine term.
-float3 GetDirectLight(int3 cell, float3 normal)
+// Direct lighting at a surface voxel, with DDA shadow rays and an N.L cosine term. `sunVis` returns
+// the main directional light's raw visibility (1 lit, 0 shadowed) so the fragment can read a cheap
+// baked voxel sun-shadow straight from the radiance field's spare w channel (see BgiTrySunShadow).
+float3 GetDirectLight(int3 cell, float3 normal, out float sunVis)
 {
     float3 voxelCenter = BgiVoxelCenter((uint3)cell);
     int3 hit;
@@ -219,13 +221,17 @@ float3 GetDirectLight(int3 cell, float3 normal)
     if (!BgiInBounds(shadowStart) || BgiSolidBit(BgiSlot((uint3)shadowStart)))
         shadowStart = cell;
 
-    // Sun
+    // Sun. March the visibility toward the sun UNCONDITIONALLY (not only when this face points at the
+    // sun): the baked shadow read interpolates this per-voxel scalar across the surface, so it needs a
+    // real value on faces that don't themselves face the sun (as interpolation neighbours, and for
+    // normal-mapped pixels whose shading normal faces the sun while the geometric voxel doesn't). A
+    // face pointing away self-occludes - its own geometry blocks the ray - so it marches to ~0, the
+    // physically correct "in shadow from the sun" (rather than a defaulted 1 = lit).
     float3 total = 0;
+    sunVis = MarchOccupancy(shadowStart, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0 : 1.0;
     float ndlSun = saturate(dot(normal, _DirectLightDir));
-    if (ndlSun > 0.0) {
-        float vis = MarchOccupancy(shadowStart, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0 : 1.0;
-        total += _DirectLightColor.rgb * (ndlSun * vis);
-    }
+    if (ndlSun > 0.0)
+        total += _DirectLightColor.rgb * (ndlSun * sunVis);
 
     // Point lights
     uint pc = min(_PointLightCount, (uint)MAX_POINT_LIGHTS);
@@ -358,9 +364,12 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     // diverges to Inf/NaN ("black plague"). Still cheap insurance for concave corners even though the
     // front-hemisphere gather removed the dominant self-term. Emission is unaffected (added separately).
     float3 safeAlbedo = min(albedo, 0.95);
-    float3 direct = GetDirectLight(cell, normal);
+    float sunVis;
+    float3 direct = GetDirectLight(cell, normal, sunVis);
     float3 outgoing = SanitizeColor(emissive + safeAlbedo * (direct + bounce));
-    _Radiance[_FieldOffset + i] = BgiPackRgb(outgoing, 1.0);
+    // Stash the sun visibility in the radiance's spare w half - the fragment reads it as a cheap,
+    // pre-marched voxel sun-shadow (interpolated across the surface face), no per-pixel ray needed.
+    _Radiance[_FieldOffset + i] = BgiPackRgb(outgoing, sunVis);
 }
 
 // ----------------------------------------------------------

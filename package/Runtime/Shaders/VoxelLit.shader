@@ -135,6 +135,9 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 half3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
                 half3 albedo = _BaseColor.rgb * texAlbedo;
 
+                // Main light: its shadow source is resolved inside GetShadow (VoxelDirectLighting) -
+                // under the buffer GI, the per-field baked voxel sun-shadow is one of the selectable
+                // sources there, so no shadow multiply is applied here.
                 half3 lit = GetMainDirectLighting(light, IN.positionWS, N, albedo);
                 lit += GetPointLightDirect(IN.positionWS, N, albedo);
                 lit += GetSpotLightDirect(IN.positionWS, N, albedo);

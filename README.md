@@ -38,6 +38,7 @@ Global illumination (GI) from static and dynamic objects, 2 modes.
 
 * Runtime GI in this package depends on compute shaders and 3D textures.
 * Web builds are expected to run with the WebGPU graphics backend. The sample web build script explicitly requests WebGPU for BuildTarget.WebGL.
+* Voxelizing in runtime requires static batching to be disabled.
 
 ## Web preview builds
 

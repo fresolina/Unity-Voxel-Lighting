@@ -25,6 +25,7 @@
 StructuredBuffer<uint>  _Occupancy;  // 1 bit/voxel solidity - rejects solid probes
 StructuredBuffer<uint2> _Irradiance; // accumulated incoming light (rgb) + sample count (w)
 StructuredBuffer<uint>  _Surface;    // per-voxel surface word - static openness/AO in bits 16-23
+StructuredBuffer<uint2> _Radiance;   // per-solid-voxel outgoing radiance (rgb) + baked sun visibility (w)
 
 bool BgiSolidBit(uint slot)
 {
@@ -40,16 +41,23 @@ float _BgiIntensity;
 // Strength of the baked static AO (0 = off). Darkens the GI in concave/contact regions using the
 // surface voxel's precomputed openness - restores the contact shadowing the omni gather reads weakly.
 float _BgiAoStrength;
+// Voxel sun-shadow mode PER FIELD: 0 = off, 1 = baked (interpolated pre-marched visibility from
+// _Radiance.w), 2 = realtime (per-pixel occupancy DDA toward the sun, like the SDF shadow). The
+// fragment picks fine vs coarse by whether the shading point is inside the fine volume.
+int _BgiShadowModeFine;
+int _BgiShadowModeCoarse;
 
-// Baked static AO at a surface point: bilinearly interpolate the baked openness across the surface
-// FACE PLANE (the two axes perpendicular to the dominant normal), then fade by _BgiAoStrength. Reading
-// only one voxel and fading to 0 at its edge leaves gaps -> per-voxel discs; blending the 4 in-plane
-// neighbours interpolates continuously instead. Non-solid / out-of-bounds neighbours count as fully
-// open (1), so the AO fades to nothing at surface edges. 1 (no AO) when off.
-float BgiSurfaceAO(float3 worldPos, float3 normal, float3 origin, float3 voxelSize, uint baseOffset)
+// Bilinearly interpolate a per-SOLID-voxel scalar across the surface FACE PLANE (the two axes
+// perpendicular to the dominant normal). Reading only one voxel and fading to 0 at its edge leaves
+// gaps -> per-voxel discs; blending the 4 in-plane neighbours interpolates continuously instead.
+// `source` picks the payload: 0 = baked openness/AO (_Surface bits 16-23), 1 = baked sun visibility
+// (_Radiance w). Non-solid / out-of-bounds taps are SKIPPED and the weights RENORMALISED over the
+// solid taps - so a face edge takes the value of the surface voxels actually present instead of being
+// pulled toward a fixed default (which brightened shadowed edges / darkened lit ones as the 2x2 block
+// ran off the surface). `outside` is only the fallback when no tap is solid. Shared by AO + sun-shadow.
+float BgiSampleFaceScalar(float3 worldPos, float3 normal, float3 origin, float3 voxelSize,
+                          uint baseOffset, uint source, float outside)
 {
-    if (_BgiAoStrength <= 0.0) return 1.0;
-
     // Face plane: the dominant normal axis is fixed; u,v are the two in-plane axes we interpolate over.
     float3 aN = abs(normal);
     int3 uDir, vDir;
@@ -58,8 +66,13 @@ float BgiSurfaceAO(float3 worldPos, float3 normal, float3 origin, float3 voxelSi
     else                               { uDir = int3(1, 0, 0); vDir = int3(0, 1, 0); }
     int3 absAxis = int3(1, 1, 1) - abs(uDir) - abs(vDir); // the remaining (normal) axis
 
-    // The solid surface layer sits half a voxel behind the pixel along the normal.
-    float3 g = BgiWorldToGridAt(worldPos - normal * (0.5 * voxelSize), origin, voxelSize);
+    // The solid surface voxel is simply the cell CONTAINING the shading point: voxelization marks the
+    // voxel a mesh point falls in as solid, and the surface point sits somewhere inside it (this is the
+    // same layer the GI read treats as solid, stepping +sgn off it for the air in front). Do NOT push
+    // back along the normal - a fixed half-voxel push only lands in the solid cell when the surface
+    // happens to sit in the voxel's front half, which is grid-size dependent (worked for the big coarse
+    // voxels, missed for the small fine ones - reading the air voxel behind and so losing the shadow).
+    float3 g = BgiWorldToGridAt(worldPos, origin, voxelSize);
     int nN = (int)floor(dot(g, (float3)absAxis));         // solid cell index along the normal axis
 
     // Continuous in-plane position; -0.5 puts voxel centres on integers so the fraction is the
@@ -67,20 +80,35 @@ float BgiSurfaceAO(float3 worldPos, float3 normal, float3 origin, float3 voxelSi
     float u = dot(g, (float3)uDir) - 0.5; int u0 = (int)floor(u); float fu = u - u0;
     float v = dot(g, (float3)vDir) - 0.5; int v0 = (int)floor(v); float fv = v - v0;
 
-    float openness = 0.0;
+    float acc = 0.0;
+    float wsum = 0.0;
     [unroll]
     for (int du = 0; du <= 1; du++) {
         [unroll]
         for (int dv = 0; dv <= 1; dv++) {
             int3 c = nN * absAxis + (u0 + du) * uDir + (v0 + dv) * vDir;
-            float o = 1.0; // open by default: non-solid / out-of-bounds neighbours add no AO
-            if (BgiInBounds(c)) {
-                uint slot = baseOffset + BgiIndex((uint3)c);
-                if (BgiSolidBit(slot)) o = BgiSurfaceOpenness(_Surface[slot]);
+            if (!BgiInBounds(c)) continue;
+            uint slot = baseOffset + BgiIndex((uint3)c);
+            if (!BgiSolidBit(slot)) continue; // skip air taps: don't let "off-surface" pull the result
+            float val;
+            if (source == 0u) {
+                val = BgiSurfaceOpenness(_Surface[slot]);
+            } else {
+                float3 rgb; float w; BgiUnpackRgb(_Radiance[slot], rgb, w); val = w;
             }
-            openness += o * (du == 0 ? 1.0 - fu : fu) * (dv == 0 ? 1.0 - fv : fv);
+            float wgt = (du == 0 ? 1.0 - fu : fu) * (dv == 0 ? 1.0 - fv : fv);
+            acc += val * wgt;
+            wsum += wgt;
         }
     }
+    return (wsum > 1e-5) ? acc / wsum : outside; // fallback only when no tap was solid
+}
+
+// Baked static AO at a surface point: interpolated openness, faded by _BgiAoStrength. 1 (no AO) off.
+float BgiSurfaceAO(float3 worldPos, float3 normal, float3 origin, float3 voxelSize, uint baseOffset)
+{
+    if (_BgiAoStrength <= 0.0) return 1.0;
+    float openness = BgiSampleFaceScalar(worldPos, normal, origin, voxelSize, baseOffset, 0u, 1.0);
     return lerp(1.0, openness, _BgiAoStrength);
 }
 
@@ -159,6 +187,27 @@ float3 SampleBufferGI(float3 worldPos, float3 normal)
     // surface (a NaN/negative here renders black even over directly-lit pixels). (<1e8 catches Inf+NaN.)
     result = (result < 1e8) ? max(result, 0.0) : 0.0;
     return result * _BgiIntensity;
+}
+
+// Baked voxel sun-shadow SOURCE for the main directional light, selected PER FIELD (fine vs coarse).
+// Dispatched from GetShadow (VoxelDirectLighting) as an alternative shadow source, so it REPLACES the
+// SDF/bitmask/occlusion shadow rather than stacking with it. Returns false when the field's mode is
+// Off (the caller then falls back to its selected source); otherwise writes `shadow` (the solve's
+// pre-marched visibility from _Radiance.w, interpolated across the surface face) and returns true.
+bool BgiTrySunShadow(float3 worldPos, float3 normal, out half shadow)
+{
+    shadow = 1.0;
+    float3 fuv = (worldPos - _BgiGridOrigin) / max(_BgiGridSize, 1e-6);
+    bool insideFine = all(fuv >= 0.0) && all(fuv <= 1.0);
+    int mode = insideFine ? _BgiShadowModeFine : _BgiShadowModeCoarse;
+    if (mode == 0) return false; // Off -> let GetShadow use its selected SDF/bitmask/occ source
+
+    float3 origin    = insideFine ? _BgiGridOrigin : _BgiCoarseOrigin;
+    float3 voxelSize = insideFine ? _BgiVoxelSize   : _BgiCoarseVoxelSize;
+    uint   baseOff   = insideFine ? BGI_FINE_OFFSET : BGI_COARSE_OFFSET;
+
+    shadow = saturate(BgiSampleFaceScalar(worldPos, normal, origin, voxelSize, baseOff, 1u, 1.0));
+    return true;
 }
 
 #endif // GI_VOXEL_BUFFER

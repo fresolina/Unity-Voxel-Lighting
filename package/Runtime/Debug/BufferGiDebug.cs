@@ -11,13 +11,14 @@ namespace Lotec.Lighting {
     [ExecuteAlways]
     [AddComponentMenu("Lotec/Voxel Lighting/Debug/Buffer GI Debug")]
     public class BufferGiDebug : MonoBehaviour {
-        public enum Mode { Occupancy = 0, Irradiance = 1, Radiance = 2, Normals = 3 }
+        public enum Mode { Occupancy = 0, Irradiance = 1, Radiance = 2, Normals = 3, SunVisibility = 4 }
         public enum Field { Fine = 0, Coarse = 1 }
 
         [Tooltip("Shader 'Hidden/Lotec/BufferGiCubeDebug'.")]
         [SerializeField] Shader _shader;
-        [Tooltip("What to visualize: occupancy/albedo, irradiance, radiance, or the occupancy " +
-                 "normals (xyz->rgb; grey = ambiguous/zero normal on a thin slab or enclosed voxel).")]
+        [Tooltip("What to visualize: occupancy/albedo, irradiance, radiance, the occupancy normals " +
+                 "(xyz->rgb; grey = ambiguous/zero normal on a thin slab or enclosed voxel), or the " +
+                 "baked sun visibility (radiance.w: white = lit, black = sun-shadowed).")]
         public Mode mode = Mode.Occupancy;
         [Tooltip("Which field to visualize: the fine volume or the coarse (large) box.")]
         public Field field = Field.Fine;
