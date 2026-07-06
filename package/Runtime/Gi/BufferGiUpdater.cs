@@ -498,7 +498,7 @@ namespace Lotec.Lighting {
             // degenerate-normal triangle leaves unwritten (mesh mode) reads a deterministic value.
             _surfaceBuffer.SetData(_materialClear);
 
-            RenderTexture dummy = RenderTexture.GetTemporary(Grid, Grid, 0, RenderTextureFormat.R8);
+            RenderTexture dummy = RenderTexture.GetTemporary(Grid, Grid, 0, RenderTextureFormat.R8, RenderTextureReadWrite.Linear);
             CommandBuffer cmd = new CommandBuffer { name = "BufferGI Voxelize" };
             cmd.SetRenderTarget(dummy);
             // We output clip space directly from the vertex shader, so neutralize the view-projection.
