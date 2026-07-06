@@ -104,10 +104,19 @@ void BgiUnpackRgb(uint2 p, out float3 c, out float w) {
 
 // --- Per-voxel SURFACE word (32 bits/voxel), baked at voxelize/build time, read once per hit ---
 // bits  0-15 : octahedral surface normal, 8 bits/axis (~1-2 deg - plenty for a voxel GI normal)
-// bits 16-23 : reserved (openness / static AO on solids, air-distance on air - later phase)
+// bits 16-23 : SOLID -> openness / static AO;  AIR -> distance to the nearest solid (voxels, capped)
 // bits 24-31 : reserved (flags: thin/ambiguous, two-sided, emissive, boundary - later phase)
-// Split from occupancy (which is the hot 1-bit/voxel bitfield) so this cold 4 B word is touched
+// The two bit-16..23 meanings never collide - a voxel is either solid or air - so readers pick by the
+// occupancy bit. Split from occupancy (the hot 1-bit/voxel bitfield) so this cold 4 B word is touched
 // only per ray-hit / per voxel, never in the DDA loop.
+
+// City-block distance (voxels) from an AIR voxel to the nearest solid, saturating at this cap. Baked
+// by CSBuildAirDistance and used to skip gathering air that no surface ever reads (far-air gather
+// skip). Cap is small - readers only care about the "near vs far" boundary, not the exact far value.
+// The sole consumer is the gather's `> BGI_GATHER_MAX_AIR_DIST` (=4) cutoff, so this only needs to be
+// one past that (5) to classify the boundary voxels exactly; the wider 0-8 range only mattered for the
+// (deferred) DDA empty-space jump. Bump back up if that lands.
+static const uint BGI_MAX_AIR_DIST = 5u;
 float2 BgiOctWrap(float2 v) {
     return (1.0 - abs(v.yx)) * float2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
 }
@@ -139,6 +148,16 @@ uint BgiPackOpenness(float openness) {
 
 float BgiSurfaceOpenness(uint word) {
     return ((word >> 16) & 0xffu) * (1.0 / 255.0);
+}
+
+// Air-distance in bits 16-23 (AIR voxels): integer city-block distance to the nearest solid, capped
+// at BGI_MAX_AIR_DIST. Shares the bits with openness - valid only where the occupancy bit is 0.
+uint BgiPackAirDist(uint dist) {
+    return (min(dist, BGI_MAX_AIR_DIST) & 0xffu) << 16;
+}
+
+uint BgiSurfaceAirDist(uint word) {
+    return (word >> 16) & 0xffu;
 }
 
 #endif // LOTEC_BUFFER_GI_FIELD_INCLUDED

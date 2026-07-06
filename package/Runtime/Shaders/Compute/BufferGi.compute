@@ -18,6 +18,7 @@
 #pragma kernel CSAverageLuminance
 #pragma kernel CSBuildOccupancy
 #pragma kernel CSBuildSurface
+#pragma kernel CSBuildAirDistance
 
 #define MAX_POINT_LIGHTS 4
 #define MAX_SPOT_LIGHTS 4
@@ -93,6 +94,11 @@ float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 // the whole grid corner-to-corner. This depends only on the resolution (not voxel size/aspect), so it
 // is a compile-time constant rather than a uniform.
 #define BGI_MAX_RAY_STEPS (BGI_GRID * 3u)
+
+// Far-air gather skip cutoff (city-block voxels): air farther than this from any surface is never
+// read by the fragment or the blur, so CSGather skips its ray casts. Must be < BGI_MAX_AIR_DIST so the
+// distance stored for cutoff voxels is exact (near voxels resolve within this many relaxation passes).
+#define BGI_GATHER_MAX_AIR_DIST 4u
 
 // Procedural stochastic sample (replaces the blue-noise texture, keeps the system textureless):
 // per-voxel spatial decorrelation via a hash, animated over frames by the R2 low-discrepancy
@@ -388,7 +394,14 @@ void CSGather(uint3 id : SV_DispatchThreadID)
 
     uint3 c = BgiCoord(i);
     int3 cell = (int3)c;
-    bool solid = BgiSolidBit(_FieldOffset + i);
+    uint slot = _FieldOffset + i;
+    bool solid = BgiSolidBit(slot);
+
+    // FAR-AIR GATHER SKIP: an air voxel more than a few cells from any surface is never sampled - the
+    // fragment reads only the air layer ~1 voxel in front of surfaces, and CSBlur reaches one further.
+    // Its omnidirectional probe would be pure cost, so skip the ray casts entirely (its stale value is
+    // never read). Threshold covers the fragment's read reach + the blur's, with margin.
+    if (!solid && BgiSurfaceAirDist(_Surface[slot]) > BGI_GATHER_MAX_AIR_DIST) return;
 
     // For a solid voxel, gather rays into the front hemisphere around the surface normal (so they
     // leave the surface into the room and never read it back). Ambiguous normal -> up, matching inject.
@@ -624,7 +637,12 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
     if (i >= BGI_COUNT) return;
 
     uint slot = _FieldOffset + i;
-    if (!BgiSolidBit(slot)) return; // surface data only for solid voxels
+    if (!BgiSolidBit(slot)) {
+        // AIR voxel: seed the city-block air-distance (bits 16-23) at the cap. CSBuildAirDistance then
+        // relaxes it down to the true distance-to-nearest-solid over BGI_MAX_AIR_DIST passes.
+        _Surface[slot] = BgiPackAirDist(BGI_MAX_AIR_DIST);
+        return;
+    }
 
     int3 cell = (int3)BgiCoord(i);
     float3 n;
@@ -636,4 +654,38 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
     }
     float openness = BgiComputeOpenness(cell, n);
     _Surface[slot] = BgiPackSurfaceNormal(n) | BgiPackOpenness(openness); // normal (0-15) + AO (16-23)
+}
+
+// ----------------------------------------------------------
+// BUILD AIR DISTANCE (bake-time, dispatched BGI_MAX_AIR_DIST times per field after CSBuildSurface):
+// one relaxation pass of a 6-neighbour city-block distance transform over the AIR voxels. Each pass
+// pushes the distance-to-nearest-solid outward by one voxel: dist = min(self, 1 + min neighbour),
+// where a SOLID neighbour counts as 0. In-place is safe (min-relaxation never underestimates: a
+// neighbour's stored value is always >= its true distance, so 1 + it is >= this voxel's true
+// distance). Solid voxels are the distance-0 seeds and keep their openness word untouched. Feeds the
+// far-air gather skip in CSGather (air no surface ever reads is never gathered).
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSBuildAirDistance(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+
+    uint slot = _FieldOffset + i;
+    if (BgiSolidBit(slot)) return; // solid = distance-0 seed; its bits 16-23 hold openness, leave them
+
+    int3 cell = (int3)BgiCoord(i);
+    const int3 axes[6] = {
+        int3(1,0,0), int3(-1,0,0), int3(0,1,0), int3(0,-1,0), int3(0,0,1), int3(0,0,-1)
+    };
+    uint best = BgiSurfaceAirDist(_Surface[slot]); // starts at the cap, seeded by CSBuildSurface
+    [unroll]
+    for (int k = 0; k < 6; k++) {
+        int3 nb = cell + axes[k];
+        if (!BgiInBounds(nb)) continue; // out of grid: no info (don't seed a false wall)
+        uint nbSlot = BgiSlot((uint3)nb);
+        uint nd = BgiSolidBit(nbSlot) ? 0u : BgiSurfaceAirDist(_Surface[nbSlot]);
+        best = min(best, min(nd + 1u, BGI_MAX_AIR_DIST));
+    }
+    _Surface[slot] = (_Surface[slot] & ~0x00ff0000u) | BgiPackAirDist(best);
 }

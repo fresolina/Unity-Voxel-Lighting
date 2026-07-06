@@ -123,6 +123,10 @@ namespace Lotec.Lighting {
         int _averageLuminanceKernel = -1;
         int _buildOccupancyKernel = -1;
         int _buildSurfaceKernel = -1;
+        int _buildAirDistanceKernel = -1;
+        // Air-distance relaxation passes at bake (one voxel of city-block reach each). MUST match
+        // BGI_MAX_AIR_DIST in BufferGiField.hlsl so the whole capped field converges.
+        const int AirDistancePasses = 5;
         bool _resetFineField;
         bool _hasLoggedMissingReferences;
         // Progressive accumulation in SAMPLES (rays): _collectedSamples = total rays gathered since the last
@@ -433,6 +437,7 @@ namespace Lotec.Lighting {
             _averageLuminanceKernel = _computeShader.FindKernel("CSAverageLuminance");
             _buildOccupancyKernel = _computeShader.FindKernel("CSBuildOccupancy");
             _buildSurfaceKernel = _computeShader.FindKernel("CSBuildSurface");
+            _buildAirDistanceKernel = _computeShader.FindKernel("CSBuildAirDistance");
 
             // uint material, uint2 radiance/irradiance. Sized for all fields (concatenated slices).
             _materialBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));
@@ -540,10 +545,12 @@ namespace Lotec.Lighting {
 
             // Bake-time derive passes (both fields; un-voxelized coarse slice packs to zeros):
             // 1) occupancy bitfield from _Material, 2) surface word - in gradient mode CSBuildSurface
-            // fills the normal from the now-complete occupancy (mesh mode already wrote _Surface).
+            // fills the normal from the now-complete occupancy (mesh mode already wrote _Surface); it
+            // also seeds the air-distance field, 3) relax the air-distance transform to convergence.
             _computeShader.SetInt(s_computeGradient, meshNormals ? 0 : 1);
             for (int f = 0; f < FieldCount; f++) BuildOccupancy(f * VoxelCount);
             for (int f = 0; f < FieldCount; f++) BuildSurface(f * VoxelCount);
+            for (int f = 0; f < FieldCount; f++) BuildAirDistance(f * VoxelCount);
             _bakedNormalsBaked = _bakedNormals;
             _materialBaked = true;
         }
@@ -566,6 +573,18 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_buildSurfaceKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_buildSurfaceKernel, s_surface, _surfaceBuffer);
             _computeShader.Dispatch(_buildSurfaceKernel, Groups, 1, 1);
+        }
+
+        // Relax one field's AIR-voxel city-block distance-to-nearest-solid (CSBuildSurface seeded it at
+        // the cap). Each pass extends the front by one voxel, so AirDistancePasses passes converge the
+        // whole capped field. Feeds the far-air gather skip. Solid voxels are untouched (distance-0 seeds).
+        void BuildAirDistance(int fieldOffset) {
+            if (_buildAirDistanceKernel < 0) return;
+            _computeShader.SetInt(s_fieldOffset, fieldOffset);
+            _computeShader.SetBuffer(_buildAirDistanceKernel, s_occupancy, _occupancyBuffer);
+            _computeShader.SetBuffer(_buildAirDistanceKernel, s_surface, _surfaceBuffer);
+            for (int pass = 0; pass < AirDistancePasses; pass++)
+                _computeShader.Dispatch(_buildAirDistanceKernel, Groups, 1, 1);
         }
 
         // Rasterize a volume's geometry into one field's slice. The voxelize shader reads the grid +
