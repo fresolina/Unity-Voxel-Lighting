@@ -130,4 +130,15 @@ float3 BgiSurfaceNormal(uint word) {
     return normalize(n);
 }
 
+// Static openness / ambient occlusion in bits 16-23 (solid voxels): 1 = open (flat/convex surface),
+// < 1 = the front hemisphere is partly blocked by nearby geometry (concave corner, contact gap).
+// Baked by CSBuildSurface; keep it OUT of the normal's low 16 bits when composing the word.
+uint BgiPackOpenness(float openness) {
+    return (uint)(saturate(openness) * 255.0 + 0.5) << 16;
+}
+
+float BgiSurfaceOpenness(uint word) {
+    return ((word >> 16) & 0xffu) * (1.0 / 255.0);
+}
+
 #endif // LOTEC_BUFFER_GI_FIELD_INCLUDED

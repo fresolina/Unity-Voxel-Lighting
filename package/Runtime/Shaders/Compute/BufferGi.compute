@@ -573,24 +573,58 @@ void CSBuildOccupancy(uint3 id : SV_DispatchThreadID)
 }
 
 // ----------------------------------------------------------
-// BUILD SURFACE (bake-time, after CSBuildOccupancy so the gradient reads a complete _Occupancy):
-// per SOLID voxel, write the per-voxel surface word. GRADIENT mode (_ComputeGradientNormals=1, walls
-// thickened) computes the occupancy-gradient normal here, ONCE, instead of every solve frame. MESH
-// mode (=0) is a no-op: the voxelizer already wrote _Surface with exact mesh normals. Future openness/
-// air-distance/flags derivations belong here too. Runs per voxel (not per word) for the neighbour math.
+// Static front-hemisphere ambient occlusion for a solid voxel with surface normal `n`: the
+// COSINE-WEIGHTED fraction of the front hemisphere within a small radius that is blocked by other
+// solid voxels. A flat/convex surface's front hemisphere is all air -> openness 1 (no AO); a concave
+// corner or near-contact gap (e.g. under a hovering object) has front-solid neighbours -> openness < 1.
+// Cosine weighting (contribution = dot(dir_hat, n)) plus the coplanar cutoff makes a flat wall robust
+// to a slightly-tilted gradient normal: its own coplanar neighbours weigh ~0 instead of counting as
+// occluders, so a voxelized diagonal/curved wall no longer self-shadows into a grid of false AO.
+#define BGI_AO_RADIUS 2
+#define BGI_AO_MIN_COS 0.15 // ignore near-coplanar dirs (a flat wall must not occlude itself)
+float BgiComputeOpenness(int3 cell, float3 n)
+{
+    float total = 0.0, blocked = 0.0;
+    [loop]
+    for (int z = -BGI_AO_RADIUS; z <= BGI_AO_RADIUS; z++)
+    for (int y = -BGI_AO_RADIUS; y <= BGI_AO_RADIUS; y++)
+    for (int x = -BGI_AO_RADIUS; x <= BGI_AO_RADIUS; x++) {
+        int3 d = int3(x, y, z);
+        if (all(d == 0)) continue;
+        float3 dir = (float3)d;
+        float w = dot(dir, n) * rsqrt(dot(dir, dir)); // cosine of dir to the surface normal
+        if (w <= BGI_AO_MIN_COS) continue;            // back hemisphere + near-coplanar self-neighbours
+        total += w;
+        int3 nb = cell + d;
+        if (BgiInBounds(nb) && BgiSolidBit(BgiSlot((uint3)nb))) blocked += w;
+    }
+    return (total > 0.0) ? 1.0 - blocked / total : 1.0;
+}
+
+// ----------------------------------------------------------
+// BUILD SURFACE (bake-time, after CSBuildOccupancy so it reads a complete _Occupancy): per SOLID
+// voxel, write the surface word = normal (bits 0-15) + static openness/AO (bits 16-23). GRADIENT mode
+// (_ComputeGradientNormals=1, walls thickened) computes the occupancy-gradient normal here, ONCE,
+// instead of every solve frame; MESH mode (=0) keeps the exact mesh normal the voxelizer already
+// wrote. Openness is computed in BOTH modes. Runs per voxel for the neighbour math.
 // ----------------------------------------------------------
 [numthreads(64, 1, 1)]
 void CSBuildSurface(uint3 id : SV_DispatchThreadID)
 {
     uint i = id.x;
     if (i >= BGI_COUNT) return;
-    if (_ComputeGradientNormals == 0u) return; // mesh mode: voxelizer already filled _Surface
 
     uint slot = _FieldOffset + i;
-    if (!BgiSolidBit(slot)) return; // normals only for solid voxels
+    if (!BgiSolidBit(slot)) return; // surface data only for solid voxels
 
     int3 cell = (int3)BgiCoord(i);
-    float3 n = OccupancyNormal(cell);            // reads the completed _Occupancy bitfield
-    if (dot(n, n) < 1e-6) n = float3(0, 1, 0);   // ambiguous -> up (matches the old inject fallback)
-    _Surface[slot] = BgiPackSurfaceNormal(n);
+    float3 n;
+    if (_ComputeGradientNormals != 0u) {
+        n = OccupancyNormal(cell);                   // reads the completed _Occupancy bitfield
+        if (dot(n, n) < 1e-6) n = float3(0, 1, 0);   // ambiguous -> up (matches the old inject fallback)
+    } else {
+        n = BgiSurfaceNormal(_Surface[slot]);        // mesh mode: normal already written by the voxelizer
+    }
+    float openness = BgiComputeOpenness(cell, n);
+    _Surface[slot] = BgiPackSurfaceNormal(n) | BgiPackOpenness(openness); // normal (0-15) + AO (16-23)
 }

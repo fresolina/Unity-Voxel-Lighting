@@ -69,6 +69,11 @@ namespace Lotec.Lighting {
                  "thin walls keep correct normals. Off: thicken walls 2 voxels + bake the occupancy-" +
                  "gradient normal. Changing it re-bakes.")]
         [SerializeField] bool _bakedNormals;
+        [Tooltip("Strength of the baked static ambient occlusion (0 = off). Darkens the GI in concave " +
+                 "corners and near-contact gaps (e.g. under a hovering object) using each surface " +
+                 "voxel's precomputed openness - restores contact shadowing the omnidirectional gather " +
+                 "reads only weakly. Requires a re-bake to recompute openness after a geometry change.")]
+        [Range(0f, 1f)][SerializeField] float _aoStrength;
 
         [Header("Lighting")]
         [Tooltip("Display transform (exposure + tonemap), with optional auto-exposure. Published as " +
@@ -203,6 +208,7 @@ namespace Lotec.Lighting {
         };
         static readonly int s_ambientFloor = Shader.PropertyToID("_AmbientFloor");
         static readonly int s_intensity = Shader.PropertyToID("_BgiIntensity");
+        static readonly int s_aoStrength = Shader.PropertyToID("_BgiAoStrength");
         static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
         static readonly int s_cameraPosition = Shader.PropertyToID("_CameraPosition");
         static readonly int s_cameraForward = Shader.PropertyToID("_CameraForward");
@@ -365,6 +371,8 @@ namespace Lotec.Lighting {
         void SetGlobals() {
             // Fragment solidity = the 8 KB bitfield; _Material is no longer bound to the lit shader.
             Shader.SetGlobalBuffer(s_occupancy, _occupancyBuffer);
+            // Surface word for the fragment's static AO (openness in bits 16-23).
+            Shader.SetGlobalBuffer(s_surface, _surfaceBuffer);
             // Fragment reads the occupancy-gated blurred field (always on).
             Shader.SetGlobalBuffer(s_irradiance, _irradianceBlurBuffer);
             // Fine field bounds + coarse field bounds for the fragment read (hard fine/coarse switch).
@@ -377,6 +385,7 @@ namespace Lotec.Lighting {
             // Unity control for indirect strength, used instead of a custom field.
             Light sun = RenderSettings.sun;
             Shader.SetGlobalFloat(s_intensity, sun != null ? sun.bounceIntensity : 1f);
+            Shader.SetGlobalFloat(s_aoStrength, _aoStrength);
             // The display transform (_Exposure + TONEMAP_OFF) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value (e.g. left by GiFieldUpdater) can't darken it.
         }
@@ -528,8 +537,8 @@ namespace Lotec.Lighting {
             _computeShader.Dispatch(_buildOccupancyKernel, Mathf.CeilToInt(VoxelCount / 32f / 64f), 1, 1);
         }
 
-        // Fill one field's _Surface word (per voxel). Gradient mode only (mesh mode already wrote it);
-        // future openness/air-distance/flags derivations belong here.
+        // Fill one field's _Surface word (per voxel): the gradient normal (gradient mode; mesh mode
+        // keeps the voxelizer's) + the static openness/AO (both modes). Future air-distance/flags too.
         void BuildSurface(int fieldOffset) {
             if (_buildSurfaceKernel < 0) return;
             _computeShader.SetInt(s_fieldOffset, fieldOffset);
