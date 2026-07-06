@@ -1,7 +1,10 @@
 Shader "Hidden/Lotec/BufferGiVoxelize" {
     // GPU triangle voxelizer for the buffer GI. Rasterizes scene meshes from three orthographic
     // directions (X/Y/Z); each generated fragment writes its voxel's albedo+emission straight into
-    // the _Material StructuredBuffer via a fragment-stage UAV. Three passes union their coverage so
+    // the _Material StructuredBuffer via a fragment-stage UAV. Albedo = base color x base-map sample
+    // (the grid-sized raster picks a ~voxel-footprint mip, i.e. the local average texture color);
+    // mostly-transparent / alpha-clipped fragments leave their voxel EMPTY (windows don't occupy or
+    // block GI rays). Three passes union their coverage so
     // triangles edge-on to one axis are still captured by another - no geometry shader (keeps it
     // Quest/WebGPU compatible), no distance rounding (unlike the SDF / nearest-triangle bakes).
     // Each fragment also thickens the solid one voxel INWARD (opposite the mesh normal) so walls are
@@ -32,18 +35,23 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
             RWStructuredBuffer<uint> _SurfaceWrite : register(u2); // per-voxel surface word (normal in low bits)
             #endif
 
-            float4 _VoxAlbedo;   // rgb base color of the submesh being drawn
-            float  _VoxEmission8; // 8-bit log-encoded emission intensity
-            int    _VoxAxis;      // projection axis: 0 = down X, 1 = down Y, 2 = down Z
+            TEXTURE2D(_VoxBaseMap); SAMPLER(sampler_VoxBaseMap); // material base map (white if none)
 
-            struct Attrib { float3 positionOS : POSITION; float3 normalOS : NORMAL; };
-            struct Vary { float4 positionCS : SV_POSITION; float3 ws : TEXCOORD0; float3 wn : TEXCOORD1; };
+            float4 _VoxAlbedo;      // rgba base color of the submesh being drawn (a = transparency)
+            float4 _VoxBaseMap_ST;  // base-map tiling (xy) + offset (zw)
+            float  _VoxCutoff;      // 0 = opaque (alpha never clips); else combined alpha below it = EMPTY voxel
+            float  _VoxEmission8;   // 8-bit log-encoded emission intensity
+            int    _VoxAxis;        // projection axis: 0 = down X, 1 = down Y, 2 = down Z
+
+            struct Attrib { float3 positionOS : POSITION; float3 normalOS : NORMAL; float2 uv : TEXCOORD0; };
+            struct Vary { float4 positionCS : SV_POSITION; float3 ws : TEXCOORD0; float3 wn : TEXCOORD1; float2 uv : TEXCOORD2; };
 
             Vary vert(Attrib i) {
                 Vary o;
                 float3 ws = TransformObjectToWorld(i.positionOS);
                 o.ws = ws;
                 o.wn = TransformObjectToWorldNormal(i.normalOS); // for inward thickening in frag
+                o.uv = i.uv * _VoxBaseMap_ST.xy + _VoxBaseMap_ST.zw;
                 // Project to NDC for the chosen axis (the third axis is recovered per-fragment from
                 // the interpolated world position, so exact projection alignment is not required).
                 float3 g = (ws - _BgiGridOrigin) / max(_BgiGridSize, 1e-6); // volume-normalized [0,1]
@@ -53,9 +61,18 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
             }
 
             float4 frag(Vary i) : SV_Target {
+                // Base-map sample OUTSIDE the branch (keeps the uv derivatives well-defined). The
+                // grid-sized raster target makes those derivatives span the texels one voxel covers,
+                // so the mip chain hands back roughly the voxel's AVERAGE texture color for free.
+                float4 tex = SAMPLE_TEXTURE2D(_VoxBaseMap, sampler_VoxBaseMap, i.uv);
                 int3 c = (int3)floor(BgiWorldToGrid(i.ws));
                 if (all(c >= 0) && all(c < (int)BGI_GRID)) {
-                    float3 albedo = max(_VoxAlbedo.rgb, 1.0 / 255.0); // floor so black surfaces stay occupied
+                    // Transparency: a mostly-transparent (or alpha-clipped) fragment leaves its voxel
+                    // EMPTY - windows/cutouts neither occupy nor block GI rays. _VoxCutoff is 0 for
+                    // opaque materials so an opaque base map's (often repurposed) alpha can't punch holes.
+                    if (_VoxAlbedo.a * tex.a < _VoxCutoff) return 0;
+                    // Floor AFTER the texture multiply so black texels stay occupied (rgb 0 = empty).
+                    float3 albedo = max(_VoxAlbedo.rgb * tex.rgb, 1.0 / 255.0);
                     uint packed = BgiPackMaterial(albedo, _VoxEmission8);
                     _MaterialWrite[BgiSlot((uint3)c)] = packed;
 
