@@ -28,6 +28,10 @@ namespace Lotec.Lighting {
         public const int CoarseField = 0;
         public const int FineField = 1;
 
+        // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGi.hlsl). Off = none;
+        // Baked = read the solve's pre-marched sun visibility (radiance.w), interpolated across the face.
+        public enum ShadowMode { Off = 0, Baked = 1 }
+
         public static BufferGiUpdater Instance { get; private set; }
 
         [SerializeField] ComputeShader _computeShader;
@@ -74,6 +78,14 @@ namespace Lotec.Lighting {
                  "voxel's precomputed openness - restores contact shadowing the omnidirectional gather " +
                  "reads only weakly. Requires a re-bake to recompute openness after a geometry change.")]
         [Range(0f, 1f)][SerializeField] float _aoStrength;
+        [Tooltip("Voxel sun-shadow for the FINE volume (the active, detailed field).\n Off: none.\n " +
+                 "Baked: the solve's pre-marched sun visibility, interpolated across the surface - soft " +
+                 "and cheap (no per-pixel ray). It replaces the material's shadow source where active.")]
+        [SerializeField] ShadowMode _fineShadow = ShadowMode.Off;
+        [Tooltip("Voxel sun-shadow for the COARSE volume (the big far field the SDF shadow can't " +
+                 "reach).\n Off: none.\n Baked: the solve's pre-marched sun visibility, interpolated - " +
+                 "the cheap way to get far shadows. It replaces the material's shadow source where active.")]
+        [SerializeField] ShadowMode _coarseShadow = ShadowMode.Off;
 
         [Header("Lighting")]
         [Tooltip("Display transform (exposure + tonemap), with optional auto-exposure. Published as " +
@@ -211,6 +223,8 @@ namespace Lotec.Lighting {
         static readonly int s_ambientFloor = Shader.PropertyToID("_AmbientFloor");
         static readonly int s_intensity = Shader.PropertyToID("_BgiIntensity");
         static readonly int s_aoStrength = Shader.PropertyToID("_BgiAoStrength");
+        static readonly int s_shadowModeFine = Shader.PropertyToID("_BgiShadowModeFine");
+        static readonly int s_shadowModeCoarse = Shader.PropertyToID("_BgiShadowModeCoarse");
         static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
         static readonly int s_cameraPosition = Shader.PropertyToID("_CameraPosition");
         static readonly int s_cameraForward = Shader.PropertyToID("_CameraForward");
@@ -388,6 +402,11 @@ namespace Lotec.Lighting {
             Light sun = RenderSettings.sun;
             Shader.SetGlobalFloat(s_intensity, sun != null ? sun.bounceIntensity : 1f);
             Shader.SetGlobalFloat(s_aoStrength, _aoStrength);
+            // Voxel sun-shadow, per field. Baked reads the sun visibility the solve stashed in the
+            // radiance's w channel; realtime marches the occupancy bitfield per pixel (both bound below).
+            Shader.SetGlobalBuffer(s_radiance, _radianceBuffer);
+            Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
+            Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
             // The display transform (_Exposure + TONEMAP_OFF) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value (e.g. left by GiFieldUpdater) can't darken it.
         }

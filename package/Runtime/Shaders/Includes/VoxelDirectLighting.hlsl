@@ -9,6 +9,7 @@
 #include "VoxelSdfShadows.hlsl" // GetShadowFromSdf (default shadow source)
 #include "VoxelSdfAo.hlsl"      // GetAmbientOcclusionFromSdf
 #include "VoxelOcclusion.hlsl"  // GetBitmaskShadow / GetOccFieldShadow (baked shadow sources)
+#include "BufferGi.hlsl"        // GI_VOXEL_BUFFER voxel sun-shadow source (BgiTrySunShadow); empty otherwise
 
 #ifndef MAX_POINT_LIGHTS
 #define MAX_POINT_LIGHTS 4
@@ -27,8 +28,14 @@ float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
 float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 
 // Resolve the shadow term for a surface point. Defaults to SDF; the bitmask /
-// occlusion-field modes are selected by their compile-time keywords.
+// occlusion-field modes are selected by their compile-time keywords. Under the buffer GI, the
+// per-field voxel sun-shadow (baked or realtime) takes over as the source when its mode is active.
 inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal) {
+    #if defined(GI_VOXEL_BUFFER)
+        half voxelShadow;
+        if (BgiTrySunShadow(worldPos, normal, voxelShadow))
+            return voxelShadow;
+    #endif
     #if defined(OCC_FIELD)
         return GetOccFieldShadow(worldPos, normal);
     #elif defined(BITMASK_POINT) || defined(BITMASK_8TAP)
