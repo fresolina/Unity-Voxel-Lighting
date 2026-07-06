@@ -24,8 +24,14 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             StructuredBuffer<uint>  _DbgMaterial;
             StructuredBuffer<uint2> _DbgRadiance;
             StructuredBuffer<uint2> _DbgIrradiance;
-            StructuredBuffer<uint>  _DbgNormal;      // baked oct normals (bound valid but unread when off)
-            float _DbgBakedNormal;                   // 1 = read baked _DbgNormal, 0 = occupancy gradient
+            StructuredBuffer<uint>  _DbgSurface;      // per-voxel surface word (normal in low bits)
+            StructuredBuffer<uint>  _DbgOccupancy;    // 1-bit/voxel solidity bitfield (runtime source)
+
+            // Solidity from the occupancy bitfield (mirrors BgiSolidBit in the compute/fragment) - the
+            // actual source the runtime reads, rather than re-deriving it from the material albedo.
+            bool DbgSolid(uint slot) {
+                return (_DbgOccupancy[slot >> 5] >> (slot & 31u)) & 1u;
+            }
 
             float3 _DbgGridDims;  // strided instance grid (gx,gy,gz); instanceCount = product
             float _DbgStride;
@@ -75,24 +81,11 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                 float3(1,0,1), float3(1,1,1), float3(0,0,1), float3(0,1,1)  // verticals
             };
 
-            // Surface normal for a solid voxel (mirrors SurfaceNormal in BufferGi.compute): the baked
-            // oct normal when _DbgBakedNormal, else the occupancy gradient (sum axes toward empty/OOB
-            // neighbours; 0 when ambiguous). Reads the debug material/normal buffers + field offset.
-            float3 DbgOccupancyNormal(uint3 c) {
-                if (_DbgBakedNormal > 0.5)
-                    return BgiUnpackNormal(_DbgNormal[(uint)_DbgFieldOffset + BgiIndex(c)]);
-
-                const int3 axes[6] = {
-                    int3(1,0,0), int3(-1,0,0), int3(0,1,0), int3(0,-1,0), int3(0,0,1), int3(0,0,-1)
-                };
-                float3 n = 0;
-                [unroll]
-                for (int i = 0; i < 6; i++) {
-                    int3 nb = (int3)c + axes[i];
-                    bool solid = BgiInBounds(nb) && BgiIsSolid(_DbgMaterial[(uint)_DbgFieldOffset + BgiIndex((uint3)nb)]);
-                    if (!solid) n += (float3)axes[i];
-                }
-                return (dot(n, n) > 1e-6) ? normalize(n) : float3(0, 0, 0);
+            // Surface normal for a solid voxel: the per-voxel baked value (mirrors SurfaceNormal in
+            // BufferGi.compute). Always in _Surface now - filled at bake from mesh normals or the
+            // occupancy gradient - so the viewer just reads it.
+            float3 DbgSurfaceNormal(uint3 c) {
+                return BgiSurfaceNormal(_DbgSurface[(uint)_DbgFieldOffset + BgiIndex(c)]);
             }
 
             struct v2f {
@@ -123,8 +116,8 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                     gin.z = iid / (gn.x * gn.y);
                     uint3 voxn = gin * sn;
                     uint idxn = (uint)_DbgFieldOffset + BgiIndex(voxn);
-                    float3 nrm = DbgOccupancyNormal(voxn);
-                    bool shown = BgiIsSolid(_DbgMaterial[idxn]) && dot(nrm, nrm) > 1e-6;
+                    float3 nrm = DbgSurfaceNormal(voxn);
+                    bool shown = DbgSolid(idxn) && dot(nrm, nrm) > 1e-6;
                     float3 c0 = BgiVoxelCenter(voxn);
                     float3 world = (vid == 0u) ? c0 : c0 + nrm * _DbgNormalLen;
                     if (!shown) world = c0; // no normal (air / ambiguous) -> zero-length, invisible
@@ -146,14 +139,13 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                 float3 col;
                 bool show;
                 if (mode == 0u) {
-                    uint m = _DbgMaterial[idx];
-                    show = BgiIsSolid(m);
-                    col = BgiAlbedo(m);
+                    show = DbgSolid(idx);              // occupancy from the bitfield
+                    col = BgiAlbedo(_DbgMaterial[idx]); // albedo still from the material buffer
                 } else if (mode == 3u) {
                     // Normals: solid voxels only, coloured by the occupancy normal (xyz -> rgb).
                     // Grey (~0.5) = an AMBIGUOUS/zero normal (thin slab or enclosed interior).
-                    show = BgiIsSolid(_DbgMaterial[idx]);
-                    col = DbgOccupancyNormal(vox) * 0.5 + 0.5;
+                    show = DbgSolid(idx);
+                    col = DbgSurfaceNormal(vox) * 0.5 + 0.5;
                 } else {
                     float w;
                     BgiUnpackRgb(mode == 1u ? _DbgIrradiance[idx] : _DbgRadiance[idx], col, w);

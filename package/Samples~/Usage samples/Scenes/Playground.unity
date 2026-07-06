@@ -4183,6 +4183,7 @@ MonoBehaviour:
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
   _reachBoost: 1
   _bakedNormals: 1
+  _aoStrength: 0
   _exposureControl:
     _tonemapInShader: 1
     _exposure: 0

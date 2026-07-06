@@ -24,19 +24,17 @@ namespace Lotec.Lighting {
         [SerializeField] bool _autoSwitchToClosestVolume;
         [SerializeField] bool _updateInEditor = true;
 
-        VoxelVolume _activeVolume;
-
         /// <summary>The currently active volume: the runtime override if set, else the serialized
         /// default.</summary>
-        public VoxelVolume Volume => _activeVolume != null ? _activeVolume : _volume;
+        public VoxelVolume Volume => _volume;
 
         /// <summary>
         /// Switch the active lighting volume at runtime. Pass null to revert to the serialized
         /// default. The feature components react to the active-volume change on their own.
         /// </summary>
         public void SetActiveVolume(VoxelVolume volume) {
-            if (_activeVolume == volume) return;
-            _activeVolume = volume;
+            if (_volume == volume) return;
+            _volume = volume;
             PublishActiveVolume();
         }
 
@@ -50,9 +48,6 @@ namespace Lotec.Lighting {
         }
 
         void Update() {
-            // A disabled/destroyed override falls back to the serialized default.
-            if (_activeVolume != null && !_activeVolume.isActiveAndEnabled)
-                _activeVolume = null;
             if (_autoSwitchToClosestVolume)
                 SwitchToClosestVolume();
             if (Application.isPlaying || _updateInEditor)

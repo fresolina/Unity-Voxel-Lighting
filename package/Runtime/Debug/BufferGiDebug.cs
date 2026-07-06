@@ -55,8 +55,8 @@ namespace Lotec.Lighting {
         static readonly int s_wire = Shader.PropertyToID("_DbgWire");
         static readonly int s_normalLine = Shader.PropertyToID("_DbgNormalLine");
         static readonly int s_normalLen = Shader.PropertyToID("_DbgNormalLen");
-        static readonly int s_bakedNormal = Shader.PropertyToID("_DbgBakedNormal");
-        static readonly int s_normalBuf = Shader.PropertyToID("_DbgNormal");
+        static readonly int s_surfaceBuf = Shader.PropertyToID("_DbgSurface");
+        static readonly int s_occupancyBuf = Shader.PropertyToID("_DbgOccupancy");
         static readonly int s_wireOrigin0 = Shader.PropertyToID("_WireOrigin0");
         static readonly int s_wireSize0 = Shader.PropertyToID("_WireSize0");
         static readonly int s_wireOrigin1 = Shader.PropertyToID("_WireOrigin1");
@@ -113,13 +113,11 @@ namespace Lotec.Lighting {
             _material.SetFloat(s_fieldOffset, fieldOffset);
             _material.SetFloat(s_wire, 0f);
             _material.SetFloat(s_normalLine, 0f);
-            // Normals mode reads the baked normal buffer when the GI is in baked-normals mode, so the
-            // viewer matches the solve; otherwise it recomputes the occupancy gradient. Always bind a
-            // valid buffer to _DbgNormal (material stands in when not baked, never read) so the
-            // StructuredBuffer is never unbound - WebGPU rejects an unbound graphics-shader buffer.
-            bool baked = gi.BakedNormals && gi.NormalBuffer != null;
-            _material.SetFloat(s_bakedNormal, baked ? 1f : 0f);
-            _material.SetBuffer(s_normalBuf, baked ? gi.NormalBuffer : gi.MaterialBuffer);
+            // Normals mode reads the per-voxel surface word (normal in low bits) - the same value the
+            // solve reads. Always bound (allocated alongside the material buffer).
+            _material.SetBuffer(s_surfaceBuf, gi.SurfaceBuffer);
+            // Solidity (occupancy + normals modes) reads the 1-bit bitfield - the runtime's real source.
+            _material.SetBuffer(s_occupancyBuf, gi.OccupancyBuffer);
 
             // Bounds enclosing both fields, so neither the cubes nor the wireframe get culled.
             Bounds worldBounds = gi.Volume.Bounds;

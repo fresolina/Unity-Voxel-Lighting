@@ -64,11 +64,16 @@ namespace Lotec.Lighting {
                  "displayed field, not the bounce feedback, so it can't diverge - but it fights " +
                  "auto-exposure (a brighter field pulls exposure down).")]
         [Min(1f)][SerializeField] float _reachBoost = 1f;
-        [Tooltip("Bake an exact surface normal per voxel at voxelize time instead of computing the " +
-                 "occupancy gradient at runtime. Costs a normal buffer (~256 KB) but is faster to " +
-                 "read AND fixes hollow/thin walls the gradient reads as ambiguous - so walls no " +
-                 "longer need to be voxelized 2 voxels thick (the inward-thicken is skipped).")]
+        [Tooltip("Normal source (baked either way - the runtime always reads the per-voxel surface " +
+                 "buffer, never the gradient). On: exact MESH normals, no wall thickening, so hollow/" +
+                 "thin walls keep correct normals. Off: thicken walls 2 voxels + bake the occupancy-" +
+                 "gradient normal. Changing it re-bakes.")]
         [SerializeField] bool _bakedNormals;
+        [Tooltip("Strength of the baked static ambient occlusion (0 = off). Darkens the GI in concave " +
+                 "corners and near-contact gaps (e.g. under a hovering object) using each surface " +
+                 "voxel's precomputed openness - restores contact shadowing the omnidirectional gather " +
+                 "reads only weakly. Requires a re-bake to recompute openness after a geometry change.")]
+        [Range(0f, 1f)][SerializeField] float _aoStrength;
 
         [Header("Lighting")]
         [Tooltip("Display transform (exposure + tonemap), with optional auto-exposure. Published as " +
@@ -86,7 +91,11 @@ namespace Lotec.Lighting {
         ComputeBuffer _radianceBuffer;
         ComputeBuffer _irradianceBuffer;
         ComputeBuffer _irradianceBlurBuffer;
-        ComputeBuffer _normalBuffer; // baked oct-packed per-voxel normals (only when _bakedNormals)
+        ComputeBuffer _surfaceBuffer; // per-voxel surface word (normal + reserved bits); always present
+        bool _bakedNormalsBaked;      // the normal source the current bake used (for rebake-on-toggle)
+        // 1-bit/voxel occupancy bitfield (uint packs 32 voxels): 4 KB per field, the hot solidity
+        // data every DDA step / gate / fragment tap reads. Derived from _Material by CSBuildSurface.
+        ComputeBuffer _occupancyBuffer;
         const string BakedNormalsKeyword = "BGI_BAKED_NORMALS";
         bool _materialBaked;
         // The fine field's volume (the manager's active volume); its Bounds already carry the
@@ -100,6 +109,8 @@ namespace Lotec.Lighting {
         int _blurKernel = -1;
         int _initFineKernel = -1;
         int _averageLuminanceKernel = -1;
+        int _buildOccupancyKernel = -1;
+        int _buildSurfaceKernel = -1;
         bool _resetFineField;
         bool _hasLoggedMissingReferences;
         // Progressive accumulation in SAMPLES (rays): _collectedSamples = total rays gathered since the last
@@ -128,9 +139,10 @@ namespace Lotec.Lighting {
         public ComputeBuffer MaterialBuffer => _materialBuffer;
         public ComputeBuffer RadianceBuffer => _radianceBuffer;
         public ComputeBuffer IrradianceBuffer => _irradianceBuffer;
-        // Baked per-voxel normals (only when BakedNormals is on); null otherwise. For the debug viewer.
-        public ComputeBuffer NormalBuffer => _normalBuffer;
-        public bool BakedNormals => _bakedNormals;
+        // Per-voxel surface word (normal in low bits). For the debug viewer.
+        public ComputeBuffer SurfaceBuffer => _surfaceBuffer;
+        // 1-bit/voxel occupancy bitfield (the runtime solidity source). For the debug viewer.
+        public ComputeBuffer OccupancyBuffer => _occupancyBuffer;
         public VoxelVolume Volume => _volume;
         public Vector3 GridOrigin => _volume != null ? _volume.Bounds.min : Vector3.zero;
         public Vector3 GridSize => _volume != null ? _volume.Bounds.size : Vector3.one;
@@ -182,7 +194,9 @@ namespace Lotec.Lighting {
         static readonly int s_coarseGridOrigin = Shader.PropertyToID("_CoarseGridOrigin");
         static readonly int s_coarseGridVoxelSize = Shader.PropertyToID("_CoarseGridVoxelSize");
         static readonly int s_material = Shader.PropertyToID("_Material");
-        static readonly int s_normal = Shader.PropertyToID("_Normal");
+        static readonly int s_surface = Shader.PropertyToID("_Surface");
+        static readonly int s_computeGradient = Shader.PropertyToID("_ComputeGradientNormals");
+        static readonly int s_occupancy = Shader.PropertyToID("_Occupancy");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_samplesPerFrame = Shader.PropertyToID("_SamplesPerFrame");
         static readonly int s_giFireflyClamp = Shader.PropertyToID("_GiFireflyClamp");
@@ -196,6 +210,7 @@ namespace Lotec.Lighting {
         };
         static readonly int s_ambientFloor = Shader.PropertyToID("_AmbientFloor");
         static readonly int s_intensity = Shader.PropertyToID("_BgiIntensity");
+        static readonly int s_aoStrength = Shader.PropertyToID("_BgiAoStrength");
         static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
         static readonly int s_cameraPosition = Shader.PropertyToID("_CameraPosition");
         static readonly int s_cameraForward = Shader.PropertyToID("_CameraForward");
@@ -345,7 +360,7 @@ namespace Lotec.Lighting {
             if (_averageLuminanceKernel < 0 || _irradianceBlurBuffer == null || Camera.main == null) return;
             SetGridUniforms(GridOrigin, GridSize, VoxelSize);
             _computeShader.SetInt(s_fieldOffset, FineField * VoxelCount);
-            _computeShader.SetBuffer(_averageLuminanceKernel, s_material, _materialBuffer);
+            _computeShader.SetBuffer(_averageLuminanceKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_averageLuminanceKernel, s_irradianceBlur, _irradianceBlurBuffer);
             _computeShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, luminanceBuffer);
             _computeShader.SetVector(s_cameraPosition, Camera.main.transform.position);
@@ -356,7 +371,10 @@ namespace Lotec.Lighting {
 
         // Publish the buffers + grid mapping + confidence the lit shader's SampleBufferGI reads.
         void SetGlobals() {
-            Shader.SetGlobalBuffer(s_material, _materialBuffer);
+            // Fragment solidity = the 8 KB bitfield; _Material is no longer bound to the lit shader.
+            Shader.SetGlobalBuffer(s_occupancy, _occupancyBuffer);
+            // Surface word for the fragment's static AO (openness in bits 16-23).
+            Shader.SetGlobalBuffer(s_surface, _surfaceBuffer);
             // Fragment reads the occupancy-gated blurred field (always on).
             Shader.SetGlobalBuffer(s_irradiance, _irradianceBlurBuffer);
             // Fine field bounds + coarse field bounds for the fragment read (hard fine/coarse switch).
@@ -369,6 +387,7 @@ namespace Lotec.Lighting {
             // Unity control for indirect strength, used instead of a custom field.
             Light sun = RenderSettings.sun;
             Shader.SetGlobalFloat(s_intensity, sun != null ? sun.bounceIntensity : 1f);
+            Shader.SetGlobalFloat(s_aoStrength, _aoStrength);
             // The display transform (_Exposure + TONEMAP_OFF) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value (e.g. left by GiFieldUpdater) can't darken it.
         }
@@ -393,29 +412,27 @@ namespace Lotec.Lighting {
             _blurKernel = _computeShader.FindKernel("CSBlur");
             _initFineKernel = _computeShader.FindKernel("CSInitFineFromCoarse");
             _averageLuminanceKernel = _computeShader.FindKernel("CSAverageLuminance");
+            _buildOccupancyKernel = _computeShader.FindKernel("CSBuildOccupancy");
+            _buildSurfaceKernel = _computeShader.FindKernel("CSBuildSurface");
 
             // uint material, uint2 radiance/irradiance. Sized for all fields (concatenated slices).
             _materialBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));
             _radianceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
             _irradianceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
             _irradianceBlurBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
-            if (_bakedNormals) _normalBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));
+            _surfaceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));      // 32-bit surface word/voxel
+            _occupancyBuffer = new ComputeBuffer(TotalVoxels / 32, sizeof(uint)); // 1 bit/voxel
             _materialBaked = false;
 
             ClearDynamicFields();
         }
 
-        // Keep the buffers + shader keyword in sync with the _bakedNormals toggle. A change forces a
-        // buffer realloc + re-voxelize (the normal buffer only exists in baked mode, and the voxelizer
-        // either bakes normals or thickens depending on the keyword).
+        // The surface buffer is always present and the compute has no normal-source variant now (it
+        // always reads _Surface). Flipping the normal source only needs a RE-BAKE - the voxelizer bakes
+        // mesh normals (+ no thicken) vs thickens, and CSBuildSurface computes the gradient in the
+        // thickened case. (OnValidate also rebakes on any inspector change; this covers runtime flips.)
         void SyncNormalMode() {
-            if (_bakedNormals) _computeShader.EnableKeyword(BakedNormalsKeyword);
-            else _computeShader.DisableKeyword(BakedNormalsKeyword);
-
-            if (_bakedNormals != (_normalBuffer != null) && _materialBuffer != null) {
-                ReleaseBuffers();   // realloc with/without the normal buffer on the next EnsureInitialized
-                _materialBaked = false; // re-voxelize (bake normals vs thicken)
-            }
+            if (_bakedNormals != _bakedNormalsBaked) _materialBaked = false;
         }
 
         void SetGridUniforms(Vector3 origin, Vector3 size, Vector3 voxelSize) {
@@ -450,7 +467,7 @@ namespace Lotec.Lighting {
             SetGridUniforms(GridOrigin, GridSize, VoxelSize); // fine grid = voxel world positions
             _computeShader.SetVector(s_coarseGridOrigin, CoarseOrigin);
             _computeShader.SetVector(s_coarseGridVoxelSize, CoarseVoxelSize);
-            _computeShader.SetBuffer(_initFineKernel, s_material, _materialBuffer);
+            _computeShader.SetBuffer(_initFineKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_initFineKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_initFineKernel, s_irradiance, _irradianceBuffer);
             _computeShader.SetBuffer(_initFineKernel, s_irradianceBlur, _irradianceBlurBuffer);
@@ -468,21 +485,26 @@ namespace Lotec.Lighting {
             if (_voxelizeMaterial == null) {
                 _voxelizeMaterial = new Material(_voxelizeShader) { hideFlags = HideFlags.HideAndDontSave };
             }
-            // Bake normals (write _NormalWrite, skip thickening) vs thicken - matches the compute path.
-            if (_bakedNormals) _voxelizeMaterial.EnableKeyword(BakedNormalsKeyword);
+            // Mesh mode (_bakedNormals): the voxelizer writes exact mesh normals into _Surface and does
+            // NOT thicken. Gradient mode: it thickens, and CSBuildSurface computes the gradient normal.
+            bool meshNormals = _bakedNormals;
+            if (meshNormals) _voxelizeMaterial.EnableKeyword(BakedNormalsKeyword);
             else _voxelizeMaterial.DisableKeyword(BakedNormalsKeyword);
 
             // Rasterization only writes covered voxels, so clear all field slices to empty first.
             if (_materialClear == null) _materialClear = new uint[TotalVoxels];
             _materialBuffer.SetData(_materialClear);
+            // Clear _Surface (zeros = a valid default normal via BgiSurfaceNormal) so a solid voxel a
+            // degenerate-normal triangle leaves unwritten (mesh mode) reads a deterministic value.
+            _surfaceBuffer.SetData(_materialClear);
 
-            RenderTexture dummy = RenderTexture.GetTemporary(Grid, Grid, 0, RenderTextureFormat.R8);
+            RenderTexture dummy = RenderTexture.GetTemporary(Grid, Grid, 0, RenderTextureFormat.R8, RenderTextureReadWrite.Linear);
             CommandBuffer cmd = new CommandBuffer { name = "BufferGI Voxelize" };
             cmd.SetRenderTarget(dummy);
             // We output clip space directly from the vertex shader, so neutralize the view-projection.
             cmd.SetViewProjectionMatrices(Matrix4x4.identity, Matrix4x4.identity);
             cmd.SetRandomWriteTarget(1, _materialBuffer);
-            if (_bakedNormals) cmd.SetRandomWriteTarget(2, _normalBuffer); // u2 = _NormalWrite
+            if (meshNormals) cmd.SetRandomWriteTarget(2, _surfaceBuffer); // u2 = _SurfaceWrite
 
             // Each field rasterizes its OWN volume's geometry into its slice (coarse = a separate,
             // scene-covering MeshBounds with its own root).
@@ -496,7 +518,35 @@ namespace Lotec.Lighting {
             Graphics.ExecuteCommandBuffer(cmd);
             cmd.Release();
             RenderTexture.ReleaseTemporary(dummy);
+
+            // Bake-time derive passes (both fields; un-voxelized coarse slice packs to zeros):
+            // 1) occupancy bitfield from _Material, 2) surface word - in gradient mode CSBuildSurface
+            // fills the normal from the now-complete occupancy (mesh mode already wrote _Surface).
+            _computeShader.SetInt(s_computeGradient, meshNormals ? 0 : 1);
+            for (int f = 0; f < FieldCount; f++) BuildOccupancy(f * VoxelCount);
+            for (int f = 0; f < FieldCount; f++) BuildSurface(f * VoxelCount);
+            _bakedNormalsBaked = _bakedNormals;
             _materialBaked = true;
+        }
+
+        // Pack one field's _Material occupancy into the 1-bit/voxel _Occupancy bitfield (1024 words,
+        // one thread per word). Runs first so CSBuildSurface's gradient sees complete occupancy.
+        void BuildOccupancy(int fieldOffset) {
+            if (_buildOccupancyKernel < 0) return;
+            _computeShader.SetInt(s_fieldOffset, fieldOffset);
+            _computeShader.SetBuffer(_buildOccupancyKernel, s_material, _materialBuffer);
+            _computeShader.SetBuffer(_buildOccupancyKernel, s_occupancy, _occupancyBuffer);
+            _computeShader.Dispatch(_buildOccupancyKernel, Mathf.CeilToInt(VoxelCount / 32f / 64f), 1, 1);
+        }
+
+        // Fill one field's _Surface word (per voxel): the gradient normal (gradient mode; mesh mode
+        // keeps the voxelizer's) + the static openness/AO (both modes). Future air-distance/flags too.
+        void BuildSurface(int fieldOffset) {
+            if (_buildSurfaceKernel < 0) return;
+            _computeShader.SetInt(s_fieldOffset, fieldOffset);
+            _computeShader.SetBuffer(_buildSurfaceKernel, s_occupancy, _occupancyBuffer);
+            _computeShader.SetBuffer(_buildSurfaceKernel, s_surface, _surfaceBuffer);
+            _computeShader.Dispatch(_buildSurfaceKernel, Groups, 1, 1);
         }
 
         // Rasterize a volume's geometry into one field's slice. The voxelize shader reads the grid +
@@ -591,24 +641,27 @@ namespace Lotec.Lighting {
             _computeShader.SetInt(s_fieldOffset, fieldOffset);
 
             // Inject: solid voxels emit/reflect. Bounce = the surface's own last-frame incident
-            // irradiance (its _Irradiance slot, built by gather); reads _Material, writes _Radiance.
+            // irradiance (its _Irradiance slot, built by gather). The ONLY kernel that still reads
+            // _Material (albedo/emission); solidity comes from the bitfield.
+            _computeShader.SetBuffer(_injectKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
             _computeShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
-            if (_bakedNormals) _computeShader.SetBuffer(_injectKernel, s_normal, _normalBuffer);
+            _computeShader.SetBuffer(_injectKernel, s_surface, _surfaceBuffer);
             _computeShader.Dispatch(_injectKernel, Groups, 1, 1);
 
             // Gather: off the fresh _Radiance, fold into _Irradiance - AIR voxels omnidirectionally
             // (the read field), SOLID voxels over their front hemisphere (next frame's inject bounce).
-            _computeShader.SetBuffer(_gatherKernel, s_material, _materialBuffer);
+            // All its solidity (DDA + gates) is the bitfield; it never touches _Material.
+            _computeShader.SetBuffer(_gatherKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
-            if (_bakedNormals) _computeShader.SetBuffer(_gatherKernel, s_normal, _normalBuffer);
+            _computeShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
             _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
 
             // Blur: occupancy-gated spatial smoothing into the buffer the fragment read samples, and
             // the confidence ease (CSBlur) that hides the warm-up. Required, always run.
-            _computeShader.SetBuffer(_blurKernel, s_material, _materialBuffer);
+            _computeShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
             _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
@@ -647,12 +700,14 @@ namespace Lotec.Lighting {
             _radianceBuffer?.Release();
             _irradianceBuffer?.Release();
             _irradianceBlurBuffer?.Release();
-            _normalBuffer?.Release();
+            _surfaceBuffer?.Release();
+            _occupancyBuffer?.Release();
             _materialBuffer = null;
             _radianceBuffer = null;
             _irradianceBuffer = null;
             _irradianceBlurBuffer = null;
-            _normalBuffer = null;
+            _surfaceBuffer = null;
+            _occupancyBuffer = null;
             _materialBaked = false;
             _resetFineField = false;
             _collectedSamples = 0; // gather from scratch while the freshly-cleared field fills in

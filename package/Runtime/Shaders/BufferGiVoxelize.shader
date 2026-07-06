@@ -29,7 +29,7 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
             // the one color render target (u0).
             RWStructuredBuffer<uint> _MaterialWrite : register(u1);
             #if defined(BGI_BAKED_NORMALS)
-            RWStructuredBuffer<uint> _NormalWrite : register(u2); // oct-packed per-voxel surface normal
+            RWStructuredBuffer<uint> _SurfaceWrite : register(u2); // per-voxel surface word (normal in low bits)
             #endif
 
             float4 _VoxAlbedo;   // rgb base color of the submesh being drawn
@@ -64,7 +64,7 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                     // gradient, so walls need NOT be thickened (hollow 1-voxel shells keep correct
                     // normals). Multiple triangles per voxel: last-write-wins (fine for flat surfaces).
                     if (dot(i.wn, i.wn) > 1e-6)
-                        _NormalWrite[BgiSlot((uint3)c)] = BgiPackNormal(normalize(i.wn));
+                        _SurfaceWrite[BgiSlot((uint3)c)] = BgiPackSurfaceNormal(normalize(i.wn));
                 #else
                     // Thicken one voxel INWARD (opposite the surface normal) so a wall is solid-backed
                     // instead of a 1-voxel hollow shell. Without this, a surface voxel of a thick mesh

@@ -7,16 +7,17 @@
 //                 (feeds CSInject's bounce, so a surface no longer reads its own radiance back).
 //   CSBlur      - occupancy-gated spatial blur into _IrradianceBlur (hides the 1-ray/frame shimmer
 //                 the temporal EMA leaves behind); the fragment read samples the blurred buffer.
-// Occupancy/albedo (_Material) is voxelized separately by BufferGiVoxelize.shader (GPU raster).
-// Everything else (visibility, occupancy) reads the flat _Material buffer - no SDF, no textures.
+// Albedo/emission (_Material) is voxelized separately by BufferGiVoxelize.shader (GPU raster);
+// CSBuildOccupancy then derives the 1-bit/voxel _Occupancy bitfield from it. All solidity tests
+// (visibility DDA, gates) read the bitfield; _Material is inject-only. No SDF, no textures.
 #pragma kernel CSClear
 #pragma kernel CSInject
 #pragma kernel CSGather
 #pragma kernel CSBlur
 #pragma kernel CSInitFineFromCoarse
 #pragma kernel CSAverageLuminance
-// BGI_BAKED_NORMALS: read the per-voxel baked normal (_Normal) instead of the occupancy gradient.
-#pragma multi_compile _ BGI_BAKED_NORMALS
+#pragma kernel CSBuildOccupancy
+#pragma kernel CSBuildSurface
 
 #define MAX_POINT_LIGHTS 4
 #define MAX_SPOT_LIGHTS 4
@@ -29,10 +30,28 @@ RWStructuredBuffer<uint2> _Radiance;    // outgoing radiance (fp16x3), stored in
 RWStructuredBuffer<uint2> _Irradiance;  // accumulated incoming light (rgb) + sample count (w)
 RWStructuredBuffer<uint2> _IrradianceBlur; // spatially blurred irradiance, sampled by the fragment read
 RWStructuredBuffer<uint>  _LuminanceResult; // [0] = encoded log-luminance sum, [1] = sample count (auto-exposure)
-StructuredBuffer<uint>    _Material;      // occupancy/material (voxelized by BufferGiVoxelize.shader)
-#if defined(BGI_BAKED_NORMALS)
-StructuredBuffer<uint>    _Normal;        // oct-packed per-voxel surface normal (baked at voxelize)
-#endif
+StructuredBuffer<uint>    _Material;      // albedo/emission (voxelized by BufferGiVoxelize.shader); inject-only cold data
+// Occupancy as a 1-bit-per-voxel bitfield (uint packs 32 voxels): 4 KB per field, so the WHOLE
+// occupancy of both fields is L1-resident and one cache line covers 512 voxels. This is what every
+// solidity test reads - most importantly the DDA inner loop, which previously fetched 4 bytes of
+// _Material per stepped cell for a 1-bit answer. Derived from _Material by CSBuildOccupancy at bake.
+RWStructuredBuffer<uint>  _Occupancy;
+// Per-voxel surface word (normal in low 16 bits; see BufferGiField.hlsl). Written by CSBuildSurface
+// (gradient) or the voxelizer (mesh normals); read once per hit by the solve. RW so CSBuildSurface
+// can write it; the solve kernels only read it.
+RWStructuredBuffer<uint>  _Surface;
+
+// Build-mode uniform for CSBuildSurface: 1 = compute the occupancy-gradient normal into _Surface
+// (walls are thickened, so the gradient is unambiguous); 0 = mesh mode, the voxelizer already wrote
+// _Surface, so leave it. Set from C# per bake.
+uint _ComputeGradientNormals;
+
+// Solidity test for a concatenated-buffer slot (field offset already applied - slots are multiples
+// of BGI_COUNT per field, and BGI_COUNT is divisible by 32, so field slices stay word-aligned).
+bool BgiSolidBit(uint slot)
+{
+    return (_Occupancy[slot >> 5] >> (slot & 31u)) & 1u;
+}
 
 // --- Solve uniforms ---
 uint  _FrameCount;
@@ -116,7 +135,7 @@ int MarchOccupancy(int3 start, float3 worldDir, float maxDist, out int3 hitCell)
         }
         if (tCross > maxDist) return 0;         // reached the light / max range before a hit
         if (!BgiInBounds(cell)) return 0;       // escaped the grid -> sky/miss
-        if (BgiIsSolid(_Material[BgiSlot((uint3)cell)])) { hitCell = cell; return 1; }
+        if (BgiSolidBit(BgiSlot((uint3)cell))) { hitCell = cell; return 1; }
     }
     return 0;
 }
@@ -135,22 +154,18 @@ float3 OccupancyNormal(int3 c)
     [unroll]
     for (int i = 0; i < 6; i++) {
         int3 nb = c + axes[i];
-        bool solid = BgiInBounds(nb) && BgiIsSolid(_Material[BgiSlot((uint3)nb)]);
+        bool solid = BgiInBounds(nb) && BgiSolidBit(BgiSlot((uint3)nb));
         if (!solid) n += (float3)axes[i];
     }
     return (dot(n, n) > 1e-6) ? normalize(n) : float3(0, 0, 0);
 }
 
-// The surface normal for a solid voxel: the baked per-voxel normal (BGI_BAKED_NORMALS - exact mesh
-// normal, one buffer read, and correct on hollow/thin walls the gradient reads as ambiguous), else
-// the runtime occupancy gradient. Callers still handle a 0 result (only possible in the gradient path).
+// The surface normal for a solid voxel: always the per-voxel baked value from _Surface (one read +
+// unpack). Filled at bake by CSBuildSurface (gradient) or the voxelizer (mesh); never zero, so the
+// callers' 0-fallback is dead but harmless. The runtime never computes the gradient anymore.
 float3 SurfaceNormal(int3 c)
 {
-#if defined(BGI_BAKED_NORMALS)
-    return BgiUnpackNormal(_Normal[BgiSlot((uint3)c)]);
-#else
-    return OccupancyNormal(c);
-#endif
+    return BgiSurfaceNormal(_Surface[BgiSlot((uint3)c)]);
 }
 
 // Evaluate the environment ambient-probe SH in a direction (matches Unity's ShadeSH9).
@@ -201,7 +216,7 @@ float3 GetDirectLight(int3 cell, float3 normal)
     // itself when there's no air in front (concave/enclosed, or a thin wall whose ambiguous normal
     // points into more solid).
     int3 shadowStart = cell + int3(round(normal));
-    if (!BgiInBounds(shadowStart) || BgiIsSolid(_Material[BgiSlot((uint3)shadowStart)]))
+    if (!BgiInBounds(shadowStart) || BgiSolidBit(BgiSlot((uint3)shadowStart)))
         shadowStart = cell;
 
     // Sun
@@ -317,8 +332,10 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     uint i = id.x;
     if (i >= BGI_COUNT) return;
 
+    // Test the bitfield first so air voxels never touch the (cold) material buffer; only solid
+    // voxels read their albedo/emission - inject is the sole consumer of _Material.
+    if (!BgiSolidBit(_FieldOffset + i)) { _Radiance[_FieldOffset + i] = uint2(0u, 0u); return; }
     uint mat = _Material[_FieldOffset + i];
-    if (!BgiIsSolid(mat)) { _Radiance[_FieldOffset + i] = uint2(0u, 0u); return; }
 
     int3 cell = (int3)BgiCoord(i);
     float3 normal = SurfaceNormal(cell);
@@ -362,7 +379,7 @@ void CSGather(uint3 id : SV_DispatchThreadID)
 
     uint3 c = BgiCoord(i);
     int3 cell = (int3)c;
-    bool solid = BgiIsSolid(_Material[_FieldOffset + i]);
+    bool solid = BgiSolidBit(_FieldOffset + i);
 
     // For a solid voxel, gather rays into the front hemisphere around the surface normal (so they
     // leave the surface into the room and never read it back). Ambiguous normal -> up, matching inject.
@@ -411,7 +428,7 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
     uint i = id.x;
     if (i >= BGI_COUNT) return;
 
-    if (BgiIsSolid(_Material[_FieldOffset + i])) { _IrradianceBlur[_FieldOffset + i] = uint2(0u, 0u); return; }
+    if (BgiSolidBit(_FieldOffset + i)) { _IrradianceBlur[_FieldOffset + i] = uint2(0u, 0u); return; }
 
     int3 c = (int3)BgiCoord(i);
     float3 sum; float count;
@@ -425,7 +442,7 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
     for (int k = 0; k < 6; k++) {
         int3 nb = c + axes[k];
         if (!BgiInBounds(nb)) continue;
-        if (BgiIsSolid(_Material[BgiSlot((uint3)nb)])) continue; // gate: don't blur across surfaces
+        if (BgiSolidBit(BgiSlot((uint3)nb))) continue; // gate: don't blur across surfaces
         float3 nc; float nn;
         BgiUnpackRgb(_Irradiance[BgiSlot((uint3)nb)], nc, nn);
         sum += nc;
@@ -454,7 +471,7 @@ void CSInitFineFromCoarse(uint3 id : SV_DispatchThreadID)
 
     uint fineSlot = BGI_FINE_OFFSET + i;
     _Radiance[fineSlot] = uint2(0u, 0u);
-    if (BgiIsSolid(_Material[fineSlot])) { // irradiance lives only in air voxels
+    if (BgiSolidBit(fineSlot)) { // irradiance lives only in air voxels
         _Irradiance[fineSlot] = uint2(0u, 0u);
         _IrradianceBlur[fineSlot] = uint2(0u, 0u);
         return;
@@ -470,7 +487,7 @@ void CSInitFineFromCoarse(uint3 id : SV_DispatchThreadID)
     float3 seed = 0;
     if (BgiInBounds(cc)) {
         uint coarseSlot = BGI_COARSE_OFFSET + BgiIndex((uint3)cc);
-        if (!BgiIsSolid(_Material[coarseSlot])) {
+        if (!BgiSolidBit(coarseSlot)) {
             float w;
             BgiUnpackRgb(_IrradianceBlur[coarseSlot], seed, w);
         } else {
@@ -483,7 +500,7 @@ void CSInitFineFromCoarse(uint3 id : SV_DispatchThreadID)
                 int3 nb = cc + axes[k];
                 if (!BgiInBounds(nb)) continue;
                 uint nbSlot = BGI_COARSE_OFFSET + BgiIndex((uint3)nb);
-                if (BgiIsSolid(_Material[nbSlot])) continue;
+                if (BgiSolidBit(nbSlot)) continue;
                 float3 c; float w;
                 BgiUnpackRgb(_IrradianceBlur[nbSlot], c, w);
                 seed += c;
@@ -514,7 +531,7 @@ void CSAverageLuminance(uint3 id : SV_DispatchThreadID)
     if (i >= BGI_COUNT) return;
 
     uint slot = _FieldOffset + i;
-    if (BgiIsSolid(_Material[slot])) return; // GI lives in air voxels
+    if (BgiSolidBit(slot)) return; // GI lives in air voxels
 
     float3 voxelCenter = BgiVoxelCenter(BgiCoord(i));
     float3 offset = voxelCenter - _CameraPosition;
@@ -532,4 +549,82 @@ void CSAverageLuminance(uint3 id : SV_DispatchThreadID)
     uint encoded = (uint)((logLum + 16.0) * 1024.0);
     InterlockedAdd(_LuminanceResult[0], encoded);
     InterlockedAdd(_LuminanceResult[1], 1u);
+}
+
+// ----------------------------------------------------------
+// BUILD OCCUPANCY (bake-time, right after voxelize): derive the per-field occupancy BITFIELD from
+// the voxelized _Material - one thread packs the 32 voxels of one word, written unconditionally so
+// no prior clear is needed. Dispatched per field via _FieldOffset (word-aligned: BGI_COUNT % 32 == 0).
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSBuildOccupancy(uint3 id : SV_DispatchThreadID)
+{
+    const uint wordsPerField = BGI_COUNT / 32u; // 1024 (= 4 KB per field)
+    uint w = id.x;
+    if (w >= wordsPerField) return;
+
+    uint slot0 = _FieldOffset + (w << 5);
+    uint word = 0u;
+    [unroll]
+    for (uint b = 0u; b < 32u; b++) {
+        if (BgiIsSolid(_Material[slot0 + b])) word |= 1u << b;
+    }
+    _Occupancy[(_FieldOffset >> 5) + w] = word;
+}
+
+// ----------------------------------------------------------
+// Static front-hemisphere ambient occlusion for a solid voxel with surface normal `n`: the
+// COSINE-WEIGHTED fraction of the front hemisphere within a small radius that is blocked by other
+// solid voxels. A flat/convex surface's front hemisphere is all air -> openness 1 (no AO); a concave
+// corner or near-contact gap (e.g. under a hovering object) has front-solid neighbours -> openness < 1.
+// Cosine weighting (contribution = dot(dir_hat, n)) plus the coplanar cutoff makes a flat wall robust
+// to a slightly-tilted gradient normal: its own coplanar neighbours weigh ~0 instead of counting as
+// occluders, so a voxelized diagonal/curved wall no longer self-shadows into a grid of false AO.
+#define BGI_AO_RADIUS 2
+#define BGI_AO_MIN_COS 0.15 // ignore near-coplanar dirs (a flat wall must not occlude itself)
+float BgiComputeOpenness(int3 cell, float3 n)
+{
+    float total = 0.0, blocked = 0.0;
+    [loop]
+    for (int z = -BGI_AO_RADIUS; z <= BGI_AO_RADIUS; z++)
+    for (int y = -BGI_AO_RADIUS; y <= BGI_AO_RADIUS; y++)
+    for (int x = -BGI_AO_RADIUS; x <= BGI_AO_RADIUS; x++) {
+        int3 d = int3(x, y, z);
+        if (all(d == 0)) continue;
+        float3 dir = (float3)d;
+        float w = dot(dir, n) * rsqrt(dot(dir, dir)); // cosine of dir to the surface normal
+        if (w <= BGI_AO_MIN_COS) continue;            // back hemisphere + near-coplanar self-neighbours
+        total += w;
+        int3 nb = cell + d;
+        if (BgiInBounds(nb) && BgiSolidBit(BgiSlot((uint3)nb))) blocked += w;
+    }
+    return (total > 0.0) ? 1.0 - blocked / total : 1.0;
+}
+
+// ----------------------------------------------------------
+// BUILD SURFACE (bake-time, after CSBuildOccupancy so it reads a complete _Occupancy): per SOLID
+// voxel, write the surface word = normal (bits 0-15) + static openness/AO (bits 16-23). GRADIENT mode
+// (_ComputeGradientNormals=1, walls thickened) computes the occupancy-gradient normal here, ONCE,
+// instead of every solve frame; MESH mode (=0) keeps the exact mesh normal the voxelizer already
+// wrote. Openness is computed in BOTH modes. Runs per voxel for the neighbour math.
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSBuildSurface(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+
+    uint slot = _FieldOffset + i;
+    if (!BgiSolidBit(slot)) return; // surface data only for solid voxels
+
+    int3 cell = (int3)BgiCoord(i);
+    float3 n;
+    if (_ComputeGradientNormals != 0u) {
+        n = OccupancyNormal(cell);                   // reads the completed _Occupancy bitfield
+        if (dot(n, n) < 1e-6) n = float3(0, 1, 0);   // ambiguous -> up (matches the old inject fallback)
+    } else {
+        n = BgiSurfaceNormal(_Surface[slot]);        // mesh mode: normal already written by the voxelizer
+    }
+    float openness = BgiComputeOpenness(cell, n);
+    _Surface[slot] = BgiPackSurfaceNormal(n) | BgiPackOpenness(openness); // normal (0-15) + AO (16-23)
 }
