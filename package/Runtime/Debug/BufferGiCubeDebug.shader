@@ -4,7 +4,8 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
     // straight from the GI StructuredBuffers on the GPU. Single-value GI, so one color per cube
     // (unlike the directional 6-face VoxelCubeDebug this is based on). Mode selects what to show:
     // 0 = occupancy/albedo, 1 = irradiance, 2 = radiance, 3 = occupancy normals (xyz->rgb),
-    // 4 = baked sun visibility (radiance.w: white = lit, black = sun-shadowed).
+    // 4 = baked sun visibility (radiance.w: white = lit, black = sun-shadowed),
+    // 5 = air distance (AIR voxels: distance-to-nearest-solid, dark = near .. white = far).
     Properties { }
     SubShader {
         Tags { "RenderType" = "Opaque" "RenderPipeline" = "UniversalPipeline" "Queue" = "Overlay" }
@@ -154,6 +155,13 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                     BgiUnpackRgb(_DbgRadiance[idx], col, w);
                     col = w.xxx;
                     show = DbgSolid(idx);
+                } else if (mode == 5u) {
+                    // Air distance: city-block distance-to-nearest-solid for AIR voxels (dark = near,
+                    // white = far). Cap-saturated open space is hidden so only the shells around
+                    // geometry show - air beyond the gather cutoff is the skipped region.
+                    uint adist = BgiSurfaceAirDist(_DbgSurface[idx]);
+                    show = !DbgSolid(idx) && adist < BGI_MAX_AIR_DIST;
+                    col = ((float)adist / (float)BGI_MAX_AIR_DIST).xxx;
                 } else {
                     float w;
                     BgiUnpackRgb(mode == 1u ? _DbgIrradiance[idx] : _DbgRadiance[idx], col, w);
@@ -170,9 +178,9 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                 float3 n = kFaceNormal[vid / 6u];
                 float shade = 0.55 + 0.45 * saturate(dot(n, normalize(float3(0.4, 0.8, 0.3))));
 
-                // Occupancy (albedo), Normals and Sun visibility are 0..1 display values, intensity-
-                // independent so they can't blank out; the HDR irradiance/radiance modes scale by intensity.
-                float gain = (mode == 0u || mode == 3u || mode == 4u) ? 1.0 : _DbgIntensity;
+                // Occupancy (albedo), Normals, Sun visibility and Air distance are 0..1 display values,
+                // intensity-independent so they can't blank out; HDR irradiance/radiance scale by intensity.
+                float gain = (mode == 0u || mode >= 3u) ? 1.0 : _DbgIntensity;
 
                 o.positionCS = TransformWorldToHClip(world);
                 o.color = col * gain * shade;
@@ -182,7 +190,7 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             float4 frag(v2f i) : SV_Target {
                 if (_DbgWire > 0.5) return float4(i.color, 1.0);   // wireframe: flat color, no tonemap
                 uint m = (uint)_DbgMode;
-                if (m == 3u || m == 4u) return float4(i.color, 1.0); // normals / sun-vis: raw, no tonemap
+                if (m >= 3u) return float4(i.color, 1.0); // normals / sun-vis / air-dist: raw, no tonemap
                 float3 c = i.color / (1.0 + i.color); // Reinhard tonemap for display
                 return float4(c, 1.0);
             }
