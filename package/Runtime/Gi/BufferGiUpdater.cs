@@ -141,6 +141,8 @@ namespace Lotec.Lighting {
         public ComputeBuffer IrradianceBuffer => _irradianceBuffer;
         // Per-voxel surface word (normal in low bits). For the debug viewer.
         public ComputeBuffer SurfaceBuffer => _surfaceBuffer;
+        // 1-bit/voxel occupancy bitfield (the runtime solidity source). For the debug viewer.
+        public ComputeBuffer OccupancyBuffer => _occupancyBuffer;
         public VoxelVolume Volume => _volume;
         public Vector3 GridOrigin => _volume != null ? _volume.Bounds.min : Vector3.zero;
         public Vector3 GridSize => _volume != null ? _volume.Bounds.size : Vector3.one;

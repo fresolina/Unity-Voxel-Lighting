@@ -56,6 +56,7 @@ namespace Lotec.Lighting {
         static readonly int s_normalLine = Shader.PropertyToID("_DbgNormalLine");
         static readonly int s_normalLen = Shader.PropertyToID("_DbgNormalLen");
         static readonly int s_surfaceBuf = Shader.PropertyToID("_DbgSurface");
+        static readonly int s_occupancyBuf = Shader.PropertyToID("_DbgOccupancy");
         static readonly int s_wireOrigin0 = Shader.PropertyToID("_WireOrigin0");
         static readonly int s_wireSize0 = Shader.PropertyToID("_WireSize0");
         static readonly int s_wireOrigin1 = Shader.PropertyToID("_WireOrigin1");
@@ -115,6 +116,8 @@ namespace Lotec.Lighting {
             // Normals mode reads the per-voxel surface word (normal in low bits) - the same value the
             // solve reads. Always bound (allocated alongside the material buffer).
             _material.SetBuffer(s_surfaceBuf, gi.SurfaceBuffer);
+            // Solidity (occupancy + normals modes) reads the 1-bit bitfield - the runtime's real source.
+            _material.SetBuffer(s_occupancyBuf, gi.OccupancyBuffer);
 
             // Bounds enclosing both fields, so neither the cubes nor the wireframe get culled.
             Bounds worldBounds = gi.Volume.Bounds;
