@@ -3651,11 +3651,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiDebug
   _shader: {fileID: 4800000, guid: 2812d0b83a01c5f4a9ff6e4ecd95957c, type: 3}
-  mode: 4
-  field: 1
+  mode: 2
+  field: 0
   showWireframe: 1
   stride: 1
-  cubeFill: 0.124
+  cubeFill: 1
   showNormalLines: 1
   normalLineLength: 0.92
   intensity: 1
@@ -4159,7 +4159,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.LightingManager
   _volume: {fileID: 1127919670}
-  _autoSwitchToClosestVolume: 0
+  _autoSwitchToClosestVolume: 1
   _updateInEditor: 1
 --- !u!114 &1437948845
 MonoBehaviour:

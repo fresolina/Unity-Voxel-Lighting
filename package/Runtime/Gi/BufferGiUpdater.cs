@@ -198,6 +198,9 @@ namespace Lotec.Lighting {
         static readonly int s_irradianceBlur = Shader.PropertyToID("_IrradianceBlur");
         static readonly int s_voxAlbedo = Shader.PropertyToID("_VoxAlbedo");
         static readonly int s_voxEmission = Shader.PropertyToID("_VoxEmission8");
+        static readonly int s_voxBaseMap = Shader.PropertyToID("_VoxBaseMap");
+        static readonly int s_voxBaseMapST = Shader.PropertyToID("_VoxBaseMap_ST");
+        static readonly int s_voxCutoff = Shader.PropertyToID("_VoxCutoff");
         static readonly int s_voxAxis = Shader.PropertyToID("_VoxAxis");
         static readonly int s_gridOrigin = Shader.PropertyToID("_BgiGridOrigin");
         static readonly int s_gridSize = Shader.PropertyToID("_BgiGridSize");
@@ -611,11 +614,15 @@ namespace Lotec.Lighting {
 
                     for (int sm = 0; sm < subMeshCount; sm++) {
                         Material src = (mats != null && sm < mats.Length) ? mats[sm] : null;
-                        GetMaterialAlbedoEmission(src, out Color albedo, out float emission8);
-                        // Fresh MPB per draw so each submesh's color is captured independently.
+                        GetMaterialVoxelProps(src, out Color albedo, out float emission8,
+                            out Texture baseMap, out Vector4 baseMapST, out float cutoff);
+                        // Fresh MPB per draw so each submesh's props are captured independently.
                         MaterialPropertyBlock mpb = new MaterialPropertyBlock();
                         mpb.SetColor(s_voxAlbedo, albedo);
                         mpb.SetFloat(s_voxEmission, emission8);
+                        mpb.SetTexture(s_voxBaseMap, baseMap != null ? baseMap : Texture2D.whiteTexture);
+                        mpb.SetVector(s_voxBaseMapST, baseMapST);
+                        mpb.SetFloat(s_voxCutoff, cutoff);
                         cmd.DrawMesh(mesh, l2w, _voxelizeMaterial, sm, 0, mpb);
                     }
                 }
@@ -624,12 +631,40 @@ namespace Lotec.Lighting {
 
         const float EmissionIntensityMax = 1024f;
 
-        static void GetMaterialAlbedoEmission(Material mat, out Color albedo, out float emission8) {
+        // Voxelizer inputs from a scene material: base color+alpha, emission, the base-map texture
+        // (sampled in the voxelize fragment so per-voxel albedo picks up the texture's local color)
+        // and the alpha-clip threshold. cutoff = 0 for opaque materials (their base-map alpha is often
+        // repurposed data and must never punch holes); alpha-clipped materials use their _Cutoff;
+        // plain transparent materials (render queue) use 0.5 - a mostly-transparent voxel (window)
+        // stays EMPTY, so it neither occupies nor blocks GI rays.
+        static void GetMaterialVoxelProps(Material mat, out Color albedo, out float emission8,
+                out Texture baseMap, out Vector4 baseMapST, out float cutoff) {
             albedo = Color.white;
+            baseMap = null;
+            baseMapST = new Vector4(1f, 1f, 0f, 0f);
+            cutoff = 0f;
             float emission = 0f;
             if (mat != null) {
                 if (mat.HasProperty("_BaseColor")) albedo = mat.GetColor("_BaseColor");
                 else if (mat.HasProperty("_Color")) albedo = mat.GetColor("_Color");
+
+                string texProp = mat.HasProperty("_BaseMap") ? "_BaseMap"
+                    : (mat.HasProperty("_MainTex") ? "_MainTex" : null);
+                if (texProp != null) {
+                    baseMap = mat.GetTexture(texProp);
+                    Vector2 sc = mat.GetTextureScale(texProp);
+                    Vector2 off = mat.GetTextureOffset(texProp);
+                    baseMapST = new Vector4(sc.x, sc.y, off.x, off.y);
+                }
+
+                bool alphaClip = mat.HasProperty("_AlphaClip")
+                    ? mat.GetFloat("_AlphaClip") > 0.5f
+                    : mat.IsKeywordEnabled("_ALPHATEST_ON");
+                bool transparent = (mat.HasProperty("_Surface") && mat.GetFloat("_Surface") > 0.5f)
+                    || mat.renderQueue >= (int)UnityEngine.Rendering.RenderQueue.Transparent;
+                if (alphaClip) cutoff = mat.HasProperty("_Cutoff") ? mat.GetFloat("_Cutoff") : 0.5f;
+                else if (transparent) cutoff = 0.5f;
+                else albedo.a = 1f; // opaque: alpha must never clip
 
                 if (mat.HasProperty("_EmissionColor")) {
                     bool on = mat.HasProperty("_Emission") ? mat.GetFloat("_Emission") > 0.5f : mat.IsKeywordEnabled("_EMISSION");
