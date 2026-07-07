@@ -1,0 +1,61 @@
+<ui:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
+    <Style src="project://database/Assets/_Samples/Usage%20samples/UI/LightControllerUi.uss?fileID=7433441132597879392&amp;guid=8d4ea996832866749b010f7cdbe934ac&amp;type=3#LightControllerUi"/>
+    <ui:VisualElement name="screen" class="screen" picking-mode="Ignore" style="align-items: flex-end; justify-content: flex-start; padding-right: 18px;">
+        <ui:VisualElement name="panel" class="panel">
+            <ui:VisualElement name="panel-header" class="panel-header">
+                <ui:Label name="fold-arrow" text="▾" class="fold-arrow"/>
+                <ui:Label name="panel-title" text="Buffer GI Debug" class="panel-title"/>
+            </ui:VisualElement>
+            <ui:VisualElement name="panel-body">
+                <ui:VisualElement class="panel-accent"/>
+                <ui:VisualElement name="settings-container" class="section-body">
+                    <ui:Toggle name="debug-enabled-toggle" label="Enabled" tooltip="Master on/off for the debug voxel rendering (enables/disables the BufferGiDebug component)." class="setting-field">
+                        <Bindings>
+                            <ui:DataBinding property="value" data-source-path="DebugEnabled" binding-mode="TwoWay"/>
+                        </Bindings>
+                    </ui:Toggle>
+                    <ui:EnumField label="Mode" value="Occupancy" type="Lotec.Lighting.BufferGiDebug+Mode, Lotec.Lighting" name="mode-enum" tooltip="What to visualize: occupancy/albedo, irradiance, radiance, occupancy normals, baked sun visibility, or air distance." class="setting-field">
+                        <Bindings>
+                            <ui:DataBinding property="value" data-source-path="Mode" binding-mode="TwoWay"/>
+                        </Bindings>
+                    </ui:EnumField>
+                    <ui:EnumField label="Field" value="Fine" type="Lotec.Lighting.BufferGiDebug+Field, Lotec.Lighting" name="field-enum" tooltip="Which field to visualize: the fine volume or the coarse (large) box." class="setting-field">
+                        <Bindings>
+                            <ui:DataBinding property="value" data-source-path="Field" binding-mode="TwoWay"/>
+                        </Bindings>
+                    </ui:EnumField>
+                    <ui:Toggle name="wireframe-toggle" label="Wireframe" tooltip="Draw the fine + coarse field bounds as wireframe boxes." class="setting-field">
+                        <Bindings>
+                            <ui:DataBinding property="value" data-source-path="ShowWireframe" binding-mode="TwoWay"/>
+                        </Bindings>
+                    </ui:Toggle>
+                    <ui:IntegerField name="stride-field" label="Stride" is-delayed="true" tooltip="Draw every Nth voxel along each axis (1 = all)." tabindex="-1" class="setting-field">
+                        <Bindings>
+                            <ui:DataBinding property="value" data-source-path="Stride" binding-mode="TwoWay"/>
+                        </Bindings>
+                    </ui:IntegerField>
+                    <ui:Slider name="cube-fill-slider" label="Cube Fill" low-value="0.1" high-value="1" show-input-field="true" tooltip="Voxel cube size as a fraction of the voxel (1 = fills the cell)." class="setting-field">
+                        <Bindings>
+                            <ui:DataBinding property="value" data-source-path="CubeFill" binding-mode="TwoWay"/>
+                        </Bindings>
+                    </ui:Slider>
+                    <ui:Slider name="normal-line-length-slider" label="Normal Line Length" low-value="0.5" high-value="4" show-input-field="true" tooltip="Length of the normal lines, in voxel edges." class="setting-field">
+                        <Bindings>
+                            <ui:DataBinding property="value" data-source-path="NormalLineLength" binding-mode="TwoWay"/>
+                        </Bindings>
+                    </ui:Slider>
+                    <ui:FloatField name="intensity-field" label="Intensity" is-delayed="true" tooltip="Linear display multiplier for irradiance/radiance modes (1 = neutral). Occupancy mode ignores it." tabindex="-1" class="setting-field">
+                        <Bindings>
+                            <ui:DataBinding property="value" data-source-path="Intensity" binding-mode="TwoWay"/>
+                        </Bindings>
+                    </ui:FloatField>
+                    <ui:FloatField name="min-luminance-field" label="Min Luminance" is-delayed="true" tooltip="Voxels dimmer than this are hidden in irradiance/radiance modes." tabindex="-1" class="setting-field">
+                        <Bindings>
+                            <ui:DataBinding property="value" data-source-path="MinLuminance" binding-mode="TwoWay"/>
+                        </Bindings>
+                    </ui:FloatField>
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

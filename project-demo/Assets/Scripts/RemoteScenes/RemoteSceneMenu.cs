@@ -29,15 +29,15 @@ namespace Lotec.Demo {
             const float width = 300f;
             const float buttonWidth = 160f;
 
-            // Anchor to the top-right. Coordinates are in the pre-scale space, so the right edge is
+            // Anchor to the top-center. Coordinates are in the pre-scale space, so center on
             // Screen.width / _uiScale.
-            float right = Screen.width / _uiScale;
+            float screenWidth = Screen.width / _uiScale;
 
-            if (GUI.Button(new Rect(right - pad - buttonWidth, pad, buttonWidth, 28), _open ? "Remote Scenes  ▲" : "Remote Scenes  ▼"))
+            if (GUI.Button(new Rect((screenWidth - buttonWidth) * 0.5f, pad, buttonWidth, 28), _open ? "Remote Scenes  ▲" : "Remote Scenes  ▼"))
                 _open = !_open;
 
             if (_open) {
-                GUILayout.BeginArea(new Rect(right - pad - width, pad + 32, width, Screen.height / _uiScale - pad * 2 - 32), GUI.skin.box);
+                GUILayout.BeginArea(new Rect((screenWidth - width) * 0.5f, pad + 32, width, Screen.height / _uiScale - pad * 2 - 32), GUI.skin.box);
                 DrawPanel();
                 GUILayout.EndArea();
             }

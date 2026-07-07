@@ -16,6 +16,7 @@ namespace Lotec.Lighting.Samples {
         Mouse _mouse;
         float _xRotation;
         float _yRotation;
+        bool _uiFolded;
 
         void Awake() {
             InputSystem.onDeviceChange += HandleDeviceChange;
@@ -35,12 +36,14 @@ namespace Lotec.Lighting.Samples {
         }
 
         void Update() {
-            if (LightControllerUi.IsTextInputFocused) {
+            if (LightControllerUi.IsTextInputFocused || BufferGiDebugUi.IsTextInputFocused) {
                 return;
             }
 
             if (_keyboard.hKey.wasPressedThisFrame) {
-                LightControllerUi.ToggleVisibility();
+                _uiFolded = !_uiFolded;
+                LightControllerUi.SetFolded(_uiFolded);
+                BufferGiDebugUi.SetFolded(_uiFolded);
             }
 
             if (_keyboard.backquoteKey.wasPressedThisFrame) {
