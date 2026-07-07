@@ -583,8 +583,7 @@ namespace Lotec.Lighting {
             if (fine == null || (HasCoarse && coarse == null)) {
                 if (!_warnedBakeAssetMismatch) {
                     _warnedBakeAssetMismatch = true;
-                    string missing = fine == null ? "the active fine volume" : "the coarse field";
-                    Debug.LogWarning($"Buffer GI has no matching disk bake for {missing} (bounds/normal-source changed, or it wasn't baked); voxelizing the scene at runtime instead.", this);
+                    LogBakeMismatchDiagnostics(fine, coarse);
                 }
                 return false;
             }
@@ -616,6 +615,39 @@ namespace Lotec.Lighting {
                 && a.material != null && a.material.Length == VoxelCount
                 && a.surface != null && a.surface.Length == VoxelCount
                 && a.bakedNormals == _bakedNormals;
+        }
+
+        // One-shot dump of WHY no disk bake matched, so a bundle/build discrepancy (unresolved
+        // reference, empty arrays after serialization, bounds/normal drift) can be read straight from
+        // the Console. Prints the active volume's expectations, then each candidate asset's actual
+        // fields and the two gates it must pass: BakeAssetValid (structure) and bounds match.
+        void LogBakeMismatchDiagnostics(BufferGiBakeAsset fine, BufferGiBakeAsset coarse) {
+            var sb = new System.Text.StringBuilder();
+            string missing = fine == null ? "the active FINE volume" : "the COARSE field";
+            sb.AppendLine($"Buffer GI: no matching disk bake for {missing}; voxelizing at runtime instead. Diagnostics:");
+            sb.AppendLine($"  expected: grid={Grid} version={BufferGiBakeAsset.Version} VoxelCount={VoxelCount} bakedNormals={_bakedNormals}");
+            sb.AppendLine($"  expected FINE   origin={GridOrigin.ToString("F4")} size={GridSize.ToString("F4")}");
+            sb.AppendLine($"  HasCoarse={HasCoarse}" + (HasCoarse ? $" expected COARSE origin={CoarseOrigin.ToString("F4")} size={CoarseSize.ToString("F4")}" : ""));
+            sb.AppendLine($"  _bakeAssets.Count={(_bakeAssets == null ? -1 : _bakeAssets.Count)}");
+            if (_bakeAssets != null) {
+                for (int i = 0; i < _bakeAssets.Count; i++) {
+                    BufferGiBakeAsset a = _bakeAssets[i];
+                    if (a == null) {
+                        sb.AppendLine($"  [{i}] <null> - reference did not resolve (asset not in the bundle?).");
+                        continue;
+                    }
+                    Vector3 eo = a.isCoarse ? CoarseOrigin : GridOrigin;
+                    Vector3 es = a.isCoarse ? CoarseSize : GridSize;
+                    bool boundsMatch = NearlyEqual(a.origin, eo) && NearlyEqual(a.size, es) && (!a.isCoarse || HasCoarse);
+                    sb.AppendLine(
+                        $"  [{i}] '{a.name}' isCoarse={a.isCoarse} version={a.version} grid={a.grid} " +
+                        $"material={(a.material == null ? "null" : a.material.Length.ToString())} " +
+                        $"surface={(a.surface == null ? "null" : a.surface.Length.ToString())} " +
+                        $"bakedNormals={a.bakedNormals} origin={a.origin.ToString("F4")} size={a.size.ToString("F4")} " +
+                        $"=> valid={BakeAssetValid(a)} boundsMatch={boundsMatch}");
+                }
+            }
+            Debug.LogWarning(sb.ToString(), this);
         }
 
         // Bounds must match within a millimetre: the baked voxel content is only valid for the exact

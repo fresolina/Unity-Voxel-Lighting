@@ -68,6 +68,10 @@ crashlytics-build.properties
 # Packed Addressables
 /[Aa]ssets/[Aa]ddressable[Aa]ssets[Dd]ata/*/*.bin*
 
+# Remote Addressables build output (uploaded to Cloudflare, not committed - can be 100s of MB)
+/[Ss]erver[Dd]ata/
+/[Aa]ssets/CloudScenes/
+
 # Temporary auto-generated Android Assets
 /[Aa]ssets/[Ss]treamingAssets/aa.meta
 /[Aa]ssets/[Ss]treamingAssets/aa/*

@@ -28,7 +28,8 @@ namespace Lotec.Lighting {
         /// mutate the getter's struct copy and be lost.</summary>
         public void Recompute() {
             if (_root == null) return;
-            _bounds = new Bounds();
+            Bounds computed = new Bounds();
+            bool found = false;
             MeshRenderer[] meshRenderers = _root.GetComponentsInChildren<MeshRenderer>();
             foreach (MeshRenderer mr in meshRenderers) {
                 if (mr == null)
@@ -39,12 +40,20 @@ namespace Lotec.Lighting {
                 if (mf == null || mf.sharedMesh == null)
                     continue;
 
-                if (_bounds.size == Vector3.zero) {
-                    _bounds = mr.bounds;
+                if (!found) {
+                    computed = mr.bounds;
+                    found = true;
                 } else {
-                    _bounds.Encapsulate(mr.bounds);
+                    computed.Encapsulate(mr.bounds);
                 }
             }
+
+            // Only overwrite the serialized bounds when we actually found eligible geometry. Otherwise
+            // keep the previously baked value: IsBakeEligible checks GameObject.isStatic, an EDITOR-ONLY
+            // flag that reads false at build/runtime, so a recompute triggered while packing a player /
+            // Addressables bundle would otherwise zero the bounds that were correct in the editor.
+            if (found)
+                _bounds = computed;
         }
 
         /// <summary>Whether a renderer participates in bounds and bakes/voxelization. One shared
