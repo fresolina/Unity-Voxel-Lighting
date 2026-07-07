@@ -32,6 +32,13 @@ namespace Lotec.Lighting.Editor {
             var gi = target as BufferGiUpdater;
             if (gi == null) return;
 
+            // Force a clean reinit before capturing. In edit mode the GPU buffers can be left over
+            // from a previous scene/volume (they still pass IsValid, so EnsureInitialized keeps them),
+            // and capturing against that stale state throws. Releasing here makes CaptureFieldToAsset's
+            // EnsureInitialized reallocate + re-rasterize from scratch - the same clean slate entering
+            // Play gives via its domain reload, so baking no longer needs a Play round-trip first.
+            gi.ReleaseBuffers();
+
             // Bake folder is scene-adjacent; derive it from any volume in the scene.
             VoxelVolume folderVolume = gi.Volume != null ? gi.Volume : FindAnyDetailedVolume(gi);
             if (folderVolume == null) {

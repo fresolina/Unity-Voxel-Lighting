@@ -592,8 +592,8 @@ namespace Lotec.Lighting {
             // Assemble the full concatenated buffers on the CPU (each field's slice into its slot; the
             // rest, e.g. an absent coarse field, stays zero) and upload in one whole-buffer SetData.
             // Whole-buffer transfers only - the sliced 4-arg SetData/GetData overloads are avoided.
-            if (_uploadMaterial == null) _uploadMaterial = new uint[TotalVoxels];
-            if (_uploadSurface == null) _uploadSurface = new uint[TotalVoxels];
+            if (_uploadMaterial == null || _uploadMaterial.Length != TotalVoxels) _uploadMaterial = new uint[TotalVoxels];
+            if (_uploadSurface == null || _uploadSurface.Length != TotalVoxels) _uploadSurface = new uint[TotalVoxels];
             System.Array.Clear(_uploadMaterial, 0, TotalVoxels);
             System.Array.Clear(_uploadSurface, 0, TotalVoxels);
             CopyFieldSlice(fine, FineField * VoxelCount);
@@ -651,7 +651,7 @@ namespace Lotec.Lighting {
             if (asset.material == null || asset.material.Length != VoxelCount) asset.material = new uint[VoxelCount];
             if (asset.surface == null || asset.surface.Length != VoxelCount) asset.surface = new uint[VoxelCount];
             // Whole-buffer readback + managed slice copy (avoids the sliced 4-arg GetData overload).
-            if (_fullReadback == null) _fullReadback = new uint[TotalVoxels];
+            if (_fullReadback == null || _fullReadback.Length != TotalVoxels) _fullReadback = new uint[TotalVoxels];
             _materialBuffer.GetData(_fullReadback);
             System.Array.Copy(_fullReadback, fieldOffset, asset.material, 0, VoxelCount);
             _surfaceBuffer.GetData(_fullReadback);
@@ -688,7 +688,7 @@ namespace Lotec.Lighting {
             if (meshNormals) _voxelizeMaterial.EnableKeyword(BakedNormalsKeyword);
             else _voxelizeMaterial.DisableKeyword(BakedNormalsKeyword);
 
-            if (_materialClear == null) _materialClear = new uint[TotalVoxels];
+            if (_materialClear == null || _materialClear.Length != TotalVoxels) _materialClear = new uint[TotalVoxels];
             _materialBuffer.SetData(_materialClear);
             _surfaceBuffer.SetData(_materialClear);
 
@@ -722,7 +722,7 @@ namespace Lotec.Lighting {
             else _voxelizeMaterial.DisableKeyword(BakedNormalsKeyword);
 
             // Rasterization only writes covered voxels, so clear all field slices to empty first.
-            if (_materialClear == null) _materialClear = new uint[TotalVoxels];
+            if (_materialClear == null || _materialClear.Length != TotalVoxels) _materialClear = new uint[TotalVoxels];
             _materialBuffer.SetData(_materialClear);
             // Clear _Surface (zeros = a valid default normal via BgiSurfaceNormal) so a solid voxel a
             // degenerate-normal triangle leaves unwritten (mesh mode) reads a deterministic value.
