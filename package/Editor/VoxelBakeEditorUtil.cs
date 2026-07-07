@@ -63,36 +63,48 @@ namespace Lotec.Lighting.Editor {
             Debug.Log($"Voxel lighting bake assets saved for '{volume.gameObject.name}'.", context);
         }
 
-        static string GetBakeFolder(VoxelVolume volume) {
-            if (volume == null) {
-                Debug.LogError("Target volume is null.");
-                return null;
+        internal static bool TryGetSceneFolderPath(GameObject go, out string folder, out string sceneName, out string scenePath) {
+            folder = null;
+            sceneName = null;
+            scenePath = null;
+            if (go == null) {
+                Debug.LogError("Target GameObject is null.");
+                return false;
             }
 
-            Scene scene = volume.gameObject.scene;
+            Scene scene = go.scene;
             if (!scene.IsValid() || string.IsNullOrEmpty(scene.path)) {
-                Debug.LogError("Save the scene before baking voxel lighting assets.", volume);
-                return null;
+                Debug.LogError("Save the scene before baking voxel lighting assets.", go);
+                return false;
             }
 
-            string scenePath = NormalizeAssetPath(scene.path);
+            scenePath = NormalizeAssetPath(scene.path);
             string sceneFolder = NormalizeAssetPath(System.IO.Path.GetDirectoryName(scenePath));
-            string sceneName = System.IO.Path.GetFileNameWithoutExtension(scenePath);
+            sceneName = System.IO.Path.GetFileNameWithoutExtension(scenePath);
             if (string.IsNullOrEmpty(sceneFolder) || string.IsNullOrEmpty(sceneName)) {
-                Debug.LogError($"Could not determine bake folder from scene path '{scenePath}'.", volume);
-                return null;
+                Debug.LogError($"Could not determine bake folder from scene path '{scenePath}'.", go);
+                return false;
             }
 
-            string bakeFolder = NormalizeAssetPath(System.IO.Path.Combine(sceneFolder, $"{sceneName}-VoxelLighting-{volume.gameObject.name}"));
-            if (TryGetReadonlyPackageFallback(scenePath, sceneName, out string fallbackPath, out string warning)) {
-                Debug.LogWarning(warning, volume);
-                return fallbackPath;
-            }
-
-            return RemapHiddenSamplesFolder(bakeFolder);
+            folder = sceneFolder;
+            return !string.IsNullOrEmpty(folder);
         }
 
-        static T SaveAsset<T>(T asset, string path, string assetType) where T : Object {
+        internal static string GetSceneBakeFolder(GameObject go, string suffix) {
+            if (!TryGetSceneFolderPath(go, out string sceneFolder, out string sceneName, out string scenePath)) {
+                return null;
+            }
+            // If scene is in a package, move bake folder to Assets/ so it is writable.
+            if (TryGetReadonlyPackageFallback(scenePath, sceneName, out string fallbackPath, out string warning)) {
+                Debug.LogWarning(warning, go);
+                return fallbackPath;
+            }
+            return NormalizeAssetPath(System.IO.Path.Combine(sceneFolder, $"{sceneName}{suffix}"));
+        }
+
+        internal static string GetBakeFolder(VoxelVolume volume) => GetSceneBakeFolder(volume.gameObject, $"-VoxelLighting-{volume.gameObject.name}");
+
+        internal static T SaveAsset<T>(T asset, string path, string assetType) where T : Object {
             if (asset == null || string.IsNullOrEmpty(path))
                 return asset;
 

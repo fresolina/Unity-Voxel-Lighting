@@ -4173,13 +4173,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 18936aa31b88dfa4fb96ecb2445c73f5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiUpdater
-  _computeShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
-  _voxelizeShader: {fileID: 4800000, guid: fb19bf6e7b7d7e24bb740879f668a9bd, type: 3}
-  _maxSamples: 500
+  _maxSamples: 512
   _samplesPerFrame: 1
   _confidenceCurve: 3
   _continuousGi: 0
-  _giFireflyClamp: 10
+  _giFireflyClamp: 8
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
   _reachBoost: 1
   _bakedNormals: 1
@@ -4194,7 +4192,16 @@ MonoBehaviour:
     _max: 4
     _adaptationSpeed: 2
     _measureRadius: 3
-  _coarseBounds: {fileID: 896086983}
+  _computeShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
+  _voxelizeShader: {fileID: 4800000, guid: fb19bf6e7b7d7e24bb740879f668a9bd, type: 3}
+  _coarseField: {fileID: 896086983}
+  _detailedFields:
+  - {fileID: 772833395}
+  - {fileID: 1127919675}
+  _bakeAssets:
+  - {fileID: 11400000, guid: 040522d6556740f4ca5a6b8add213050, type: 2}
+  - {fileID: 11400000, guid: 3535aa9628d86b3498c73208146536f8, type: 2}
+  - {fileID: 11400000, guid: 31ddce8a157c5794da1f9147fa30c0d7, type: 2}
 --- !u!114 &1437948850
 MonoBehaviour:
   m_ObjectHideFlags: 0

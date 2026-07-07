@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -34,11 +35,6 @@ namespace Lotec.Lighting {
 
         public static BufferGiUpdater Instance { get; private set; }
 
-        [SerializeField] ComputeShader _computeShader;
-        [Tooltip("Shader 'Hidden/Lotec/BufferGiVoxelize' - GPU 3-axis rasterizer that voxelizes " +
-                 "scene meshes into the occupancy/albedo buffer.")]
-        [SerializeField] Shader _voxelizeShader;
-
         [Header("Solve")]
         [Tooltip("Total ray budget per voxel (quality): the field is a progressive average that " +
                  "accumulates rays until it reaches this many, then the solve idles. Quality depends " +
@@ -72,7 +68,7 @@ namespace Lotec.Lighting {
                  "buffer, never the gradient). On: exact MESH normals, no wall thickening, so hollow/" +
                  "thin walls keep correct normals. Off: thicken walls 2 voxels + bake the occupancy-" +
                  "gradient normal. Changing it re-bakes.")]
-        [SerializeField] bool _bakedNormals;
+        [SerializeField] bool _bakedNormals = true;
         [Tooltip("Strength of the baked static ambient occlusion (0 = off). Darkens the GI in concave " +
                  "corners and near-contact gaps (e.g. under a hovering object) using each surface " +
                  "voxel's precomputed openness - restores contact shadowing the omnidirectional gather " +
@@ -93,11 +89,33 @@ namespace Lotec.Lighting {
                  "whenever GI is on. Set explicitly so a stale value can't darken the image.")]
         [SerializeField] AutoExposure _exposureControl = new AutoExposure();
 
-        [Header("Coarse field")]
+        [Header("Setup")]
+        [SerializeField] ComputeShader _computeShader;
+        [Tooltip("Shader 'Hidden/Lotec/BufferGiVoxelize' - GPU 3-axis rasterizer that voxelizes " +
+                 "scene meshes into the occupancy/albedo buffer.")]
+        [SerializeField] Shader _voxelizeShader;
         [Tooltip("MeshBounds covering the whole scene, used as the coarse (low-detail, far) GI " +
                  "field - a 32^3 grid over its larger bounds (bigger voxels). Should be larger " +
                  "than the active fine volume. Leave null for fine only.")]
-        [SerializeField] MeshBounds _coarseBounds;
+        [SerializeField] MeshBounds _coarseField;
+        [Tooltip("Fine 'detailed' fields to bake to disk (the inspector's 'Bake Voxelization To Disk' " +
+                 "button bakes the coarse field + each of these). Each should sit on a GameObject that " +
+                 "also has a VoxelVolume (its padded bounds are the runtime fine grid). Reset auto-fills " +
+                 "this with every MeshBounds in the scene except the coarse one.")]
+        [SerializeField] List<MeshBounds> _detailedFields = new List<MeshBounds>();
+        [Tooltip("Voxelizations baked to disk (one per field: coarse + each detailed field), set by " +
+                 "the 'Bake Voxelization To Disk' button. At load the coarse asset + the asset matching " +
+                 "the active fine volume are uploaded instead of re-rasterizing the scene meshes; on a " +
+                 "mismatch (moved/rescaled bounds, changed normal source) it warns and falls back to " +
+                 "runtime voxelization.")]
+        [SerializeField] List<BufferGiBakeAsset> _bakeAssets = new List<BufferGiBakeAsset>();
+
+        /// <summary>Fine fields the editor bake button voxelizes (in addition to the coarse field).</summary>
+        public IReadOnlyList<MeshBounds> DetailedFields => _detailedFields;
+        /// <summary>Coarse-field MeshBounds (null = fine only), for the editor bake button.</summary>
+        public MeshBounds CoarseBounds => _coarseField;
+        /// <summary>Disk bakes uploaded instead of runtime voxelization; the editor bake button rewrites this.</summary>
+        public List<BufferGiBakeAsset> BakeAssets { get => _bakeAssets; set => _bakeAssets = value; }
 
         ComputeBuffer _materialBuffer;
         ComputeBuffer _radianceBuffer;
@@ -114,7 +132,10 @@ namespace Lotec.Lighting {
         // volume's own border, so the fine grid uses them as-is.
         VoxelVolume _volume;
         Material _voxelizeMaterial;
-        uint[] _materialClear;
+        uint[] _materialClear;   // TotalVoxels zeros (whole-buffer clear)
+        uint[] _fullReadback;    // TotalVoxels scratch for whole-buffer GetData during per-field capture
+        uint[] _uploadMaterial;  // TotalVoxels scratch assembled from field assets, uploaded at load
+        uint[] _uploadSurface;   // TotalVoxels scratch assembled from field assets, uploaded at load
         int _clearKernel = -1;
         int _injectKernel = -1;
         int _gatherKernel = -1;
@@ -129,6 +150,7 @@ namespace Lotec.Lighting {
         const int AirDistancePasses = 5;
         bool _resetFineField;
         bool _hasLoggedMissingReferences;
+        bool _warnedBakeAssetMismatch; // warn once per change, not per voxelize attempt
         // Progressive accumulation in SAMPLES (rays): _collectedSamples = total rays gathered since the last
         // change (0 = just changed), accumulated by samplesPerFrame each solve and capped at _maxSamples
         // (the ray budget). Quality depends on total rays, not frames - samplesPerFrame just spends the
@@ -180,12 +202,12 @@ namespace Lotec.Lighting {
         const float CoarsePaddingVoxels = 2f;
         Bounds CoarseWorldBounds {
             get {
-                Bounds b = _coarseBounds.Bounds;
+                Bounds b = _coarseField.Bounds;
                 b.size *= Grid / (Grid - 2f * CoarsePaddingVoxels);
                 return b;
             }
         }
-        public bool HasCoarse => _coarseBounds != null;
+        public bool HasCoarse => _coarseField != null;
         public Vector3 CoarseOrigin => HasCoarse ? CoarseWorldBounds.min : GridOrigin;
         public Vector3 CoarseSize => HasCoarse ? CoarseWorldBounds.size : GridSize;
         public Vector3 CoarseVoxelSize => CoarseSize / Grid;
@@ -291,6 +313,21 @@ namespace Lotec.Lighting {
             // the accumulation so the change settles into the (possibly idle) field.
             _materialBaked = false;
             _collectedSamples = 0;
+            _warnedBakeAssetMismatch = false; // settings changed: re-evaluate (and re-report) the bake asset
+        }
+
+        // Editor: prefill the detailed-field list with every MeshBounds in the scene except the coarse
+        // one, so a freshly added component already lists the fine fields to bake.
+        void Reset() {
+            _detailedFields.Clear();
+#if UNITY_2023_1_OR_NEWER
+            MeshBounds[] all = FindObjectsByType<MeshBounds>(FindObjectsSortMode.None);
+#else
+            MeshBounds[] all = FindObjectsOfType<MeshBounds>();
+#endif
+            foreach (MeshBounds mb in all) {
+                if (mb != null && mb != _coarseField) _detailedFields.Add(mb);
+            }
         }
 
         // Wake the solver when the sun changes. Local lights are intentionally excluded (GI may drop
@@ -427,7 +464,11 @@ namespace Lotec.Lighting {
         }
 
         void EnsureInitialized() {
-            if (_materialBuffer != null && _radianceBuffer != null && _irradianceBuffer != null) {
+            // IsValid too, not just non-null: after a domain reload the managed field can survive while
+            // the native buffer is gone, and the early-return would then keep a dead buffer forever.
+            if (_materialBuffer != null && _materialBuffer.IsValid()
+                && _radianceBuffer != null && _radianceBuffer.IsValid()
+                && _irradianceBuffer != null && _irradianceBuffer.IsValid()) {
                 return;
             }
             ReleaseBuffers();
@@ -501,11 +542,161 @@ namespace Lotec.Lighting {
             _computeShader.Dispatch(_initFineKernel, Groups, 1, 1);
         }
 
+        // Fill the material/surface slices: upload the disk bakes when the coarse + active-fine assets
+        // are present and match, else rasterize the scene geometry. Both paths end in the same GPU
+        // derive passes.
+        public void Voxelize() {
+            if (_voxelizeShader == null || _materialBuffer == null) return;
+            if (TryLoadBakeAssets()) return;
+            VoxelizeScene();
+        }
+
+        // Upload the disk-baked slices instead of rasterizing: the coarse asset into the coarse slot +
+        // the asset matching the active fine volume into the fine slot. Only the RASTER products are
+        // stored; the derive passes re-run on GPU, so the assets survive derive-kernel changes. Needs
+        // BOTH the fine match and (when a coarse field exists) the coarse match, else falls back.
+        bool TryLoadBakeAssets() {
+            if (_bakeAssets == null || _bakeAssets.Count == 0) return false;
+
+            BufferGiBakeAsset coarse = null, fine = null;
+            foreach (BufferGiBakeAsset a in _bakeAssets) {
+                if (a == null || !BakeAssetValid(a)) continue;
+                if (a.isCoarse) {
+                    if (HasCoarse && NearlyEqual(a.origin, CoarseOrigin) && NearlyEqual(a.size, CoarseSize)) coarse = a;
+                } else if (NearlyEqual(a.origin, GridOrigin) && NearlyEqual(a.size, GridSize)) {
+                    fine = a;
+                }
+            }
+
+            if (fine == null || (HasCoarse && coarse == null)) {
+                if (!_warnedBakeAssetMismatch) {
+                    _warnedBakeAssetMismatch = true;
+                    string missing = fine == null ? "the active fine volume" : "the coarse field";
+                    Debug.LogWarning($"Buffer GI has no matching disk bake for {missing} (bounds/normal-source changed, or it wasn't baked); voxelizing the scene at runtime instead.", this);
+                }
+                return false;
+            }
+
+            // Assemble the full concatenated buffers on the CPU (each field's slice into its slot; the
+            // rest, e.g. an absent coarse field, stays zero) and upload in one whole-buffer SetData.
+            // Whole-buffer transfers only - the sliced 4-arg SetData/GetData overloads are avoided.
+            if (_uploadMaterial == null) _uploadMaterial = new uint[TotalVoxels];
+            if (_uploadSurface == null) _uploadSurface = new uint[TotalVoxels];
+            System.Array.Clear(_uploadMaterial, 0, TotalVoxels);
+            System.Array.Clear(_uploadSurface, 0, TotalVoxels);
+            CopyFieldSlice(fine, FineField * VoxelCount);
+            if (coarse != null) CopyFieldSlice(coarse, CoarseField * VoxelCount);
+            _materialBuffer.SetData(_uploadMaterial);
+            _surfaceBuffer.SetData(_uploadSurface); // mesh-mode normals; derive rebuilds the rest
+            RunDerivePasses();
+            return true;
+        }
+
+        // Place one field asset's VoxelCount-word slices into the upload scratch at the field slot.
+        void CopyFieldSlice(BufferGiBakeAsset a, int fieldOffset) {
+            System.Array.Copy(a.material, 0, _uploadMaterial, fieldOffset, VoxelCount);
+            System.Array.Copy(a.surface, 0, _uploadSurface, fieldOffset, VoxelCount);
+        }
+
+        // Structurally usable (right version/grid/size/normal-source); bounds are matched separately.
+        bool BakeAssetValid(BufferGiBakeAsset a) {
+            return a.version == BufferGiBakeAsset.Version && a.grid == Grid
+                && a.material != null && a.material.Length == VoxelCount
+                && a.surface != null && a.surface.Length == VoxelCount
+                && a.bakedNormals == _bakedNormals;
+        }
+
+        // Bounds must match within a millimetre: the baked voxel content is only valid for the exact
+        // grid mapping it was rasterized against.
+        static bool NearlyEqual(Vector3 a, Vector3 b) => (a - b).sqrMagnitude < 1e-6f;
+
+        // Editor-side capture of ONE field: rasterize just this field's geometry into its slice and
+        // read the raster products + grid metadata back into the asset (no derive - that re-runs at
+        // load). Synchronous GPU readback; meant for the editor bake button, not per-frame use.
+        // A detailed field's runtime grid is its sibling VoxelVolume's padded bounds, so pass those.
+        public bool CaptureFieldToAsset(BufferGiBakeAsset asset, bool isCoarse, Transform root, Vector3 origin, Vector3 size) {
+            if (asset == null) return false;
+            if (_computeShader == null || _voxelizeShader == null) {
+                Debug.LogError("Buffer GI can't capture a field bake: assign the compute + voxelize shaders first.", this);
+                return false;
+            }
+            if (root == null) {
+                Debug.LogError("Buffer GI can't capture a field bake: the field has no mesh root.", this);
+                return false;
+            }
+            // Force valid buffers up front - the editor pump may not have run EnsureInitialized yet
+            // (freshly enabled, or just after a domain reload), and RasterizeFieldSlice needs them.
+            EnsureInitialized();
+            int fieldOffset = (isCoarse ? CoarseField : FineField) * VoxelCount;
+            RasterizeFieldSlice(root, origin, size, fieldOffset);
+
+            asset.version = BufferGiBakeAsset.Version;
+            asset.grid = Grid;
+            asset.isCoarse = isCoarse;
+            asset.bakedNormals = _bakedNormals;
+            asset.origin = origin;
+            asset.size = size;
+            if (asset.material == null || asset.material.Length != VoxelCount) asset.material = new uint[VoxelCount];
+            if (asset.surface == null || asset.surface.Length != VoxelCount) asset.surface = new uint[VoxelCount];
+            // Whole-buffer readback + managed slice copy (avoids the sliced 4-arg GetData overload).
+            if (_fullReadback == null) _fullReadback = new uint[TotalVoxels];
+            _materialBuffer.GetData(_fullReadback);
+            System.Array.Copy(_fullReadback, fieldOffset, asset.material, 0, VoxelCount);
+            _surfaceBuffer.GetData(_fullReadback);
+            System.Array.Copy(_fullReadback, fieldOffset, asset.surface, 0, VoxelCount);
+            return true;
+        }
+
+        // Resolve a detailed field's voxelize inputs: geometry root (the MeshBounds root) + the runtime
+        // fine grid (its sibling VoxelVolume's padded, voxel-aligned bounds - what the fragment reads,
+        // so the bake must match it). Returns false (with a warning) if there's no VoxelVolume sibling.
+        public bool TryGetDetailedFieldGrid(MeshBounds field, out Transform root, out Vector3 origin, out Vector3 size) {
+            root = null; origin = Vector3.zero; size = Vector3.one;
+            if (field == null) return false;
+            VoxelVolume vv = field.GetComponent<VoxelVolume>();
+            if (vv == null) {
+                Debug.LogWarning($"Buffer GI detailed field '{field.name}' has no VoxelVolume sibling; skipping (its runtime grid is undefined).", field);
+                return false;
+            }
+            root = field.Root != null ? field.Root : vv.BakeRoot;
+            origin = vv.Bounds.min;
+            size = vv.Bounds.size;
+            return root != null;
+        }
+
+        // Rasterize one field's geometry into its buffer slice. Clears the WHOLE buffer first (whole-
+        // buffer SetData only; rasterization then writes just this field's covered voxels). The other
+        // field's transient content doesn't matter - capture reads back only this field's slice, and
+        // the runtime reload reassembles both fields afterwards. Shared setup with VoxelizeScene.
+        void RasterizeFieldSlice(Transform root, Vector3 origin, Vector3 size, int fieldOffset) {
+            if (_voxelizeMaterial == null) {
+                _voxelizeMaterial = new Material(_voxelizeShader) { hideFlags = HideFlags.HideAndDontSave };
+            }
+            bool meshNormals = _bakedNormals;
+            if (meshNormals) _voxelizeMaterial.EnableKeyword(BakedNormalsKeyword);
+            else _voxelizeMaterial.DisableKeyword(BakedNormalsKeyword);
+
+            if (_materialClear == null) _materialClear = new uint[TotalVoxels];
+            _materialBuffer.SetData(_materialClear);
+            _surfaceBuffer.SetData(_materialClear);
+
+            RenderTexture dummy = RenderTexture.GetTemporary(Grid, Grid, 0, RenderTextureFormat.R8, RenderTextureReadWrite.Linear);
+            CommandBuffer cmd = new CommandBuffer { name = "BufferGI Voxelize Field" };
+            cmd.SetRenderTarget(dummy);
+            cmd.SetViewProjectionMatrices(Matrix4x4.identity, Matrix4x4.identity);
+            cmd.SetRandomWriteTarget(1, _materialBuffer);
+            if (meshNormals) cmd.SetRandomWriteTarget(2, _surfaceBuffer);
+            VoxelizeFieldInto(cmd, root, origin, size, size / Grid, fieldOffset);
+            cmd.ClearRandomWriteTargets();
+            Graphics.ExecuteCommandBuffer(cmd);
+            cmd.Release();
+            RenderTexture.ReleaseTemporary(dummy);
+        }
+
         // GPU 3-axis rasterization of the volume's mesh geometry into each field's material slice.
         // One-shot (geometry is static): clears the whole buffer, then rasterizes the fine and coarse
         // fields, each into its own slice with its own grid; each fragment writes via a fragment UAV.
-        public void Voxelize() {
-            if (_voxelizeShader == null || _materialBuffer == null) return;
+        void VoxelizeScene() {
             Transform fineRoot = _volume.BakeRoot;
             if (fineRoot == null) { _materialBaked = true; return; }
 
@@ -536,7 +727,7 @@ namespace Lotec.Lighting {
             // Each field rasterizes its OWN volume's geometry into its slice (coarse = a separate,
             // scene-covering MeshBounds with its own root).
             VoxelizeFieldInto(cmd, fineRoot, GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
-            Transform coarseRoot = _coarseBounds != null ? _coarseBounds.Root : null;
+            Transform coarseRoot = _coarseField != null ? _coarseField.Root : null;
             if (coarseRoot != null) {
                 VoxelizeFieldInto(cmd, coarseRoot, CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount);
             }
@@ -546,11 +737,16 @@ namespace Lotec.Lighting {
             cmd.Release();
             RenderTexture.ReleaseTemporary(dummy);
 
-            // Bake-time derive passes (both fields; un-voxelized coarse slice packs to zeros):
-            // 1) occupancy bitfield from _Material, 2) surface word - in gradient mode CSBuildSurface
-            // fills the normal from the now-complete occupancy (mesh mode already wrote _Surface); it
-            // also seeds the air-distance field, 3) relax the air-distance transform to convergence.
-            _computeShader.SetInt(s_computeGradient, meshNormals ? 0 : 1);
+            RunDerivePasses();
+        }
+
+        // Bake-time derive passes (both fields; un-voxelized coarse slice packs to zeros):
+        // 1) occupancy bitfield from _Material, 2) surface word - in gradient mode CSBuildSurface
+        // fills the normal from the now-complete occupancy (mesh mode: _Surface already holds it,
+        // written by the voxelizer or uploaded from the bake asset); it also seeds the air-distance
+        // field, 3) relax the air-distance transform to convergence. Shared by both voxelize paths.
+        void RunDerivePasses() {
+            _computeShader.SetInt(s_computeGradient, _bakedNormals ? 0 : 1);
             for (int f = 0; f < FieldCount; f++) BuildOccupancy(f * VoxelCount);
             for (int f = 0; f < FieldCount; f++) BuildSurface(f * VoxelCount);
             for (int f = 0; f < FieldCount; f++) BuildAirDistance(f * VoxelCount);
