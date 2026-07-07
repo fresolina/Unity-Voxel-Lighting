@@ -3,7 +3,6 @@ using UnityEngine.InputSystem;
 
 namespace Lotec.Lighting.Samples {
     public class LightController : MonoBehaviour {
-        [SerializeField] Light _sunLight;
         [SerializeField] Light _flashlight;
         [SerializeField] Light _candle;
         [SerializeField] float _mouseRotationSpeed = 120f;
@@ -12,6 +11,7 @@ namespace Lotec.Lighting.Samples {
         public bool FlashlightEnabled => _flashlight.enabled;
         public bool CandleEnabled => _candle.enabled;
 
+        Light _sunLight;
         Keyboard _keyboard;
         Mouse _mouse;
         float _xRotation;
@@ -59,7 +59,11 @@ namespace Lotec.Lighting.Samples {
                 SetEnabledLightIntensity(targetIntensity);
             }
 
-            if (IsCtrlHeld()) {
+            if (_sunLight == null) {
+                _sunLight = RenderSettings.sun;
+            }
+
+            if (IsCtrlHeld() && _sunLight != null) {
                 Vector2 mouseDelta = ReadMouseDelta();
                 _xRotation += mouseDelta.x * _mouseRotationSpeed * Time.deltaTime;
                 _yRotation += mouseDelta.y * _mouseRotationSpeed * Time.deltaTime;
@@ -82,10 +86,6 @@ namespace Lotec.Lighting.Samples {
         }
 
         void EnsureSerializedReferences() {
-            if (_sunLight == null) {
-                _sunLight = RenderSettings.sun;
-            }
-
             if (_flashlight == null) {
                 _flashlight = FindLight(LightType.Spot);
             }
