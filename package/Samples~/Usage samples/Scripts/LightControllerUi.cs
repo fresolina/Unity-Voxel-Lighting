@@ -68,15 +68,15 @@ namespace Lotec.Lighting.Samples
 
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
-        public static void ToggleVisibility()
+        /// <summary>Fold or unfold this panel (the header bar stays visible). Driven by the H hotkey.</summary>
+        public static void SetFolded(bool folded)
         {
-            if (s_instance == null || s_instance._document.rootVisualElement == null)
+            if (s_instance == null || s_instance._document == null || s_instance._document.rootVisualElement == null)
             {
                 return;
             }
 
-            VisualElement root = s_instance._document.rootVisualElement;
-            root.visible = !root.visible;
+            FoldoutHeader.SetFolded(s_instance._document.rootVisualElement, folded);
         }
 
         public event EventHandler<BindablePropertyChangedEventArgs> propertyChanged;
@@ -260,6 +260,8 @@ namespace Lotec.Lighting.Samples
 
             _boundRoot = root;
             _boundRoot.dataSource = this;
+
+            FoldoutHeader.Setup(root);
 
             // Apply stylesheet to panel root so it also covers dropdown popups.
             if (root.styleSheets.count > 0)

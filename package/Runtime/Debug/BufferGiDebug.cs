@@ -29,9 +29,8 @@ namespace Lotec.Lighting {
         [Tooltip("Draw every Nth voxel along each axis (1 = all).")]
         [Min(1)] public int stride = 1;
         [Range(0.1f, 1f)] public float cubeFill = 0.85f;
-        [Tooltip("Normals mode: also draw a line from each solid voxel along its occupancy normal. " +
-                 "Length is in voxel edges.")]
-        public bool showNormalLines = true;
+        [Tooltip("Normals mode: length of the line drawn from each solid voxel along its occupancy " +
+                 "normal, in voxel edges.")]
         [Range(0.5f, 4f)] public float normalLineLength = 1.5f;
         [Tooltip("Linear display multiplier for the irradiance/radiance modes (1 = neutral). " +
                  "Occupancy mode ignores it.")]
@@ -153,7 +152,7 @@ namespace Lotec.Lighting {
             }
 
             // Normals mode: a line per solid voxel along its occupancy normal (2 verts/instance).
-            if (mode == Mode.Normals && showNormalLines) {
+            if (mode == Mode.Normals) {
                 if (_normalLineProps == null) _normalLineProps = new MaterialPropertyBlock();
                 _normalLineProps.SetFloat(s_normalLine, 1f);
                 float maxVoxelEdge = Mathf.Max(voxelSize.x, Mathf.Max(voxelSize.y, voxelSize.z));

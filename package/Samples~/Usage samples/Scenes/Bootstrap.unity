@@ -593,6 +593,8 @@ GameObject:
   m_Component:
   - component: {fileID: 1323876193}
   - component: {fileID: 1323876194}
+  - component: {fileID: 1323876196}
+  - component: {fileID: 1323876195}
   m_Layer: 0
   m_Name: Debug
   m_TagString: Untagged
@@ -608,12 +610,12 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1323876192}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 2.59224, y: 3.03602, z: 1.687}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 1628000040}
+  m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &1323876194
 MonoBehaviour:
@@ -633,42 +635,49 @@ MonoBehaviour:
   showWireframe: 1
   stride: 1
   cubeFill: 1
-  showNormalLines: 1
   normalLineLength: 0.92
   intensity: 1
   minLuminance: 0.0001
---- !u!1 &1628000039
-GameObject:
+--- !u!114 &1323876195
+MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1628000040}
-  m_Layer: 0
-  m_Name: 'Editor '
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1628000040
-Transform:
+  m_GameObject: {fileID: 1323876192}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 71b9de7f57b84ec09828f7fe709f75f0, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Lotec.Lighting.Samples.BufferGiDebugUi
+  _debug: {fileID: 1323876194}
+  _document: {fileID: 1323876196}
+  _panelSettings: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
+  _visualTreeAsset: {fileID: 9197481963319205126, guid: 242845ac566d44f9ae20a1cdff6aab31, type: 3}
+  _sortingOrder: 1001
+--- !u!114 &1323876196
+MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1628000039}
-  serializedVersion: 2
-  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 2.59224, y: 3.03602, z: 1.687}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children:
-  - {fileID: 1323876193}
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_GameObject: {fileID: 1323876192}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 19102, guid: 0000000000000000e000000000000000, type: 0}
+  m_Name: 
+  m_EditorClassIdentifier: UnityEngine.dll::UnityEngine.UIElements.UIDocument
+  m_PanelSettings: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
+  m_ParentUI: {fileID: 0}
+  sourceAsset: {fileID: 9197481963319205126, guid: 242845ac566d44f9ae20a1cdff6aab31, type: 3}
+  m_SortingOrder: 1001
+  m_Position: 0
+  m_WorldSpaceSizeMode: 1
+  m_WorldSpaceWidth: 1920
+  m_WorldSpaceHeight: 1080
+  m_PivotReferenceSize: 0
+  m_Pivot: 0
+  m_WorldSpaceCollider: {fileID: 0}
 --- !u!1 &1697248653
 GameObject:
   m_ObjectHideFlags: 0
@@ -800,7 +809,7 @@ Transform:
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
-  - {fileID: 1628000040}
+  - {fileID: 1323876193}
   - {fileID: 526675351}
   - {fileID: 1234565088}
   - {fileID: 1200926433}

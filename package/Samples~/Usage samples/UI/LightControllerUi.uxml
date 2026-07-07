@@ -2,7 +2,11 @@
     <Style src="project://database/Assets/_Samples/Usage%20samples/UI/LightControllerUi.uss?fileID=7433441132597879392&amp;guid=8d4ea996832866749b010f7cdbe934ac&amp;type=3#LightControllerUi"/>
     <ui:VisualElement name="screen" class="screen">
         <ui:VisualElement name="panel" class="panel">
-            <ui:Label text="Lighting Controls" class="panel-title"/>
+            <ui:VisualElement name="panel-header" class="panel-header">
+                <ui:Label name="fold-arrow" text="▾" class="fold-arrow"/>
+                <ui:Label name="panel-title" text="Lighting Controls" class="panel-title"/>
+            </ui:VisualElement>
+            <ui:VisualElement name="panel-body">
             <ui:VisualElement class="panel-accent"/>
             <ui:VisualElement name="settings-container" class="section-body">
                 <ui:EnumField label="GI" value="BufferGi" type="Lotec.Lighting.GiMethod, Lotec.Lighting" name="gi-enum" tooltip="Which GI system runs (toggles the GI updater components)." class="setting-field">
@@ -66,6 +70,7 @@
             <ui:VisualElement class="hint-card">
                 <ui:Label text="CTRL + mouse: rotate the sun light." class="hint-text"/>
                 <ui:Label text="H: toggle UI." class="hint-text"/>
+            </ui:VisualElement>
             </ui:VisualElement>
         </ui:VisualElement>
     </ui:VisualElement>
