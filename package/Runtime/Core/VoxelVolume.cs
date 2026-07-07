@@ -97,6 +97,34 @@ namespace Lotec.Lighting {
         void OnEnable() {
             if (_autoRegisterWithManager && !s_all.Contains(this))
                 s_all.Add(this);
+            if (Application.isPlaying) LogBoundsDiagnostics();
+        }
+
+        // TEMP diagnostic: at runtime, print the deserialized bounds (what the bundle/scene delivered)
+        // next to what a fresh recompute from the live renderers WOULD produce. Tells us whether the
+        // bundle shipped zero bounds and whether a runtime recompute could recover them.
+        void LogBoundsDiagnostics() {
+            MeshBounds mb = SourceBounds;
+            Transform root = mb != null ? mb.Root : null;
+            Bounds fresh = new Bounds();
+            int eligible = 0, total = 0;
+            if (root != null) {
+                foreach (MeshRenderer mr in root.GetComponentsInChildren<MeshRenderer>()) {
+                    if (mr == null) continue;
+                    total++;
+                    if (!MeshBounds.IsBakeEligible(mr)) continue;
+                    MeshFilter mf = mr.GetComponent<MeshFilter>();
+                    if (mf == null || mf.sharedMesh == null) continue;
+                    if (eligible == 0) fresh = mr.bounds; else fresh.Encapsulate(mr.bounds);
+                    eligible++;
+                }
+            }
+            Debug.Log(
+                $"[VoxelVolume diag] '{name}' root={(root != null ? root.name : "<null>")}\n" +
+                $"  VoxelVolume._bounds size={_bounds.size.ToString("F4")} center={_bounds.center.ToString("F4")}\n" +
+                $"  MeshBounds._bounds  size={(mb != null ? mb.Bounds.size.ToString("F4") : "<no MeshBounds>")}\n" +
+                $"  live recompute would: eligible={eligible}/{total} renderers, size={fresh.size.ToString("F4")} center={fresh.center.ToString("F4")}",
+                this);
         }
 
         void OnDisable() {
@@ -110,6 +138,9 @@ namespace Lotec.Lighting {
             if (source == null || source.Root == null) return;
 
             source.Recompute();
+            // Keep the serialized bounds if the source found no geometry (e.g. isStatic reads false
+            // when this runs during a build) - don't overwrite good baked bounds with a degenerate box.
+            if (source.Bounds.size == Vector3.zero) return;
             _bounds = source.Bounds;
             ComputeMaxResolutionForBounds();
         }
