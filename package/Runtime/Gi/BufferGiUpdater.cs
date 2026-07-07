@@ -123,6 +123,9 @@ namespace Lotec.Lighting {
         ComputeBuffer _irradianceBlurBuffer;
         ComputeBuffer _surfaceBuffer; // per-voxel surface word (normal + reserved bits); always present
         bool _bakedNormalsBaked;      // the normal source the current bake used (for rebake-on-toggle)
+        // Field bounds the current voxelization used; SyncBakeInputs re-voxelizes when they change
+        // (same-volume geometry edit / reassigned coarse field), so display/solve tweaks don't.
+        Vector3 _bakedFineOrigin, _bakedFineSize, _bakedCoarseOrigin, _bakedCoarseSize;
         // 1-bit/voxel occupancy bitfield (uint packs 32 voxels): 4 KB per field, the hot solidity
         // data every DDA step / gate / fragment tap reads. Derived from _Material by CSBuildSurface.
         ComputeBuffer _occupancyBuffer;
@@ -309,11 +312,12 @@ namespace Lotec.Lighting {
         }
 
         void OnValidate() {
-            // A geometry/threshold change invalidates the bake; redo it on the next Update, and restart
-            // the accumulation so the change settles into the (possibly idle) field.
-            _materialBaked = false;
+            // This component is dominated by display/solve settings (exposure, tonemap, shadows, AO,
+            // samples...) - none of which affect the VOXELIZATION. So an inspector change only restarts
+            // the progressive accumulation to re-settle the change; it does NOT invalidate the bake (that
+            // would needlessly re-voxelize + re-warn on every tweak). The bake's real inputs - the normal
+            // source and the field bounds - are watched in Update by SyncBakeInputs instead.
             _collectedSamples = 0;
-            _warnedBakeAssetMismatch = false; // settings changed: re-evaluate (and re-report) the bake asset
         }
 
         // Editor: prefill the detailed-field list with every MeshBounds in the scene except the coarse
@@ -378,7 +382,7 @@ namespace Lotec.Lighting {
             }
             _hasLoggedMissingReferences = false;
 
-            SyncNormalMode();
+            SyncBakeInputs();
             EnsureInitialized();
             if (!_materialBaked) {
                 Voxelize();
@@ -495,12 +499,20 @@ namespace Lotec.Lighting {
             ClearDynamicFields();
         }
 
-        // The surface buffer is always present and the compute has no normal-source variant now (it
-        // always reads _Surface). Flipping the normal source only needs a RE-BAKE - the voxelizer bakes
-        // mesh normals (+ no thicken) vs thickens, and CSBuildSurface computes the gradient in the
-        // thickened case. (OnValidate also rebakes on any inspector change; this covers runtime flips.)
-        void SyncNormalMode() {
-            if (_bakedNormals != _bakedNormalsBaked) _materialBaked = false;
+        // Invalidate the voxelization when one of its actual inputs changed since the last bake:
+        //  - the normal source (mesh vs gradient+thicken - a different rasterization/derive), or
+        //  - the fine/coarse field bounds (a same-volume geometry edit that recomputed MeshBounds, or a
+        //    reassigned coarse field). Volume SWITCHES are handled separately by Update's warm-switch.
+        // This replaces OnValidate's blanket invalidation, so display/solve tweaks don't re-voxelize.
+        void SyncBakeInputs() {
+            if (!_materialBaked) return;
+            bool changed = _bakedNormals != _bakedNormalsBaked
+                || !NearlyEqual(_bakedFineOrigin, GridOrigin) || !NearlyEqual(_bakedFineSize, GridSize)
+                || !NearlyEqual(_bakedCoarseOrigin, CoarseOrigin) || !NearlyEqual(_bakedCoarseSize, CoarseSize);
+            if (changed) {
+                _materialBaked = false;
+                _warnedBakeAssetMismatch = false; // inputs changed: re-evaluate (and re-report) the bake match
+            }
         }
 
         void SetGridUniforms(Vector3 origin, Vector3 size, Vector3 voxelSize) {
@@ -750,7 +762,10 @@ namespace Lotec.Lighting {
             for (int f = 0; f < FieldCount; f++) BuildOccupancy(f * VoxelCount);
             for (int f = 0; f < FieldCount; f++) BuildSurface(f * VoxelCount);
             for (int f = 0; f < FieldCount; f++) BuildAirDistance(f * VoxelCount);
+            // Snapshot the inputs this voxelization used, so SyncBakeInputs can tell when they change.
             _bakedNormalsBaked = _bakedNormals;
+            _bakedFineOrigin = GridOrigin; _bakedFineSize = GridSize;
+            _bakedCoarseOrigin = CoarseOrigin; _bakedCoarseSize = CoarseSize;
             _materialBaked = true;
         }
 
