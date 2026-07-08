@@ -55,6 +55,7 @@
                         </Bindings>
                     </ui:FloatField>
                 </ui:VisualElement>
+                <ui:Label name="focus-debug-label" text="focus: -" class="hint-text" style="margin-top: 6px; white-space: normal;"/>
             </ui:VisualElement>
         </ui:VisualElement>
     </ui:VisualElement>
