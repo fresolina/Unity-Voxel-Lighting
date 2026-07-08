@@ -10,9 +10,9 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e5d17a21594effb4e9591490b009e7aa, type: 3}
-  m_Name: Remote_BundledAssetGroupSchema
+  m_Name: Playground_BundledAssetGroupSchema
   m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.GroupSchemas.BundledAssetGroupSchema
-  m_Group: {fileID: 11400000, guid: 0cddc0d7550096042bf8931d4086b6ab, type: 2}
+  m_Group: {fileID: 11400000, guid: c557939c37761ae48abe58c35a6cc951, type: 2}
   m_SchemaIsEnabled: 1
   m_InternalBundleIdMode: 1
   m_Compression: 1
@@ -30,7 +30,7 @@ MonoBehaviour:
   m_UseAssetBundleCache: 1
   m_UseAssetBundleCrc: 1
   m_UseAssetBundleCrcForCachedBundles: 1
-  m_UseUWRForLocalBundles: 0
+  m_UseUWRForLocalBundles: 1
   m_Timeout: 0
   m_ChunkedTransfer: 0
   m_RedirectLimit: -1

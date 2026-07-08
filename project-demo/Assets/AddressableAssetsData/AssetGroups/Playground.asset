@@ -10,20 +10,19 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
-  m_Name: Remote
+  m_Name: Playground
   m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
-  m_GroupName: Remote
-  m_GUID: 378dee4c78570a7499f4a67b9ade3846
+  m_GroupName: Playground
+  m_GUID: 3f497580613e46c41a932f4710fb7a9b
   m_SerializeEntries:
-  - m_GUID: 166d31528e55c0946a04df7b824602e7
-    m_Address: Sponza.unity
+  - m_GUID: d4b41b7cb76f0df42908560ac82c60cd
+    m_Address: Playground.unity
     m_ReadOnly: 0
-    m_SerializedLabels:
-    - Sponza
+    m_SerializedLabels: []
     FlaggedDuringContentUpdateRestriction: 0
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: c33ff8789176f3d42815263919edbbac, type: 2}
   m_SchemaSet:
     m_Schemas:
-    - {fileID: 11400000, guid: c39095a07acb10d4ba1b56c01d6e9b39, type: 2}
-    - {fileID: 11400000, guid: 798c519173e92b447ba1c3d8ee15a9b9, type: 2}
+    - {fileID: 11400000, guid: 691765fbc7c77544ca7be49a8655517b, type: 2}
+    - {fileID: 11400000, guid: e84077754cdbd45498d882ce22e309a4, type: 2}
