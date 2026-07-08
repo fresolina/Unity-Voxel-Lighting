@@ -263,6 +263,15 @@ namespace Lotec.Lighting.Samples
 
             FoldoutHeader.Setup(root);
 
+            // Number fields are wired manually (initial value + commit callback) rather than via a
+            // two-way DataBinding: the runtime binding pushed the source value into the field every
+            // frame, which steals focus from a focused text input in the WebGL build. is-delayed means
+            // the callback fires on Enter/blur, and nothing writes into the field while you're typing.
+            enabledLightIntensityField.SetValueWithoutNotify(EnabledLightIntensity);
+            enabledLightIntensityField.RegisterValueChangedCallback(evt => EnabledLightIntensity = evt.newValue);
+            samplesPerFrameField.SetValueWithoutNotify(SamplesPerFrame);
+            samplesPerFrameField.RegisterValueChangedCallback(evt => SamplesPerFrame = evt.newValue);
+
             // Apply stylesheet to panel root so it also covers dropdown popups.
             if (root.styleSheets.count > 0)
             {

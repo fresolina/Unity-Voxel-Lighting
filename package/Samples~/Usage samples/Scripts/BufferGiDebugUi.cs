@@ -226,6 +226,14 @@ namespace Lotec.Lighting.Samples
             FoldoutHeader.Setup(root);
             _focusDebugLabel = root.Q<Label>("focus-debug-label");
 
+            // Number fields are wired manually (initial value + commit callback) rather than via a
+            // two-way DataBinding: the runtime binding pushed the source value into the field every
+            // frame, which steals focus from a focused text input in the WebGL build. is-delayed means
+            // the callback fires on Enter/blur, and nothing writes into the field while you're typing.
+            BindNumberField(root.Q<IntegerField>("stride-field"), () => Stride, v => Stride = v);
+            BindNumberField(root.Q<FloatField>("intensity-field"), () => Intensity, v => Intensity = v);
+            BindNumberField(root.Q<FloatField>("min-luminance-field"), () => MinLuminance, v => MinLuminance = v);
+
             // Apply stylesheet to panel root so it also covers dropdown popups.
             if (root.styleSheets.count > 0 && root.panel != null)
             {
@@ -234,6 +242,22 @@ namespace Lotec.Lighting.Samples
                 if (!panelRoot.styleSheets.Contains(sheet))
                     panelRoot.styleSheets.Add(sheet);
             }
+        }
+
+        static void BindNumberField(IntegerField field, Func<int> get, Action<int> set)
+        {
+            if (field == null)
+                return;
+            field.SetValueWithoutNotify(get());
+            field.RegisterValueChangedCallback(evt => set(evt.newValue));
+        }
+
+        static void BindNumberField(FloatField field, Func<float> get, Action<float> set)
+        {
+            if (field == null)
+                return;
+            field.SetValueWithoutNotify(get());
+            field.RegisterValueChangedCallback(evt => set(evt.newValue));
         }
 
         void UnbindUi()

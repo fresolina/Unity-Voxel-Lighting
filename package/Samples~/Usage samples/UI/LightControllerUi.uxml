@@ -19,21 +19,13 @@
                         <ui:DataBinding property="value" data-source-path="LightingMethod" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
-                <ui:IntegerField name="samples-per-frame-field" label="GI Samples/Frame" is-delayed="true" tooltip="Buffer GI samples (rays) gathered per voxel per frame. Higher converges faster but costs more (1 for Quest)." tabindex="-1" class="setting-field">
-                    <Bindings>
-                        <ui:DataBinding property="value" data-source-path="SamplesPerFrame" binding-mode="TwoWay"/>
-                    </Bindings>
-                </ui:IntegerField>
+                <ui:IntegerField name="samples-per-frame-field" label="GI Samples/Frame" is-delayed="true" tooltip="Buffer GI samples (rays) gathered per voxel per frame. Higher converges faster but costs more (1 for Quest)." tabindex="-1" class="setting-field"/>
                 <ui:EnumField label="Shadow Mode" value="SDF" type="Lotec.Lighting.ShadowSourceMode, Lotec.Lighting" name="shadow-mode-enum" class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="ShadowMode" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
-                <ui:FloatField name="enabled-light-intensity-field" label="Light Intensity [1-9]" is-delayed="true" tooltip="Type a value and press Enter or click away. Applies to the enabled flashlight and candle." tabindex="-1" class="setting-field">
-                    <Bindings>
-                        <ui:DataBinding property="value" data-source-path="EnabledLightIntensity" binding-mode="TwoWay"/>
-                    </Bindings>
-                </ui:FloatField>
+                <ui:FloatField name="enabled-light-intensity-field" label="Light Intensity [1-9]" is-delayed="true" tooltip="Type a value and press Enter or click away. Applies to the enabled flashlight and candle." tabindex="-1" class="setting-field"/>
                 <ui:Toggle name="flashlight-toggle" label="Flashlight [F]" class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="FlashlightEnabled" binding-mode="TwoWay"/>

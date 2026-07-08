@@ -29,11 +29,7 @@
                             <ui:DataBinding property="value" data-source-path="ShowWireframe" binding-mode="TwoWay"/>
                         </Bindings>
                     </ui:Toggle>
-                    <ui:IntegerField name="stride-field" label="Stride" is-delayed="true" tooltip="Draw every Nth voxel along each axis (1 = all)." tabindex="-1" class="setting-field">
-                        <Bindings>
-                            <ui:DataBinding property="value" data-source-path="Stride" binding-mode="TwoWay"/>
-                        </Bindings>
-                    </ui:IntegerField>
+                    <ui:IntegerField name="stride-field" label="Stride" is-delayed="true" tooltip="Draw every Nth voxel along each axis (1 = all)." tabindex="-1" class="setting-field"/>
                     <ui:Slider name="cube-fill-slider" label="Cube Fill" low-value="0.1" high-value="1" show-input-field="true" tooltip="Voxel cube size as a fraction of the voxel (1 = fills the cell)." class="setting-field">
                         <Bindings>
                             <ui:DataBinding property="value" data-source-path="CubeFill" binding-mode="TwoWay"/>
@@ -44,16 +40,8 @@
                             <ui:DataBinding property="value" data-source-path="NormalLineLength" binding-mode="TwoWay"/>
                         </Bindings>
                     </ui:Slider>
-                    <ui:FloatField name="intensity-field" label="Intensity" is-delayed="true" tooltip="Linear display multiplier for irradiance/radiance modes (1 = neutral). Occupancy mode ignores it." tabindex="-1" class="setting-field">
-                        <Bindings>
-                            <ui:DataBinding property="value" data-source-path="Intensity" binding-mode="TwoWay"/>
-                        </Bindings>
-                    </ui:FloatField>
-                    <ui:FloatField name="min-luminance-field" label="Min Luminance" is-delayed="true" tooltip="Voxels dimmer than this are hidden in irradiance/radiance modes." tabindex="-1" class="setting-field">
-                        <Bindings>
-                            <ui:DataBinding property="value" data-source-path="MinLuminance" binding-mode="TwoWay"/>
-                        </Bindings>
-                    </ui:FloatField>
+                    <ui:FloatField name="intensity-field" label="Intensity" is-delayed="true" tooltip="Linear display multiplier for irradiance/radiance modes (1 = neutral). Occupancy mode ignores it." tabindex="-1" class="setting-field"/>
+                    <ui:FloatField name="min-luminance-field" label="Min Luminance" is-delayed="true" tooltip="Voxels dimmer than this are hidden in irradiance/radiance modes." tabindex="-1" class="setting-field"/>
                 </ui:VisualElement>
                 <ui:Label name="focus-debug-label" text="focus: -" class="hint-text" style="margin-top: 6px; white-space: normal;"/>
             </ui:VisualElement>
