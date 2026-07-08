@@ -10,9 +10,9 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e5d17a21594effb4e9591490b009e7aa, type: 3}
-  m_Name: Default Local Group_BundledAssetGroupSchema
+  m_Name: Sponza_BundledAssetGroupSchema
   m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.GroupSchemas.BundledAssetGroupSchema
-  m_Group: {fileID: 11400000, guid: c557939c37761ae48abe58c35a6cc951, type: 2}
+  m_Group: {fileID: 11400000, guid: 0cddc0d7550096042bf8931d4086b6ab, type: 2}
   m_SchemaIsEnabled: 1
   m_InternalBundleIdMode: 1
   m_Compression: 1
@@ -30,20 +30,20 @@ MonoBehaviour:
   m_UseAssetBundleCache: 1
   m_UseAssetBundleCrc: 1
   m_UseAssetBundleCrcForCachedBundles: 1
-  m_UseUWRForLocalBundles: 0
+  m_UseUWRForLocalBundles: 1
   m_Timeout: 0
   m_ChunkedTransfer: 0
   m_RedirectLimit: -1
   m_RetryCount: 0
   m_BuildPath:
-    m_Id: 2a07b9463ec1b5844998143aac930d89
+    m_Id: 15ae28581241fa84f8d06470266618e1
   m_LoadPath:
-    m_Id: 0c318188110d41f4e8b61da237a224a0
+    m_Id: fb710ddc95e3ae24fb48df27074d8b5a
   m_BundleMode: 0
   m_AssetBundleProviderType:
     m_AssemblyName: Unity.ResourceManager, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null
     m_ClassName: UnityEngine.ResourceManagement.ResourceProviders.AssetBundleProvider
   m_UseDefaultSchemaSettings: 0
-  m_SelectedPathPairIndex: 0
+  m_SelectedPathPairIndex: 1
   m_BundleNaming: 0
   m_AssetLoadMode: 0
