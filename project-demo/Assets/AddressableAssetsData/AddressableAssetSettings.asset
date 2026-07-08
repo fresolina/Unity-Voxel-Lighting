@@ -85,6 +85,20 @@ MonoBehaviour:
         m_Value: '[UnityEditor.EditorUserBuildSettings.activeBuildTarget]'
       - m_Id: fb710ddc95e3ae24fb48df27074d8b5a
         m_Value: 'https://fresolina.github.io/Unity-Voxel-Lighting/[BuildTarget]'
+    - m_InheritedParent: 
+      m_Id: 30bfa65a04993a94a9bb359ac962e450
+      m_ProfileName: Dev
+      m_Values:
+      - m_Id: 0c318188110d41f4e8b61da237a224a0
+        m_Value: '{UnityEngine.AddressableAssets.Addressables.RuntimePath}/[BuildTarget]'
+      - m_Id: 15ae28581241fa84f8d06470266618e1
+        m_Value: 'ServerData/[BuildTarget]'
+      - m_Id: 2a07b9463ec1b5844998143aac930d89
+        m_Value: '[UnityEngine.AddressableAssets.Addressables.BuildPath]/[BuildTarget]'
+      - m_Id: 5c2feeaf97388e3458e16a0364213f67
+        m_Value: '[UnityEditor.EditorUserBuildSettings.activeBuildTarget]'
+      - m_Id: fb710ddc95e3ae24fb48df27074d8b5a
+        m_Value: 'http://localhost:9000/[BuildTarget]'
     m_ProfileEntryNames:
     - m_Id: 0c318188110d41f4e8b61da237a224a0
       m_Name: Local.LoadPath
