@@ -31,6 +31,7 @@ namespace Lotec.Lighting.Samples
 
         VisualElement _boundRoot;
         Label _focusDebugLabel; // TEMP diagnostic: live focus state, to confirm the input-focus gate in the build
+        readonly List<string> _focusTrail = new List<string>(); // TEMP diagnostic: recent focus in/out transitions
         bool _hasBindingSnapshot;
         bool _lastDebugEnabled;
         BufferGiDebug.Mode _lastMode;
@@ -121,11 +122,25 @@ namespace Lotec.Lighting.Samples
                 ? null
                 : _document.rootVisualElement?.panel?.focusController?.focusedElement;
 
-            string what = focused is VisualElement ve
-                ? (string.IsNullOrEmpty(ve.name) ? ve.GetType().Name : $"{ve.GetType().Name}#{ve.name}")
-                : "<none>";
-            _focusDebugLabel.text = $"focus: {what}  |  IsTextInput: {UiFocus.IsTextInput(focused)}";
+            string current = $"focus: {Describe(focused as VisualElement)}  IsTextInput: {UiFocus.IsTextInput(focused)}";
+            _focusDebugLabel.text = _focusTrail.Count == 0
+                ? current
+                : current + "\n" + string.Join("\n", _focusTrail);
         }
+
+        void RecordFocus(string kind, VisualElement target, VisualElement related)
+        {
+            string line = kind == "out"
+                ? $"out: {Describe(target)} -> {Describe(related)}"
+                : $"in : {Describe(target)}";
+            _focusTrail.Add(line);
+            if (_focusTrail.Count > 8)
+                _focusTrail.RemoveAt(0);
+            Debug.Log($"[focus] {line}");
+        }
+
+        static string Describe(VisualElement ve) =>
+            ve == null ? "null" : (string.IsNullOrEmpty(ve.name) ? ve.GetType().Name : $"{ve.GetType().Name}#{ve.name}");
 
         void EnsureDebug()
         {
@@ -226,6 +241,14 @@ namespace Lotec.Lighting.Samples
             FoldoutHeader.Setup(root);
             _focusDebugLabel = root.Q<Label>("focus-debug-label");
 
+            // TEMP diagnostic: record every focus in/out on the panel, including who focus moves to
+            // (relatedTarget). Tells us whether a clicked text input hands focus to another element or
+            // loses it entirely (relatedTarget = null -> focus left the panel, e.g. the WebGL canvas).
+            root.RegisterCallback<FocusInEvent>(
+                evt => RecordFocus("in ", evt.target as VisualElement, null), TrickleDown.TrickleDown);
+            root.RegisterCallback<FocusOutEvent>(
+                evt => RecordFocus("out", evt.target as VisualElement, evt.relatedTarget as VisualElement), TrickleDown.TrickleDown);
+
             // Number fields are wired manually (initial value + commit callback) rather than via a
             // two-way DataBinding: the runtime binding pushed the source value into the field every
             // frame, which steals focus from a focused text input in the WebGL build. is-delayed means
@@ -276,6 +299,7 @@ namespace Lotec.Lighting.Samples
                 _boundRoot.dataSource = null;
             }
             _focusDebugLabel = null;
+            _focusTrail.Clear();
             _boundRoot = null;
         }
 
