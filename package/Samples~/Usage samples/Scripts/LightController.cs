@@ -187,7 +187,7 @@ namespace Lotec.Lighting.Samples {
         }
 
         Light FindLight(LightType lightType) {
-            Light[] sceneLights = FindObjectsByType<Light>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            Light[] sceneLights = FindObjectsByType<Light>(FindObjectsInactive.Exclude);
             for (int i = 0; i < sceneLights.Length; i++) {
                 Light candidate = sceneLights[i];
                 if (candidate == null || candidate.type != lightType || candidate == _sunLight) {
