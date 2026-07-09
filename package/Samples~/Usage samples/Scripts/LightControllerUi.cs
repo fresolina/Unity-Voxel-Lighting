@@ -141,7 +141,7 @@ namespace Lotec.Lighting.Samples
         {
             if (_lightController == null)
             {
-                _lightController = FindFirstObjectByType<LightController>();
+                _lightController = FindAnyObjectByType<LightController>();
             }
         }
 

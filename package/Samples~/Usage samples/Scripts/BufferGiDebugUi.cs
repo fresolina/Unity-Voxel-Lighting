@@ -145,7 +145,7 @@ namespace Lotec.Lighting.Samples
         void EnsureDebug()
         {
             if (_debug == null)
-                _debug = FindFirstObjectByType<BufferGiDebug>();
+                _debug = FindAnyObjectByType<BufferGiDebug>();
         }
 
         void EnsureDocument()
