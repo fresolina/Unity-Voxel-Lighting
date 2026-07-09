@@ -30,7 +30,6 @@ namespace Lotec.Lighting.Samples
         [SerializeField] int _sortingOrder = 1001; // above LightControllerUi (1000) so popups layer on top
 
         VisualElement _boundRoot;
-        Label _focusDebugLabel; // TEMP diagnostic: live focus state, to confirm the input-focus gate in the build
         bool _hasBindingSnapshot;
         bool _lastDebugEnabled;
         BufferGiDebug.Mode _lastMode;
@@ -105,26 +104,6 @@ namespace Lotec.Lighting.Samples
             }
 
             RefreshUi(true);
-            UpdateFocusDebug();
-        }
-
-        // TEMP diagnostic: shows the panel's currently focused element and whether the input-focus gate
-        // catches it. If a field reads "IsTextInput: True" while focused, the gate works and any remaining
-        // typing trouble is elsewhere; if it flips to False/<none> the moment you click a field, focus is
-        // being lost (canvas refocus), not mis-detected. Remove once the WebGL typing issue is confirmed fixed.
-        void UpdateFocusDebug()
-        {
-            if (_focusDebugLabel == null)
-                return;
-
-            Focusable focused = _document == null
-                ? null
-                : _document.rootVisualElement?.panel?.focusController?.focusedElement;
-
-            string what = focused is VisualElement ve
-                ? (string.IsNullOrEmpty(ve.name) ? ve.GetType().Name : $"{ve.GetType().Name}#{ve.name}")
-                : "<none>";
-            _focusDebugLabel.text = $"focus: {what}  |  IsTextInput: {UiFocus.IsTextInput(focused)}";
         }
 
         void EnsureDebug()
@@ -224,7 +203,6 @@ namespace Lotec.Lighting.Samples
             _boundRoot.dataSource = this;
 
             FoldoutHeader.Setup(root);
-            _focusDebugLabel = root.Q<Label>("focus-debug-label");
 
             // Apply stylesheet to panel root so it also covers dropdown popups.
             if (root.styleSheets.count > 0 && root.panel != null)
@@ -251,16 +229,15 @@ namespace Lotec.Lighting.Samples
                 _boundRoot.Q<FloatField>("min-luminance-field")?.ClearBindings();
                 _boundRoot.dataSource = null;
             }
-            _focusDebugLabel = null;
             _boundRoot = null;
         }
 
         bool HasFocusedTextInput()
         {
-            Focusable focused = _document == null
-                ? null
-                : _document.rootVisualElement?.panel?.focusController?.focusedElement;
-            return UiFocus.IsTextInput(focused);
+            Focusable focused = _document != null ? _document.rootVisualElement?.panel?.focusController?.focusedElement : null;
+            if (focused is TextField || focused is FloatField || focused is IntegerField)
+                return true;
+            return focused is VisualElement ve && ve.name == TextField.textInputUssName;
         }
 
         // ---- Bound properties (getters/setters over the BufferGiDebug component) -------------------

@@ -51,7 +51,7 @@ namespace Lotec.Lighting.Samples {
                 _loggedKeyboardPresence = true;
             }
 
-            if (LightControllerUi.IsTextInputFocused || BufferGiDebugUi.IsTextInputFocused) {
+            if (LightControllerUi.IsTextInputFocused) {
                 return;
             }
 

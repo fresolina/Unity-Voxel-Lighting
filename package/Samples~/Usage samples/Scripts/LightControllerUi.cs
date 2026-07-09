@@ -317,10 +317,14 @@ namespace Lotec.Lighting.Samples
 
         bool HasFocusedTextInput()
         {
-            Focusable focusedElement = _document == null
-                ? null
-                : _document.rootVisualElement?.panel?.focusController?.focusedElement;
-            return UiFocus.IsTextInput(focusedElement);
+            Focusable focusedElement = _document.rootVisualElement?.panel?.focusController?.focusedElement;
+            if (focusedElement is TextField || focusedElement is FloatField)
+            {
+                return true;
+            }
+
+            return focusedElement is VisualElement focusedVisualElement
+                && focusedVisualElement.name == TextField.textInputUssName;
         }
 
         [CreateProperty]
