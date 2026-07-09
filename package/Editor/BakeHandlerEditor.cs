@@ -33,7 +33,7 @@ namespace Lotec.Lighting.Editor {
             var handler = target as BakeHandler;
             if (handler == null) return;
 
-            var volumes = Object.FindObjectsByType<VoxelVolume>(FindObjectsSortMode.None);
+            var volumes = Object.FindObjectsByType<VoxelVolume>();
             if (volumes.Length == 0) {
                 Debug.LogWarning("No VoxelVolume components found in the scene.");
                 return;
