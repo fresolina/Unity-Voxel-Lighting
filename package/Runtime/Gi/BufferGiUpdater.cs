@@ -197,6 +197,27 @@ namespace Lotec.Lighting {
             set => _samplesPerFrame = Mathf.Max(1, value);
         }
 
+        /// <summary>Ease-in exponent for the displayed fade / light-change reveal (1 = linear .. 8).</summary>
+        public float ConfidenceCurve {
+            get => _confidenceCurve;
+            set => _confidenceCurve = Mathf.Clamp(value, 1f, 8f);
+        }
+
+        /// <summary>Strength of the baked static ambient occlusion applied to the displayed GI (0 = off .. 1).</summary>
+        public float AoStrength {
+            get => _aoStrength;
+            set => _aoStrength = Mathf.Clamp01(value);
+        }
+
+        /// <summary>Voxel sun-shadow mode for the FINE (active) volume: Off, or Baked pre-marched visibility.</summary>
+        public ShadowMode FineShadow {
+            get => _fineShadow;
+            set => _fineShadow = value;
+        }
+
+        /// <summary>Display-transform controller (exposure + tonemap), e.g. to toggle in-shader tonemap from a UI.</summary>
+        public AutoExposure ExposureControl => _exposureControl;
+
         // Coarse field: a scene-covering MeshBounds (32^3 grid, larger voxels). Falls back to the
         // fine bounds when unassigned so the read/visualizer degrade gracefully (empty slice -> 0).
         // MeshBounds is tight, so grow it by a border of coarse grid cells here (geometry exactly

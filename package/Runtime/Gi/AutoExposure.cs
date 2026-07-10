@@ -43,6 +43,10 @@ namespace Lotec.Lighting {
         /// <summary>Radius (m) around the camera the owner's luminance kernel should sample.</summary>
         public float MeasureRadius => _measureRadius;
 
+        /// <summary>Apply the display transform (exposure + tonemap) in the lit shader. Off = output
+        /// linear HDR for a post-processing stack to expose/tonemap once (also skips auto-exposure).</summary>
+        public bool TonemapInShader { get => _tonemapInShader; set => _tonemapInShader = value; }
+
         /// <summary>
         /// Publish exposure + the tonemap keyword for this frame. When auto-exposure is on and a
         /// <paramref name="dispatchMeasure"/> callback is supplied, the controller clears its

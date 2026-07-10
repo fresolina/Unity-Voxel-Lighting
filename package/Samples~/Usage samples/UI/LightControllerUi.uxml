@@ -24,11 +24,26 @@
                         <ui:DataBinding property="value" data-source-path="SamplesPerFrame" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:IntegerField>
-                <ui:EnumField label="Shadow Mode" value="SDF" type="Lotec.Lighting.ShadowSourceMode, Lotec.Lighting" name="shadow-mode-enum" class="setting-field">
+                <ui:Slider name="confidence-curve-slider" label="Confidence Curve" low-value="1" high-value="8" show-input-field="true" tooltip="Ease-in exponent for the displayed reveal/fade (1 = linear). Higher keeps noisy early accumulation frames hidden." class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="ConfidenceCurve" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Slider>
+                <ui:Slider name="ao-strength-slider" label="AO Strength" low-value="0" high-value="1" show-input-field="true" tooltip="Strength of the baked static ambient occlusion (0 = off). Darkens GI in concave corners and near-contact gaps." class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="AoStrength" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Slider>
+                <ui:EnumField label="Shadow Mode" value="Baked" type="Lotec.Lighting.Samples.LightControllerUi+ShadowUiMode, Assembly-CSharp" name="shadow-mode-enum" tooltip="Baked: BufferGI fine-field voxel sun-shadow (pre-marched, soft, cheap). Others: the volume shadow source used by the SDF/texture shadow path." class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="ShadowMode" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
+                <ui:Toggle name="tonemap-toggle" label="Tonemap In Shader" tooltip="Apply the display transform (exposure + tonemap) in the lit shader. Off = output linear HDR for a post-processing stack (also skips auto-exposure)." class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="TonemapInShader" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Toggle>
                 <ui:FloatField name="enabled-light-intensity-field" label="Light Intensity [1-9]" is-delayed="true" tooltip="Type a value and press Enter or click away. Applies to the enabled flashlight and candle." tabindex="-1" class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="EnabledLightIntensity" binding-mode="TwoWay"/>
