@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
-using Unity.Profiling;
 using Unity.Properties;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -17,9 +16,8 @@ namespace Lotec.Lighting.Samples
     public class LightControllerUi : MonoBehaviour, INotifyBindablePropertyChanged
     {
         const float OneSecondWindowDuration = 1f;
-        const float TenSecondWindowDuration = 10f;
         const string UnavailableFrameTimeText = "--.-- ms";
-        const string CpuTotalFrameTimeCounterName = "CPU Total Frame Time";
+        const string UnavailableFpsText = "-- fps";
 
         struct FrameTimeSample
         {
@@ -33,6 +31,11 @@ namespace Lotec.Lighting.Samples
             }
         }
 
+        /// <summary>The single "Shadow Mode" dropdown, combining the BufferGI baked voxel sun-shadow
+        /// (first / default entry) with the volume shadow-source options. Selecting Baked turns on the
+        /// fine field's baked shadow; any other entry turns it off and selects that shadow source.</summary>
+        public enum ShadowUiMode { Baked, SDF, BitmaskPoint, Bitmask8Tap, OcclusionField }
+
         static LightControllerUi s_instance;
 
         [SerializeField] LightController _lightController;
@@ -42,29 +45,26 @@ namespace Lotec.Lighting.Samples
         [SerializeField] int _sortingOrder = 1000;
 
         VisualElement _boundRoot;
-        readonly FrameTiming[] _frameTimings = new FrameTiming[1];
         readonly Queue<FrameTimeSample> _frameTimeSamples = new Queue<FrameTimeSample>();
-        Label _frameTimeLastTenSecondsLowLabel;
-        Label _frameTimeLastTenSecondsHighLabel;
-        Label _frameTimeLastTenSecondsAverageLabel;
         Label _frameTimeLastSecondLowLabel;
         Label _frameTimeLastSecondHighLabel;
         Label _frameTimeLastSecondAverageLabel;
-        ProfilerRecorder _frameTimingCollectionRecorder;
+        Label _fpsLabel;
         bool _hasBindingSnapshot;
-        string _frameTimeLastTenSecondsLowText = UnavailableFrameTimeText;
-        string _frameTimeLastTenSecondsHighText = UnavailableFrameTimeText;
-        string _frameTimeLastTenSecondsAverageText = UnavailableFrameTimeText;
         string _frameTimeLastSecondLowText = UnavailableFrameTimeText;
         string _frameTimeLastSecondHighText = UnavailableFrameTimeText;
         string _frameTimeLastSecondAverageText = UnavailableFrameTimeText;
+        string _fpsText = UnavailableFpsText;
         GiMethod _lastGiMethod;
         GiFieldUpdater.LightingMethod _lastLightingMethod;
-        ShadowSourceMode _lastShadowMode;
+        ShadowUiMode _lastShadowMode;
         float _lastEnabledLightIntensity;
         bool _lastFlashlightEnabled;
         bool _lastCandleEnabled;
         int _lastSamplesPerFrame;
+        float _lastConfidenceCurve;
+        float _lastAoStrength;
+        bool _lastTonemapInShader;
 
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
@@ -98,7 +98,6 @@ namespace Lotec.Lighting.Samples
         {
             EnsureLightController();
             ApplyDocumentAssets();
-            _frameTimingCollectionRecorder = ProfilerRecorder.StartNew(ProfilerCategory.Render, CpuTotalFrameTimeCounterName);
             BindUi();
             RefreshUi(false);
         }
@@ -121,7 +120,6 @@ namespace Lotec.Lighting.Samples
             if (s_instance == this)
                 s_instance = null;
             UnbindUi();
-            DisposeRecorder(ref _frameTimingCollectionRecorder);
         }
 
         void Update()
@@ -251,8 +249,11 @@ namespace Lotec.Lighting.Samples
             Toggle candleToggle = root.Q<Toggle>("candle-toggle");
             EnumField shadowModeField = root.Q<EnumField>("shadow-mode-enum");
             IntegerField samplesPerFrameField = root.Q<IntegerField>("samples-per-frame-field");
+            Slider confidenceCurveSlider = root.Q<Slider>("confidence-curve-slider");
+            Slider aoStrengthSlider = root.Q<Slider>("ao-strength-slider");
+            Toggle tonemapToggle = root.Q<Toggle>("tonemap-toggle");
 
-            if (giField == null || giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || samplesPerFrameField == null || !TryCacheFrameTimeLabels(root))
+            if (giField == null || giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || samplesPerFrameField == null || confidenceCurveSlider == null || aoStrengthSlider == null || tonemapToggle == null || !TryCacheFrameTimeLabels(root))
             {
                 UnbindUi();
                 return;
@@ -277,19 +278,15 @@ namespace Lotec.Lighting.Samples
 
         bool TryCacheFrameTimeLabels(VisualElement root)
         {
-            _frameTimeLastTenSecondsLowLabel = root.Q<Label>("frame-time-last-10-seconds-low-value");
-            _frameTimeLastTenSecondsHighLabel = root.Q<Label>("frame-time-last-10-seconds-high-value");
-            _frameTimeLastTenSecondsAverageLabel = root.Q<Label>("frame-time-last-10-seconds-average-value");
             _frameTimeLastSecondLowLabel = root.Q<Label>("frame-time-last-second-low-value");
             _frameTimeLastSecondHighLabel = root.Q<Label>("frame-time-last-second-high-value");
             _frameTimeLastSecondAverageLabel = root.Q<Label>("frame-time-last-second-average-value");
+            _fpsLabel = root.Q<Label>("fps-value");
 
-            return _frameTimeLastTenSecondsLowLabel != null
-                && _frameTimeLastTenSecondsHighLabel != null
-                && _frameTimeLastTenSecondsAverageLabel != null
-                && _frameTimeLastSecondLowLabel != null
+            return _frameTimeLastSecondLowLabel != null
                 && _frameTimeLastSecondHighLabel != null
-                && _frameTimeLastSecondAverageLabel != null;
+                && _frameTimeLastSecondAverageLabel != null
+                && _fpsLabel != null;
         }
 
         void UnbindUi()
@@ -303,15 +300,16 @@ namespace Lotec.Lighting.Samples
                 _boundRoot.Q<Toggle>("candle-toggle")?.ClearBindings();
                 _boundRoot.Q<EnumField>("shadow-mode-enum")?.ClearBindings();
                 _boundRoot.Q<IntegerField>("samples-per-frame-field")?.ClearBindings();
+                _boundRoot.Q<Slider>("confidence-curve-slider")?.ClearBindings();
+                _boundRoot.Q<Slider>("ao-strength-slider")?.ClearBindings();
+                _boundRoot.Q<Toggle>("tonemap-toggle")?.ClearBindings();
                 _boundRoot.dataSource = null;
             }
 
-            _frameTimeLastTenSecondsLowLabel = null;
-            _frameTimeLastTenSecondsHighLabel = null;
-            _frameTimeLastTenSecondsAverageLabel = null;
             _frameTimeLastSecondLowLabel = null;
             _frameTimeLastSecondHighLabel = null;
             _frameTimeLastSecondAverageLabel = null;
+            _fpsLabel = null;
             _boundRoot = null;
         }
 
@@ -413,12 +411,113 @@ namespace Lotec.Lighting.Samples
         }
 
         [CreateProperty]
-        ShadowSourceMode ShadowMode
+        ShadowUiMode ShadowMode
         {
-            get => ShadowSourceSelector.Get();
+            get
+            {
+                BufferGiUpdater gi = BufferGiUpdater.Instance;
+                if (gi != null && gi.FineShadow == BufferGiUpdater.ShadowMode.Baked)
+                {
+                    return ShadowUiMode.Baked;
+                }
+
+                return ShadowSourceSelector.Get() switch
+                {
+                    ShadowSourceMode.BitmaskPoint => ShadowUiMode.BitmaskPoint,
+                    ShadowSourceMode.Bitmask8Tap => ShadowUiMode.Bitmask8Tap,
+                    ShadowSourceMode.OcclusionField => ShadowUiMode.OcclusionField,
+                    _ => ShadowUiMode.SDF,
+                };
+            }
             set
             {
-                ShadowSourceSelector.Set(value);
+                BufferGiUpdater gi = BufferGiUpdater.Instance;
+                if (value == ShadowUiMode.Baked)
+                {
+                    if (gi != null)
+                    {
+                        gi.FineShadow = BufferGiUpdater.ShadowMode.Baked;
+                    }
+                }
+                else
+                {
+                    if (gi != null)
+                    {
+                        gi.FineShadow = BufferGiUpdater.ShadowMode.Off;
+                    }
+
+                    ShadowSourceSelector.Set(value switch
+                    {
+                        ShadowUiMode.BitmaskPoint => ShadowSourceMode.BitmaskPoint,
+                        ShadowUiMode.Bitmask8Tap => ShadowSourceMode.Bitmask8Tap,
+                        ShadowUiMode.OcclusionField => ShadowSourceMode.OcclusionField,
+                        _ => ShadowSourceMode.SDF,
+                    });
+                }
+
+                RefreshUi(true);
+            }
+        }
+
+        [CreateProperty]
+        float ConfidenceCurve
+        {
+            get
+            {
+                BufferGiUpdater gi = BufferGiUpdater.Instance;
+                return gi != null ? gi.ConfidenceCurve : 3f;
+            }
+            set
+            {
+                BufferGiUpdater gi = BufferGiUpdater.Instance;
+                if (gi == null)
+                {
+                    return;
+                }
+
+                gi.ConfidenceCurve = value;
+                RefreshUi(true);
+            }
+        }
+
+        [CreateProperty]
+        float AoStrength
+        {
+            get
+            {
+                BufferGiUpdater gi = BufferGiUpdater.Instance;
+                return gi != null ? gi.AoStrength : 0f;
+            }
+            set
+            {
+                BufferGiUpdater gi = BufferGiUpdater.Instance;
+                if (gi == null)
+                {
+                    return;
+                }
+
+                gi.AoStrength = value;
+                RefreshUi(true);
+            }
+        }
+
+        [CreateProperty]
+        bool TonemapInShader
+        {
+            get
+            {
+                BufferGiUpdater gi = BufferGiUpdater.Instance;
+                return gi == null || gi.ExposureControl.TonemapInShader;
+            }
+            set
+            {
+                BufferGiUpdater gi = BufferGiUpdater.Instance;
+                if (gi == null)
+                {
+                    return;
+                }
+
+                gi.ExposureControl.TonemapInShader = value;
                 RefreshUi(true);
             }
         }
@@ -432,71 +531,52 @@ namespace Lotec.Lighting.Samples
         void ResetFrameTimeStats()
         {
             _frameTimeSamples.Clear();
-            _frameTimeLastTenSecondsLowText = UnavailableFrameTimeText;
-            _frameTimeLastTenSecondsHighText = UnavailableFrameTimeText;
-            _frameTimeLastTenSecondsAverageText = UnavailableFrameTimeText;
             _frameTimeLastSecondLowText = UnavailableFrameTimeText;
             _frameTimeLastSecondHighText = UnavailableFrameTimeText;
             _frameTimeLastSecondAverageText = UnavailableFrameTimeText;
+            _fpsText = UnavailableFpsText;
         }
 
         void UpdateFrameTimeStats()
         {
             float now = Time.unscaledTime;
 
-            if (TryGetMeasuredFrameTimeMilliseconds(out float frameTimeMilliseconds))
+            // Wall-clock time since the last frame - the actual displayed frame interval (includes
+            // any present/vsync wait), which is what FPS reflects. Skip the first frame's 0 delta.
+            float frameTimeMilliseconds = Time.unscaledDeltaTime * 1000f;
+            if (frameTimeMilliseconds > 0f)
             {
                 _frameTimeSamples.Enqueue(new FrameTimeSample(now, frameTimeMilliseconds));
             }
 
             TrimFrameTimeSamples(now);
-            UpdateFrameTimeWindowTexts(now - OneSecondWindowDuration, out _frameTimeLastSecondLowText, out _frameTimeLastSecondHighText, out _frameTimeLastSecondAverageText);
-            UpdateFrameTimeWindowTexts(now - TenSecondWindowDuration, out _frameTimeLastTenSecondsLowText, out _frameTimeLastTenSecondsHighText, out _frameTimeLastTenSecondsAverageText);
-        }
-
-        bool TryGetMeasuredFrameTimeMilliseconds(out float frameTimeMilliseconds)
-        {
-            frameTimeMilliseconds = 0f;
-
-            FrameTimingManager.CaptureFrameTimings();
-            if (FrameTimingManager.GetLatestTimings((uint)_frameTimings.Length, _frameTimings) == 0)
-            {
-                return false;
-            }
-
-            FrameTiming frameTiming = _frameTimings[0];
-            double workTimeMilliseconds = frameTiming.cpuFrameTime - frameTiming.cpuMainThreadPresentWaitTime;
-            if (workTimeMilliseconds <= 0d)
-            {
-                return false;
-            }
-
-            frameTimeMilliseconds = (float)workTimeMilliseconds;
-            return true;
+            UpdateFrameTimeWindowTexts(now - OneSecondWindowDuration, out _frameTimeLastSecondLowText, out _frameTimeLastSecondHighText, out _frameTimeLastSecondAverageText, out _fpsText);
         }
 
         void TrimFrameTimeSamples(float now)
         {
-            float cutoffTime = now - TenSecondWindowDuration;
+            float cutoffTime = now - OneSecondWindowDuration;
             while (_frameTimeSamples.Count > 0 && _frameTimeSamples.Peek().Timestamp < cutoffTime)
             {
                 _frameTimeSamples.Dequeue();
             }
         }
 
-        void UpdateFrameTimeWindowTexts(float cutoffTime, out string lowText, out string highText, out string averageText)
+        void UpdateFrameTimeWindowTexts(float cutoffTime, out string lowText, out string highText, out string averageText, out string fpsText)
         {
             if (!TryGetFrameTimeStats(cutoffTime, out float lowestMilliseconds, out float highestMilliseconds, out float averageMilliseconds))
             {
                 lowText = UnavailableFrameTimeText;
                 highText = UnavailableFrameTimeText;
                 averageText = UnavailableFrameTimeText;
+                fpsText = UnavailableFpsText;
                 return;
             }
 
             lowText = FormatFrameTime(lowestMilliseconds);
             highText = FormatFrameTime(highestMilliseconds);
             averageText = FormatFrameTime(averageMilliseconds);
+            fpsText = FormatFps(averageMilliseconds);
         }
 
         bool TryGetFrameTimeStats(float cutoffTime, out float lowestMilliseconds, out float highestMilliseconds, out float averageMilliseconds)
@@ -540,12 +620,10 @@ namespace Lotec.Lighting.Samples
 
         void RefreshFrameTimeLabels()
         {
-            UpdateLabelText(_frameTimeLastTenSecondsLowLabel, _frameTimeLastTenSecondsLowText);
-            UpdateLabelText(_frameTimeLastTenSecondsHighLabel, _frameTimeLastTenSecondsHighText);
-            UpdateLabelText(_frameTimeLastTenSecondsAverageLabel, _frameTimeLastTenSecondsAverageText);
             UpdateLabelText(_frameTimeLastSecondLowLabel, _frameTimeLastSecondLowText);
             UpdateLabelText(_frameTimeLastSecondHighLabel, _frameTimeLastSecondHighText);
             UpdateLabelText(_frameTimeLastSecondAverageLabel, _frameTimeLastSecondAverageText);
+            UpdateLabelText(_fpsLabel, _fpsText);
         }
 
         void UpdateBindingSnapshot(bool notifyChanges)
@@ -555,8 +633,11 @@ namespace Lotec.Lighting.Samples
             float enabledLightIntensity = EnabledLightIntensity;
             bool flashlightEnabled = FlashlightEnabled;
             bool candleEnabled = CandleEnabled;
-            ShadowSourceMode shadowMode = ShadowMode;
+            ShadowUiMode shadowMode = ShadowMode;
             int samplesPerFrame = SamplesPerFrame;
+            float confidenceCurve = ConfidenceCurve;
+            float aoStrength = AoStrength;
+            bool tonemapInShader = TonemapInShader;
 
             if (!_hasBindingSnapshot)
             {
@@ -567,6 +648,9 @@ namespace Lotec.Lighting.Samples
                 _lastCandleEnabled = candleEnabled;
                 _lastShadowMode = shadowMode;
                 _lastSamplesPerFrame = samplesPerFrame;
+                _lastConfidenceCurve = confidenceCurve;
+                _lastAoStrength = aoStrength;
+                _lastTonemapInShader = tonemapInShader;
                 _hasBindingSnapshot = true;
                 return;
             }
@@ -578,6 +662,9 @@ namespace Lotec.Lighting.Samples
             UpdateBoolSnapshot(ref _lastCandleEnabled, candleEnabled, notifyChanges, nameof(CandleEnabled));
             UpdateEnumSnapshot(ref _lastShadowMode, shadowMode, notifyChanges, nameof(ShadowMode));
             UpdateIntSnapshot(ref _lastSamplesPerFrame, samplesPerFrame, notifyChanges, nameof(SamplesPerFrame));
+            UpdateFloatSnapshot(ref _lastConfidenceCurve, confidenceCurve, notifyChanges, nameof(ConfidenceCurve));
+            UpdateFloatSnapshot(ref _lastAoStrength, aoStrength, notifyChanges, nameof(AoStrength));
+            UpdateBoolSnapshot(ref _lastTonemapInShader, tonemapInShader, notifyChanges, nameof(TonemapInShader));
         }
 
         void UpdateEnumSnapshot<T>(ref T currentValue, T nextValue, bool notifyChanges, string propertyName) where T : struct, System.Enum
@@ -651,15 +738,14 @@ namespace Lotec.Lighting.Samples
             return $"{milliseconds:0.00} ms";
         }
 
-        static void DisposeRecorder(ref ProfilerRecorder recorder)
+        static string FormatFps(float averageMilliseconds)
         {
-            if (!recorder.Valid)
+            if (averageMilliseconds <= 0f)
             {
-                return;
+                return UnavailableFpsText;
             }
 
-            recorder.Dispose();
-            recorder = default;
+            return $"{Mathf.RoundToInt(1000f / averageMilliseconds)} fps";
         }
 
         void NotifyBindingChanged([CallerMemberName] string propertyName = "")

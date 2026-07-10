@@ -98,6 +98,16 @@
     white-space: nowrap;
 }
 
+.fps-value {
+    flex-grow: 1;
+    margin-right: 6px;
+    color: rgb(227, 172, 61);
+    font-size: 15px;
+    -unity-font-style: bold;
+    -unity-text-align: middle-right;
+    white-space: nowrap;
+}
+
 .setting-field {
     margin-bottom: 8px;
 }
