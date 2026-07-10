@@ -62,17 +62,15 @@
             </ui:VisualElement>
             <ui:VisualElement style="flex-direction: row; align-items: flex-start;">
                 <ui:VisualElement class="section-body debug-info-section">
+                    <ui:VisualElement class="debug-info-row">
+                        <ui:Label text="FPS" class="debug-info-caption"/>
+                        <ui:Label name="fps-value" class="fps-value"/>
+                    </ui:VisualElement>
                     <ui:VisualElement class="debug-info-row debug-info-header-row">
                         <ui:Label text="Frame Time" class="debug-info-caption"/>
                         <ui:Label text="Low" class="debug-info-heading"/>
                         <ui:Label text="High" class="debug-info-heading"/>
                         <ui:Label text="Avg" class="debug-info-heading"/>
-                    </ui:VisualElement>
-                    <ui:VisualElement class="debug-info-row">
-                        <ui:Label text="Last 10s" class="debug-info-caption"/>
-                        <ui:Label name="frame-time-last-10-seconds-low-value" class="debug-info-cell"/>
-                        <ui:Label name="frame-time-last-10-seconds-high-value" class="debug-info-cell"/>
-                        <ui:Label name="frame-time-last-10-seconds-average-value" class="debug-info-cell"/>
                     </ui:VisualElement>
                     <ui:VisualElement class="debug-info-row">
                         <ui:Label text="1s" class="debug-info-caption"/>

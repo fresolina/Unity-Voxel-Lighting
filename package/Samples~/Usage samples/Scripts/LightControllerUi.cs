@@ -306,12 +306,10 @@ namespace Lotec.Lighting.Samples
                 _boundRoot.dataSource = null;
             }
 
-            _frameTimeLastTenSecondsLowLabel = null;
-            _frameTimeLastTenSecondsHighLabel = null;
-            _frameTimeLastTenSecondsAverageLabel = null;
             _frameTimeLastSecondLowLabel = null;
             _frameTimeLastSecondHighLabel = null;
             _frameTimeLastSecondAverageLabel = null;
+            _fpsLabel = null;
             _boundRoot = null;
         }
 
@@ -533,71 +531,52 @@ namespace Lotec.Lighting.Samples
         void ResetFrameTimeStats()
         {
             _frameTimeSamples.Clear();
-            _frameTimeLastTenSecondsLowText = UnavailableFrameTimeText;
-            _frameTimeLastTenSecondsHighText = UnavailableFrameTimeText;
-            _frameTimeLastTenSecondsAverageText = UnavailableFrameTimeText;
             _frameTimeLastSecondLowText = UnavailableFrameTimeText;
             _frameTimeLastSecondHighText = UnavailableFrameTimeText;
             _frameTimeLastSecondAverageText = UnavailableFrameTimeText;
+            _fpsText = UnavailableFpsText;
         }
 
         void UpdateFrameTimeStats()
         {
             float now = Time.unscaledTime;
 
-            if (TryGetMeasuredFrameTimeMilliseconds(out float frameTimeMilliseconds))
+            // Wall-clock time since the last frame - the actual displayed frame interval (includes
+            // any present/vsync wait), which is what FPS reflects. Skip the first frame's 0 delta.
+            float frameTimeMilliseconds = Time.unscaledDeltaTime * 1000f;
+            if (frameTimeMilliseconds > 0f)
             {
                 _frameTimeSamples.Enqueue(new FrameTimeSample(now, frameTimeMilliseconds));
             }
 
             TrimFrameTimeSamples(now);
-            UpdateFrameTimeWindowTexts(now - OneSecondWindowDuration, out _frameTimeLastSecondLowText, out _frameTimeLastSecondHighText, out _frameTimeLastSecondAverageText);
-            UpdateFrameTimeWindowTexts(now - TenSecondWindowDuration, out _frameTimeLastTenSecondsLowText, out _frameTimeLastTenSecondsHighText, out _frameTimeLastTenSecondsAverageText);
-        }
-
-        bool TryGetMeasuredFrameTimeMilliseconds(out float frameTimeMilliseconds)
-        {
-            frameTimeMilliseconds = 0f;
-
-            FrameTimingManager.CaptureFrameTimings();
-            if (FrameTimingManager.GetLatestTimings((uint)_frameTimings.Length, _frameTimings) == 0)
-            {
-                return false;
-            }
-
-            FrameTiming frameTiming = _frameTimings[0];
-            double workTimeMilliseconds = frameTiming.cpuFrameTime - frameTiming.cpuMainThreadPresentWaitTime;
-            if (workTimeMilliseconds <= 0d)
-            {
-                return false;
-            }
-
-            frameTimeMilliseconds = (float)workTimeMilliseconds;
-            return true;
+            UpdateFrameTimeWindowTexts(now - OneSecondWindowDuration, out _frameTimeLastSecondLowText, out _frameTimeLastSecondHighText, out _frameTimeLastSecondAverageText, out _fpsText);
         }
 
         void TrimFrameTimeSamples(float now)
         {
-            float cutoffTime = now - TenSecondWindowDuration;
+            float cutoffTime = now - OneSecondWindowDuration;
             while (_frameTimeSamples.Count > 0 && _frameTimeSamples.Peek().Timestamp < cutoffTime)
             {
                 _frameTimeSamples.Dequeue();
             }
         }
 
-        void UpdateFrameTimeWindowTexts(float cutoffTime, out string lowText, out string highText, out string averageText)
+        void UpdateFrameTimeWindowTexts(float cutoffTime, out string lowText, out string highText, out string averageText, out string fpsText)
         {
             if (!TryGetFrameTimeStats(cutoffTime, out float lowestMilliseconds, out float highestMilliseconds, out float averageMilliseconds))
             {
                 lowText = UnavailableFrameTimeText;
                 highText = UnavailableFrameTimeText;
                 averageText = UnavailableFrameTimeText;
+                fpsText = UnavailableFpsText;
                 return;
             }
 
             lowText = FormatFrameTime(lowestMilliseconds);
             highText = FormatFrameTime(highestMilliseconds);
             averageText = FormatFrameTime(averageMilliseconds);
+            fpsText = FormatFps(averageMilliseconds);
         }
 
         bool TryGetFrameTimeStats(float cutoffTime, out float lowestMilliseconds, out float highestMilliseconds, out float averageMilliseconds)
@@ -641,12 +620,10 @@ namespace Lotec.Lighting.Samples
 
         void RefreshFrameTimeLabels()
         {
-            UpdateLabelText(_frameTimeLastTenSecondsLowLabel, _frameTimeLastTenSecondsLowText);
-            UpdateLabelText(_frameTimeLastTenSecondsHighLabel, _frameTimeLastTenSecondsHighText);
-            UpdateLabelText(_frameTimeLastTenSecondsAverageLabel, _frameTimeLastTenSecondsAverageText);
             UpdateLabelText(_frameTimeLastSecondLowLabel, _frameTimeLastSecondLowText);
             UpdateLabelText(_frameTimeLastSecondHighLabel, _frameTimeLastSecondHighText);
             UpdateLabelText(_frameTimeLastSecondAverageLabel, _frameTimeLastSecondAverageText);
+            UpdateLabelText(_fpsLabel, _fpsText);
         }
 
         void UpdateBindingSnapshot(bool notifyChanges)
@@ -761,15 +738,14 @@ namespace Lotec.Lighting.Samples
             return $"{milliseconds:0.00} ms";
         }
 
-        static void DisposeRecorder(ref ProfilerRecorder recorder)
+        static string FormatFps(float averageMilliseconds)
         {
-            if (!recorder.Valid)
+            if (averageMilliseconds <= 0f)
             {
-                return;
+                return UnavailableFpsText;
             }
 
-            recorder.Dispose();
-            recorder = default;
+            return $"{Mathf.RoundToInt(1000f / averageMilliseconds)} fps";
         }
 
         void NotifyBindingChanged([CallerMemberName] string propertyName = "")
