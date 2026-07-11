@@ -1,7 +1,6 @@
 using UnityEngine.UIElements;
 
-namespace Lotec.Lighting.Samples
-{
+namespace Lotec.Lighting.Samples {
     /// <summary>
     /// Makes a panel header collapse/expand its body on click, and exposes the same fold as a
     /// programmatic call (so a hotkey can fold every panel at once). A UXML panel opts in by giving
@@ -9,10 +8,8 @@ namespace Lotec.Lighting.Samples
     /// "panel-body", and (optionally) a "fold-arrow" label whose glyph flips ▾/▸. Shared by
     /// <see cref="LightControllerUi"/> and <see cref="BufferGiDebugUi"/>.
     /// </summary>
-    static class FoldoutHeader
-    {
-        public static void Setup(VisualElement root)
-        {
+    static class FoldoutHeader {
+        public static void Setup(VisualElement root) {
             VisualElement header = root.Q<VisualElement>("panel-header");
             if (header == null || root.Q<VisualElement>("panel-body") == null)
                 return;
@@ -21,8 +18,7 @@ namespace Lotec.Lighting.Samples
         }
 
         /// <summary>Flip the fold state of the panel under <paramref name="root"/>.</summary>
-        public static void Toggle(VisualElement root)
-        {
+        public static void Toggle(VisualElement root) {
             VisualElement body = root.Q<VisualElement>("panel-body");
             if (body == null)
                 return;
@@ -30,8 +26,7 @@ namespace Lotec.Lighting.Samples
         }
 
         /// <summary>Fold (hide body) or unfold the panel, updating the ▾/▸ arrow.</summary>
-        public static void SetFolded(VisualElement root, bool folded)
-        {
+        public static void SetFolded(VisualElement root, bool folded) {
             VisualElement body = root.Q<VisualElement>("panel-body");
             if (body == null)
                 return;
