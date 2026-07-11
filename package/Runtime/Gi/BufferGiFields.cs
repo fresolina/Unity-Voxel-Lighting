@@ -56,7 +56,7 @@ namespace Lotec.Lighting {
         // one, so a freshly added component already lists the fine fields to bake.
         void Reset() {
             _detailedFields.Clear();
-            MeshBounds[] all = FindObjectsByType<MeshBounds>(FindObjectsSortMode.None);
+            MeshBounds[] all = FindObjectsByType<MeshBounds>();
             foreach (MeshBounds mb in all) {
                 if (mb != null && mb != _coarseField) _detailedFields.Add(mb);
             }

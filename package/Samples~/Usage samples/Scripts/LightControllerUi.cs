@@ -63,7 +63,7 @@ namespace Lotec.Lighting.Samples {
         int _lastSamplesPerFrame;
         float _lastConfidenceCurve;
         float _lastAoStrength;
-        bool _lastTonemapInShader;
+        AutoExposure.TonemapMode _lastTonemap;
 
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
@@ -249,15 +249,20 @@ namespace Lotec.Lighting.Samples {
             IntegerField samplesPerFrameField = root.Q<IntegerField>("samples-per-frame-field");
             Slider confidenceCurveSlider = root.Q<Slider>("confidence-curve-slider");
             Slider aoStrengthSlider = root.Q<Slider>("ao-strength-slider");
-            Toggle tonemapToggle = root.Q<Toggle>("tonemap-toggle");
+            EnumField tonemapField = root.Q<EnumField>("tonemap-enum");
 
-            if (giField == null || giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || samplesPerFrameField == null || confidenceCurveSlider == null || aoStrengthSlider == null || tonemapToggle == null || !TryCacheFrameTimeLabels(root)) {
+            if (giField == null || giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || samplesPerFrameField == null || confidenceCurveSlider == null || aoStrengthSlider == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
 
             _boundRoot = root;
             _boundRoot.dataSource = this;
+
+            // Set the enum type from code: the UXML `type` string resolves ShadowUiMode (same
+            // Assembly-CSharp as this UXML) but not TonemapMode (in the Lotec.Lighting package
+            // assembly) at runtime, leaving the field empty. Init here guarantees the choices.
+            tonemapField.Init(Tonemap);
 
             FoldoutHeader.Setup(root);
 
@@ -294,7 +299,7 @@ namespace Lotec.Lighting.Samples {
                 _boundRoot.Q<IntegerField>("samples-per-frame-field")?.ClearBindings();
                 _boundRoot.Q<Slider>("confidence-curve-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("ao-strength-slider")?.ClearBindings();
-                _boundRoot.Q<Toggle>("tonemap-toggle")?.ClearBindings();
+                _boundRoot.Q<EnumField>("tonemap-enum")?.ClearBindings();
                 _boundRoot.dataSource = null;
             }
 
@@ -457,18 +462,31 @@ namespace Lotec.Lighting.Samples {
         }
 
         [CreateProperty]
-        bool TonemapInShader {
+        AutoExposure.TonemapMode Tonemap {
             get {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                return gi == null || gi.ExposureControl.TonemapInShader;
-            }
-            set {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi == null) {
-                    return;
+                // Only the ACTIVE GI method exposes an Instance (the other is disabled). Report
+                // whichever is running; prefer the buffer GI if both somehow exist.
+                BufferGiUpdater buffer = BufferGiUpdater.Instance;
+                if (buffer != null) {
+                    return buffer.ExposureControl.Tonemap;
                 }
 
-                gi.ExposureControl.TonemapInShader = value;
+                GiFieldUpdater texture = GiFieldUpdater.Instance;
+                return texture != null ? texture.ExposureControl.Tonemap : AutoExposure.TonemapMode.Reinhard;
+            }
+            set {
+                // Drive both updaters' display transforms - whichever is the active GI method owns
+                // the shared _Tonemap global, so the UI must reach the texture GI too, not just buffer.
+                BufferGiUpdater buffer = BufferGiUpdater.Instance;
+                if (buffer != null) {
+                    buffer.ExposureControl.Tonemap = value;
+                }
+
+                GiFieldUpdater texture = GiFieldUpdater.Instance;
+                if (texture != null) {
+                    texture.ExposureControl.Tonemap = value;
+                }
+
                 RefreshUi(true);
             }
         }
@@ -571,7 +589,7 @@ namespace Lotec.Lighting.Samples {
             int samplesPerFrame = SamplesPerFrame;
             float confidenceCurve = ConfidenceCurve;
             float aoStrength = AoStrength;
-            bool tonemapInShader = TonemapInShader;
+            AutoExposure.TonemapMode tonemap = Tonemap;
 
             if (!_hasBindingSnapshot) {
                 _lastGiMethod = giMethod;
@@ -583,7 +601,7 @@ namespace Lotec.Lighting.Samples {
                 _lastSamplesPerFrame = samplesPerFrame;
                 _lastConfidenceCurve = confidenceCurve;
                 _lastAoStrength = aoStrength;
-                _lastTonemapInShader = tonemapInShader;
+                _lastTonemap = tonemap;
                 _hasBindingSnapshot = true;
                 return;
             }
@@ -597,7 +615,7 @@ namespace Lotec.Lighting.Samples {
             UpdateIntSnapshot(ref _lastSamplesPerFrame, samplesPerFrame, notifyChanges, nameof(SamplesPerFrame));
             UpdateFloatSnapshot(ref _lastConfidenceCurve, confidenceCurve, notifyChanges, nameof(ConfidenceCurve));
             UpdateFloatSnapshot(ref _lastAoStrength, aoStrength, notifyChanges, nameof(AoStrength));
-            UpdateBoolSnapshot(ref _lastTonemapInShader, tonemapInShader, notifyChanges, nameof(TonemapInShader));
+            UpdateEnumSnapshot(ref _lastTonemap, tonemap, notifyChanges, nameof(Tonemap));
         }
 
         void UpdateEnumSnapshot<T>(ref T currentValue, T nextValue, bool notifyChanges, string propertyName) where T : struct, System.Enum {

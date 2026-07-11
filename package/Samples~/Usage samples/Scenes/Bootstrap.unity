@@ -192,7 +192,7 @@ Light:
   serializedVersion: 13
   m_Type: 0
   m_Color: {r: 0.89622635, g: 1, b: 0.995467, a: 1}
-  m_Intensity: 1
+  m_Intensity: 9
   m_Range: 20
   m_SpotAngle: 43.552048
   m_InnerSpotAngle: 15.590716
@@ -810,9 +810,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 18936aa31b88dfa4fb96ecb2445c73f5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiUpdater
-  _maxSamples: 512
-  _samplesPerFrame: 1
-  _confidenceCurve: 3
+  _maxSamples: 500
+  _samplesPerFrame: 10
+  _confidenceCurve: 2
   _continuousGi: 0
   _giFireflyClamp: 8
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
@@ -822,11 +822,11 @@ MonoBehaviour:
   _fineShadow: 0
   _coarseShadow: 1
   _exposureControl:
-    _tonemapInShader: 1
+    _tonemap: 2
     _exposure: 0
-    _auto: 0
+    _auto: 1
     _min: -2
-    _max: 4
+    _max: 2
     _adaptationSpeed: 2
     _measureRadius: 3
   _computeShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
@@ -845,16 +845,16 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.GiFieldUpdater
   _giComputeShader: {fileID: 7200000, guid: 02f9a08ea0218754cac3ba8d03fd4a99, type: 3}
   _continuousGi: 1
-  _maxSamples: 90
-  _raysPerFrame: 1
+  _maxSamples: 500
+  _raysPerFrame: 10
   _giFireflyClamp: 3
   _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
   _exposureControl:
-    _tonemapInShader: 1
+    _tonemap: 1
     _exposure: 0
-    _auto: 0
+    _auto: 1
     _min: -2
-    _max: 4
+    _max: 2
     _adaptationSpeed: 2
     _measureRadius: 3
   _lightingMethod: 0

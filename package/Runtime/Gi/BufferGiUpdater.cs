@@ -84,9 +84,9 @@ namespace Lotec.Lighting {
         [SerializeField] ShadowMode _coarseShadow = ShadowMode.Off;
 
         [Header("Lighting")]
-        [Tooltip("Display transform (exposure + tonemap), with optional auto-exposure. Published as " +
-                 "the _Exposure global + TONEMAP_OFF keyword; the lit shader applies exp2(_Exposure) " +
-                 "whenever GI is on. Set explicitly so a stale value can't darken the image.")]
+        [Tooltip("Display transform (exposure + tonemap operator), with optional auto-exposure. " +
+                 "Published as the _Exposure + _Tonemap globals; the lit shader applies " +
+                 "exp2(_Exposure) whenever GI is on. Set explicitly so a stale value can't darken the image.")]
         [SerializeField] AutoExposure _exposureControl = new AutoExposure();
 
         [Header("Setup")]
@@ -306,7 +306,7 @@ namespace Lotec.Lighting {
             UnityEditor.EditorApplication.update -= EditorPump;
 #endif
             SetGiBufferKeyword(false);
-            _exposureControl.ResetKeyword();
+            _exposureControl.ResetToDefault();
             _exposureControl.Release();
             ReleaseBuffers();
             if (_voxelizeMaterial != null) {
@@ -424,21 +424,45 @@ namespace Lotec.Lighting {
             _exposureControl.Apply(DispatchLuminance);
         }
 
-        // Backend luminance measurement for AutoExposure: average the DISPLAYED fine field's air-voxel
+        // Backend luminance measurement for AutoExposure: average the DISPLAYED field's air-voxel
         // luminance in a camera-centred radius into the controller's 2-uint buffer. AutoExposure owns
-        // the clear + readback + adaptation; this only binds + dispatches the fine-field kernel.
+        // the clear + readback + adaptation; this only picks the field to read and dispatches it.
+        //
+        // Field selection follows the camera: the FINE (active) field when the camera is inside it,
+        // else the COARSE (far) field. Outside both, nothing is dispatched - the buffer stays 0 and
+        // AutoExposure falls back to its open-sky estimate rather than reading empty/dark air.
         void DispatchLuminance(ComputeBuffer luminanceBuffer) {
             if (_averageLuminanceKernel < 0 || _irradianceBlurBuffer == null || Camera.main == null) return;
-            SetGridUniforms(GridOrigin, GridSize, VoxelSize);
-            _computeShader.SetInt(s_fieldOffset, FineField * VoxelCount);
+            Vector3 camPos = Camera.main.transform.position;
+
+            Vector3 origin, size, voxelSize;
+            int fieldOffset;
+            if (Contains(GridOrigin, GridSize, camPos)) {
+                origin = GridOrigin; size = GridSize; voxelSize = VoxelSize;
+                fieldOffset = FineField * VoxelCount;
+            } else if (HasCoarse && Contains(CoarseOrigin, CoarseSize, camPos)) {
+                origin = CoarseOrigin; size = CoarseSize; voxelSize = CoarseVoxelSize;
+                fieldOffset = CoarseField * VoxelCount;
+            } else {
+                return; // outside both fields -> AutoExposure uses its open-sky fallback
+            }
+
+            SetGridUniforms(origin, size, voxelSize);
+            _computeShader.SetInt(s_fieldOffset, fieldOffset);
             _computeShader.SetBuffer(_averageLuminanceKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_averageLuminanceKernel, s_irradianceBlur, _irradianceBlurBuffer);
             _computeShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, luminanceBuffer);
-            _computeShader.SetVector(s_cameraPosition, Camera.main.transform.position);
+            _computeShader.SetVector(s_cameraPosition, camPos);
             _computeShader.SetVector(s_cameraForward, Camera.main.transform.forward);
             _computeShader.SetFloat(s_luminanceRadius, _exposureControl.MeasureRadius);
             _computeShader.Dispatch(_averageLuminanceKernel, Groups, 1, 1);
         }
+
+        // Axis-aligned contains test for a grid given as min corner (origin) + size.
+        static bool Contains(Vector3 origin, Vector3 size, Vector3 p) =>
+            p.x >= origin.x && p.x <= origin.x + size.x &&
+            p.y >= origin.y && p.y <= origin.y + size.y &&
+            p.z >= origin.z && p.z <= origin.z + size.z;
 
         // Publish the buffers + grid mapping + confidence the lit shader's SampleBufferGI reads.
         void SetGlobals() {
@@ -464,7 +488,7 @@ namespace Lotec.Lighting {
             Shader.SetGlobalBuffer(s_radiance, _radianceBuffer);
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
-            // The display transform (_Exposure + TONEMAP_OFF) is published by _exposureControl.Apply
+            // The display transform (_Exposure + _Tonemap) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value (e.g. left by GiFieldUpdater) can't darken it.
         }
 

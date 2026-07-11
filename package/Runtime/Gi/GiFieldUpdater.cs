@@ -129,6 +129,9 @@ namespace Lotec.Lighting {
         static readonly int s_volumeBoundsSize = Shader.PropertyToID("_VoxelVolumeBoundsSize");
         #endregion
 
+        /// <summary>Display-transform controller (exposure + tonemap), e.g. to set the tonemap from a UI.</summary>
+        public AutoExposure ExposureControl => _exposureControl;
+
         public RenderTexture RadianceField => _radianceField;
         public RenderTexture IrradianceFinal => _isEvenFrame ? _irradianceFieldA : _irradianceFieldB;
         public RenderTexture IrradianceBlurred => _irradianceFieldFinal;
@@ -317,7 +320,7 @@ namespace Lotec.Lighting {
             // GI is the sole GI / display-transform authority; with it gone, fall back to the
             // direct-only path with the in-shader tonemap so HDR still gets tonemapped.
             SetGiKeyword(false);
-            _exposureControl.ResetKeyword();
+            _exposureControl.ResetToDefault();
             _exposureControl.Release();
             ReleaseBuffers();
         }
