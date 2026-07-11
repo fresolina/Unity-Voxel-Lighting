@@ -10,22 +10,18 @@ using UnityEngine.UIElements;
 using UnityEditor;
 #endif
 
-namespace Lotec.Lighting.Samples
-{
-    [RequireComponent(typeof(UIDocument))]
-    public class LightControllerUi : MonoBehaviour, INotifyBindablePropertyChanged
-    {
+namespace Lotec.Lighting.Samples {
+    [RequireComponent(typeof(PanelRenderer))]
+    public class LightControllerUi : MonoBehaviour, INotifyBindablePropertyChanged {
         const float OneSecondWindowDuration = 1f;
         const string UnavailableFrameTimeText = "--.-- ms";
         const string UnavailableFpsText = "-- fps";
 
-        struct FrameTimeSample
-        {
+        struct FrameTimeSample {
             public readonly float Timestamp;
             public readonly float Milliseconds;
 
-            public FrameTimeSample(float timestamp, float milliseconds)
-            {
+            public FrameTimeSample(float timestamp, float milliseconds) {
                 Timestamp = timestamp;
                 Milliseconds = milliseconds;
             }
@@ -39,11 +35,14 @@ namespace Lotec.Lighting.Samples
         static LightControllerUi s_instance;
 
         [SerializeField] LightController _lightController;
-        [SerializeField] UIDocument _document;
+        [SerializeField] PanelRenderer _panel;
         [SerializeField] PanelSettings _panelSettings;
         [SerializeField] VisualTreeAsset _visualTreeAsset;
         [SerializeField] int _sortingOrder = 1000;
 
+        // PanelRenderer has no synchronous rootVisualElement; the root arrives via OnUiReload and is
+        // cached here for the lifetime of the loaded tree. _boundRoot tracks the last root we bound.
+        VisualElement _root;
         VisualElement _boundRoot;
         readonly Queue<FrameTimeSample> _frameTimeSamples = new Queue<FrameTimeSample>();
         Label _frameTimeLastSecondLowLabel;
@@ -69,14 +68,12 @@ namespace Lotec.Lighting.Samples
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
         /// <summary>Fold or unfold this panel (the header bar stays visible). Driven by the H hotkey.</summary>
-        public static void SetFolded(bool folded)
-        {
-            if (s_instance == null || s_instance._document == null || s_instance._document.rootVisualElement == null)
-            {
+        public static void SetFolded(bool folded) {
+            if (s_instance == null || s_instance._root == null) {
                 return;
             }
 
-            FoldoutHeader.SetFolded(s_instance._document.rootVisualElement, folded);
+            FoldoutHeader.SetFolded(s_instance._root, folded);
         }
 
         public event EventHandler<BindablePropertyChangedEventArgs> propertyChanged;
@@ -84,86 +81,88 @@ namespace Lotec.Lighting.Samples
 #if UNITY_EDITOR
         void OnValidate() {
             EnsureLightController();
-            EnsureDocument();
-            EnsureDocumentAssets();
+            EnsurePanel();
+            EnsurePanelAssets();
         }
 #endif
 
-        void Awake()
-        {
+        void Awake() {
             s_instance = this;
         }
 
-        void Start()
-        {
+        void Start() {
+            // Panel + reload callback are set up in OnEnable; re-ensure the controller in case OnEnable
+            // ran before it existed, and re-apply assets idempotently. Binding happens in OnUiReload.
             EnsureLightController();
-            ApplyDocumentAssets();
-            BindUi();
+            ApplyPanelAssets();
             RefreshUi(false);
         }
 
-        void OnEnable()
-        {
-            if (_document.rootVisualElement != null)
-                _document.rootVisualElement.visible = true;
+        void OnEnable() {
+            EnsureLightController();
+            EnsurePanel();
+            if (_panel != null) {
+                // Register before assigning the tree so we receive the initial load's root here.
+                _panel.RegisterUIReloadCallback(OnUiReload);
+                ApplyPanelAssets();
+            }
+
+            if (_root != null)
+                _root.visible = true;
             ResetFrameTimeStats();
         }
 
-        void OnDisable()
-        {
-            if (_document.rootVisualElement != null)
-                _document.rootVisualElement.visible = false;
+        void OnDisable() {
+            if (_panel != null)
+                _panel.UnregisterUIReloadCallback(OnUiReload);
+            // PanelRenderer keeps its content in memory while disabled, so the cached root stays valid.
+            if (_root != null)
+                _root.visible = false;
         }
 
-        void OnDestroy()
-        {
+        void OnDestroy() {
             if (s_instance == this)
                 s_instance = null;
             UnbindUi();
         }
 
-        void Update()
-        {
+        void Update() {
             UpdateFrameTimeStats();
-
-            if (_boundRoot != _document.rootVisualElement)
-            {
-                ApplyDocumentAssets();
-                BindUi();
-            }
-
             RefreshUi(true);
         }
 
-        void EnsureLightController()
-        {
-            if (_lightController == null)
-            {
+        // PanelRenderer hands us the freshly loaded root here - on initial setup and whenever the
+        // visual tree reloads (asset swap / live reload) - replacing UIDocument's rootVisualElement poll.
+        void OnUiReload(PanelRenderer panel, VisualElement root) {
+            _root = root;
+            BindUi();
+            RefreshUi(false);
+        }
+
+        void EnsureLightController() {
+            if (_lightController == null) {
                 _lightController = FindAnyObjectByType<LightController>();
             }
         }
 
-        void EnsureDocument()
-        {
-            if (_document == null)
-            {
-                _document = GetComponent<UIDocument>();
+        void EnsurePanel() {
+            if (_panel == null) {
+                _panel = GetComponent<PanelRenderer>();
             }
 
 #if UNITY_EDITOR
-            if (_document == null && !Application.isPlaying) {
-                _document = Undo.AddComponent<UIDocument>(gameObject);
+            if (_panel == null && !Application.isPlaying) {
+                _panel = Undo.AddComponent<PanelRenderer>(gameObject);
             }
 #endif
 
-            if (_document == null && Application.isPlaying)
-            {
-                _document = gameObject.AddComponent<UIDocument>();
+            if (_panel == null && Application.isPlaying) {
+                _panel = gameObject.AddComponent<PanelRenderer>();
             }
         }
 
 #if UNITY_EDITOR
-        void EnsureDocumentAssets() {
+        void EnsurePanelAssets() {
             MonoScript monoScript = MonoScript.FromMonoBehaviour(this);
             string scriptPath = AssetDatabase.GetAssetPath(monoScript);
             string scriptDirectory = Path.GetDirectoryName(scriptPath)?.Replace('\\', '/');
@@ -190,7 +189,7 @@ namespace Lotec.Lighting.Samples
                 wasChanged = true;
             }
 
-            ApplyDocumentAssets();
+            ApplyPanelAssets();
 
             if (wasChanged) {
                 EditorUtility.SetDirty(this);
@@ -198,44 +197,43 @@ namespace Lotec.Lighting.Samples
         }
 #endif
 
-        void ApplyDocumentAssets()
-        {
+        void ApplyPanelAssets() {
+            if (_panel == null) {
+                return;
+            }
+
             bool wasChanged = false;
-            if (_document.panelSettings != _panelSettings)
-            {
-                _document.panelSettings = _panelSettings;
+            if (_panel.panelSettings != _panelSettings) {
+                _panel.panelSettings = _panelSettings;
                 wasChanged = true;
             }
 
-            if (_document.visualTreeAsset != _visualTreeAsset)
-            {
-                _document.visualTreeAsset = _visualTreeAsset;
+            if (_panel.visualTreeAsset != _visualTreeAsset) {
+                _panel.visualTreeAsset = _visualTreeAsset;
                 wasChanged = true;
             }
 
-            if (_document.sortingOrder != _sortingOrder)
-            {
-                _document.sortingOrder = _sortingOrder;
+            // sortingOrder is inherited from Renderer (int) - it layers this panel against the other
+            // shared-PanelSettings panels (e.g. BufferGiDebugUi at 1001).
+            if (_panel.sortingOrder != _sortingOrder) {
+                _panel.sortingOrder = _sortingOrder;
                 wasChanged = true;
             }
 
 #if UNITY_EDITOR
             if (wasChanged) {
-                EditorUtility.SetDirty(_document);
+                EditorUtility.SetDirty(_panel);
             }
 #endif
         }
 
-        void BindUi()
-        {
-            if (_document.rootVisualElement == null)
-            {
+        void BindUi() {
+            if (_root == null) {
                 return;
             }
 
-            VisualElement root = _document.rootVisualElement;
-            if (_boundRoot == root)
-            {
+            VisualElement root = _root;
+            if (_boundRoot == root) {
                 return;
             }
 
@@ -253,8 +251,7 @@ namespace Lotec.Lighting.Samples
             Slider aoStrengthSlider = root.Q<Slider>("ao-strength-slider");
             Toggle tonemapToggle = root.Q<Toggle>("tonemap-toggle");
 
-            if (giField == null || giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || samplesPerFrameField == null || confidenceCurveSlider == null || aoStrengthSlider == null || tonemapToggle == null || !TryCacheFrameTimeLabels(root))
-            {
+            if (giField == null || giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || samplesPerFrameField == null || confidenceCurveSlider == null || aoStrengthSlider == null || tonemapToggle == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
@@ -265,19 +262,16 @@ namespace Lotec.Lighting.Samples
             FoldoutHeader.Setup(root);
 
             // Apply stylesheet to panel root so it also covers dropdown popups.
-            if (root.styleSheets.count > 0)
-            {
+            if (root.styleSheets.count > 0) {
                 var panelRoot = root.panel.visualTree;
                 var sheet = root.styleSheets[0];
-                if (!panelRoot.styleSheets.Contains(sheet))
-                {
+                if (!panelRoot.styleSheets.Contains(sheet)) {
                     panelRoot.styleSheets.Add(sheet);
                 }
             }
         }
 
-        bool TryCacheFrameTimeLabels(VisualElement root)
-        {
+        bool TryCacheFrameTimeLabels(VisualElement root) {
             _frameTimeLastSecondLowLabel = root.Q<Label>("frame-time-last-second-low-value");
             _frameTimeLastSecondHighLabel = root.Q<Label>("frame-time-last-second-high-value");
             _frameTimeLastSecondAverageLabel = root.Q<Label>("frame-time-last-second-average-value");
@@ -289,10 +283,8 @@ namespace Lotec.Lighting.Samples
                 && _fpsLabel != null;
         }
 
-        void UnbindUi()
-        {
-            if (_boundRoot != null)
-            {
+        void UnbindUi() {
+            if (_boundRoot != null) {
                 _boundRoot.Q<EnumField>("gi-enum")?.ClearBindings();
                 _boundRoot.Q<EnumField>("lighting-method-enum")?.ClearBindings();
                 _boundRoot.Q<FloatField>("enabled-light-intensity-field")?.ClearBindings();
@@ -313,11 +305,9 @@ namespace Lotec.Lighting.Samples
             _boundRoot = null;
         }
 
-        bool HasFocusedTextInput()
-        {
-            Focusable focusedElement = _document.rootVisualElement?.panel?.focusController?.focusedElement;
-            if (focusedElement is TextField || focusedElement is FloatField)
-            {
+        bool HasFocusedTextInput() {
+            Focusable focusedElement = _root?.panel?.focusController?.focusedElement;
+            if (focusedElement is TextField || focusedElement is FloatField) {
                 return true;
             }
 
@@ -326,29 +316,23 @@ namespace Lotec.Lighting.Samples
         }
 
         [CreateProperty]
-        GiMethod Gi
-        {
+        GiMethod Gi {
             get => GiMethodSelector.Get();
-            set
-            {
+            set {
                 GiMethodSelector.Set(value);
                 RefreshUi(true);
             }
         }
 
         [CreateProperty]
-        GiFieldUpdater.LightingMethod LightingMethod
-        {
-            get
-            {
+        GiFieldUpdater.LightingMethod LightingMethod {
+            get {
                 GiFieldUpdater gi = GiFieldUpdater.Instance;
                 return gi != null ? gi.GiLightingMethod : GiFieldUpdater.LightingMethod.PathTracing;
             }
-            set
-            {
+            set {
                 GiFieldUpdater gi = GiFieldUpdater.Instance;
-                if (gi == null || !gi.SetLightingMethod(value))
-                {
+                if (gi == null || !gi.SetLightingMethod(value)) {
                     return;
                 }
 
@@ -357,51 +341,41 @@ namespace Lotec.Lighting.Samples
         }
 
         [CreateProperty]
-        float EnabledLightIntensity
-        {
+        float EnabledLightIntensity {
             get => _lightController.EnabledLightIntensity;
-            set
-            {
+            set {
                 _lightController.SetEnabledLightIntensity(value);
                 RefreshUi(true);
             }
         }
 
         [CreateProperty]
-        bool FlashlightEnabled
-        {
+        bool FlashlightEnabled {
             get => _lightController.FlashlightEnabled;
-            set
-            {
+            set {
                 _lightController.SetFlashlightEnabled(value);
                 RefreshUi(true);
             }
         }
 
         [CreateProperty]
-        bool CandleEnabled
-        {
+        bool CandleEnabled {
             get => _lightController.CandleEnabled;
-            set
-            {
+            set {
                 _lightController.SetCandleEnabled(value);
                 RefreshUi(true);
             }
         }
 
         [CreateProperty]
-        int SamplesPerFrame
-        {
-            get
-            {
+        int SamplesPerFrame {
+            get {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
                 return gi != null ? gi.SamplesPerFrame : 1;
             }
-            set
-            {
+            set {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi == null)
-                {
+                if (gi == null) {
                     return;
                 }
 
@@ -411,43 +385,32 @@ namespace Lotec.Lighting.Samples
         }
 
         [CreateProperty]
-        ShadowUiMode ShadowMode
-        {
-            get
-            {
+        ShadowUiMode ShadowMode {
+            get {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi != null && gi.FineShadow == BufferGiUpdater.ShadowMode.Baked)
-                {
+                if (gi != null && gi.FineShadow == BufferGiUpdater.ShadowMode.Baked) {
                     return ShadowUiMode.Baked;
                 }
 
-                return ShadowSourceSelector.Get() switch
-                {
+                return ShadowSourceSelector.Get() switch {
                     ShadowSourceMode.BitmaskPoint => ShadowUiMode.BitmaskPoint,
                     ShadowSourceMode.Bitmask8Tap => ShadowUiMode.Bitmask8Tap,
                     ShadowSourceMode.OcclusionField => ShadowUiMode.OcclusionField,
                     _ => ShadowUiMode.SDF,
                 };
             }
-            set
-            {
+            set {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (value == ShadowUiMode.Baked)
-                {
-                    if (gi != null)
-                    {
+                if (value == ShadowUiMode.Baked) {
+                    if (gi != null) {
                         gi.FineShadow = BufferGiUpdater.ShadowMode.Baked;
                     }
-                }
-                else
-                {
-                    if (gi != null)
-                    {
+                } else {
+                    if (gi != null) {
                         gi.FineShadow = BufferGiUpdater.ShadowMode.Off;
                     }
 
-                    ShadowSourceSelector.Set(value switch
-                    {
+                    ShadowSourceSelector.Set(value switch {
                         ShadowUiMode.BitmaskPoint => ShadowSourceMode.BitmaskPoint,
                         ShadowUiMode.Bitmask8Tap => ShadowSourceMode.Bitmask8Tap,
                         ShadowUiMode.OcclusionField => ShadowSourceMode.OcclusionField,
@@ -460,18 +423,14 @@ namespace Lotec.Lighting.Samples
         }
 
         [CreateProperty]
-        float ConfidenceCurve
-        {
-            get
-            {
+        float ConfidenceCurve {
+            get {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
                 return gi != null ? gi.ConfidenceCurve : 3f;
             }
-            set
-            {
+            set {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi == null)
-                {
+                if (gi == null) {
                     return;
                 }
 
@@ -481,18 +440,14 @@ namespace Lotec.Lighting.Samples
         }
 
         [CreateProperty]
-        float AoStrength
-        {
-            get
-            {
+        float AoStrength {
+            get {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
                 return gi != null ? gi.AoStrength : 0f;
             }
-            set
-            {
+            set {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi == null)
-                {
+                if (gi == null) {
                     return;
                 }
 
@@ -502,18 +457,14 @@ namespace Lotec.Lighting.Samples
         }
 
         [CreateProperty]
-        bool TonemapInShader
-        {
-            get
-            {
+        bool TonemapInShader {
+            get {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
                 return gi == null || gi.ExposureControl.TonemapInShader;
             }
-            set
-            {
+            set {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi == null)
-                {
+                if (gi == null) {
                     return;
                 }
 
@@ -522,14 +473,12 @@ namespace Lotec.Lighting.Samples
             }
         }
 
-        void RefreshUi(bool notifyChanges)
-        {
+        void RefreshUi(bool notifyChanges) {
             UpdateBindingSnapshot(notifyChanges);
             RefreshFrameTimeLabels();
         }
 
-        void ResetFrameTimeStats()
-        {
+        void ResetFrameTimeStats() {
             _frameTimeSamples.Clear();
             _frameTimeLastSecondLowText = UnavailableFrameTimeText;
             _frameTimeLastSecondHighText = UnavailableFrameTimeText;
@@ -537,15 +486,13 @@ namespace Lotec.Lighting.Samples
             _fpsText = UnavailableFpsText;
         }
 
-        void UpdateFrameTimeStats()
-        {
+        void UpdateFrameTimeStats() {
             float now = Time.unscaledTime;
 
             // Wall-clock time since the last frame - the actual displayed frame interval (includes
             // any present/vsync wait), which is what FPS reflects. Skip the first frame's 0 delta.
             float frameTimeMilliseconds = Time.unscaledDeltaTime * 1000f;
-            if (frameTimeMilliseconds > 0f)
-            {
+            if (frameTimeMilliseconds > 0f) {
                 _frameTimeSamples.Enqueue(new FrameTimeSample(now, frameTimeMilliseconds));
             }
 
@@ -553,19 +500,15 @@ namespace Lotec.Lighting.Samples
             UpdateFrameTimeWindowTexts(now - OneSecondWindowDuration, out _frameTimeLastSecondLowText, out _frameTimeLastSecondHighText, out _frameTimeLastSecondAverageText, out _fpsText);
         }
 
-        void TrimFrameTimeSamples(float now)
-        {
+        void TrimFrameTimeSamples(float now) {
             float cutoffTime = now - OneSecondWindowDuration;
-            while (_frameTimeSamples.Count > 0 && _frameTimeSamples.Peek().Timestamp < cutoffTime)
-            {
+            while (_frameTimeSamples.Count > 0 && _frameTimeSamples.Peek().Timestamp < cutoffTime) {
                 _frameTimeSamples.Dequeue();
             }
         }
 
-        void UpdateFrameTimeWindowTexts(float cutoffTime, out string lowText, out string highText, out string averageText, out string fpsText)
-        {
-            if (!TryGetFrameTimeStats(cutoffTime, out float lowestMilliseconds, out float highestMilliseconds, out float averageMilliseconds))
-            {
+        void UpdateFrameTimeWindowTexts(float cutoffTime, out string lowText, out string highText, out string averageText, out string fpsText) {
+            if (!TryGetFrameTimeStats(cutoffTime, out float lowestMilliseconds, out float highestMilliseconds, out float averageMilliseconds)) {
                 lowText = UnavailableFrameTimeText;
                 highText = UnavailableFrameTimeText;
                 averageText = UnavailableFrameTimeText;
@@ -579,28 +522,22 @@ namespace Lotec.Lighting.Samples
             fpsText = FormatFps(averageMilliseconds);
         }
 
-        bool TryGetFrameTimeStats(float cutoffTime, out float lowestMilliseconds, out float highestMilliseconds, out float averageMilliseconds)
-        {
+        bool TryGetFrameTimeStats(float cutoffTime, out float lowestMilliseconds, out float highestMilliseconds, out float averageMilliseconds) {
             lowestMilliseconds = 0f;
             highestMilliseconds = 0f;
             averageMilliseconds = 0f;
 
             float totalMilliseconds = 0f;
             int sampleCount = 0;
-            foreach (FrameTimeSample sample in _frameTimeSamples)
-            {
-                if (sample.Timestamp < cutoffTime)
-                {
+            foreach (FrameTimeSample sample in _frameTimeSamples) {
+                if (sample.Timestamp < cutoffTime) {
                     continue;
                 }
 
-                if (sampleCount == 0)
-                {
+                if (sampleCount == 0) {
                     lowestMilliseconds = sample.Milliseconds;
                     highestMilliseconds = sample.Milliseconds;
-                }
-                else
-                {
+                } else {
                     lowestMilliseconds = Mathf.Min(lowestMilliseconds, sample.Milliseconds);
                     highestMilliseconds = Mathf.Max(highestMilliseconds, sample.Milliseconds);
                 }
@@ -609,8 +546,7 @@ namespace Lotec.Lighting.Samples
                 sampleCount++;
             }
 
-            if (sampleCount == 0)
-            {
+            if (sampleCount == 0) {
                 return false;
             }
 
@@ -618,16 +554,14 @@ namespace Lotec.Lighting.Samples
             return true;
         }
 
-        void RefreshFrameTimeLabels()
-        {
+        void RefreshFrameTimeLabels() {
             UpdateLabelText(_frameTimeLastSecondLowLabel, _frameTimeLastSecondLowText);
             UpdateLabelText(_frameTimeLastSecondHighLabel, _frameTimeLastSecondHighText);
             UpdateLabelText(_frameTimeLastSecondAverageLabel, _frameTimeLastSecondAverageText);
             UpdateLabelText(_fpsLabel, _fpsText);
         }
 
-        void UpdateBindingSnapshot(bool notifyChanges)
-        {
+        void UpdateBindingSnapshot(bool notifyChanges) {
             GiMethod giMethod = Gi;
             GiFieldUpdater.LightingMethod lightingMethod = LightingMethod;
             float enabledLightIntensity = EnabledLightIntensity;
@@ -639,8 +573,7 @@ namespace Lotec.Lighting.Samples
             float aoStrength = AoStrength;
             bool tonemapInShader = TonemapInShader;
 
-            if (!_hasBindingSnapshot)
-            {
+            if (!_hasBindingSnapshot) {
                 _lastGiMethod = giMethod;
                 _lastLightingMethod = lightingMethod;
                 _lastEnabledLightIntensity = enabledLightIntensity;
@@ -667,89 +600,71 @@ namespace Lotec.Lighting.Samples
             UpdateBoolSnapshot(ref _lastTonemapInShader, tonemapInShader, notifyChanges, nameof(TonemapInShader));
         }
 
-        void UpdateEnumSnapshot<T>(ref T currentValue, T nextValue, bool notifyChanges, string propertyName) where T : struct, System.Enum
-        {
-            if (System.Collections.Generic.EqualityComparer<T>.Default.Equals(currentValue, nextValue))
-            {
+        void UpdateEnumSnapshot<T>(ref T currentValue, T nextValue, bool notifyChanges, string propertyName) where T : struct, System.Enum {
+            if (System.Collections.Generic.EqualityComparer<T>.Default.Equals(currentValue, nextValue)) {
                 return;
             }
 
             currentValue = nextValue;
-            if (notifyChanges)
-            {
+            if (notifyChanges) {
                 NotifyBindingChanged(propertyName);
             }
         }
 
-        void UpdateFloatSnapshot(ref float currentValue, float nextValue, bool notifyChanges, string propertyName)
-        {
-            if (Mathf.Approximately(currentValue, nextValue))
-            {
+        void UpdateFloatSnapshot(ref float currentValue, float nextValue, bool notifyChanges, string propertyName) {
+            if (Mathf.Approximately(currentValue, nextValue)) {
                 return;
             }
 
             currentValue = nextValue;
-            if (notifyChanges)
-            {
+            if (notifyChanges) {
                 NotifyBindingChanged(propertyName);
             }
         }
 
-        void UpdateBoolSnapshot(ref bool currentValue, bool nextValue, bool notifyChanges, string propertyName)
-        {
-            if (currentValue == nextValue)
-            {
+        void UpdateBoolSnapshot(ref bool currentValue, bool nextValue, bool notifyChanges, string propertyName) {
+            if (currentValue == nextValue) {
                 return;
             }
 
             currentValue = nextValue;
-            if (notifyChanges)
-            {
+            if (notifyChanges) {
                 NotifyBindingChanged(propertyName);
             }
         }
 
-        void UpdateIntSnapshot(ref int currentValue, int nextValue, bool notifyChanges, string propertyName)
-        {
-            if (currentValue == nextValue)
-            {
+        void UpdateIntSnapshot(ref int currentValue, int nextValue, bool notifyChanges, string propertyName) {
+            if (currentValue == nextValue) {
                 return;
             }
 
             currentValue = nextValue;
-            if (notifyChanges)
-            {
+            if (notifyChanges) {
                 NotifyBindingChanged(propertyName);
             }
         }
 
-        static void UpdateLabelText(Label label, string text)
-        {
-            if (label == null || label.text == text)
-            {
+        static void UpdateLabelText(Label label, string text) {
+            if (label == null || label.text == text) {
                 return;
             }
 
             label.text = text;
         }
 
-        static string FormatFrameTime(float milliseconds)
-        {
+        static string FormatFrameTime(float milliseconds) {
             return $"{milliseconds:0.00} ms";
         }
 
-        static string FormatFps(float averageMilliseconds)
-        {
-            if (averageMilliseconds <= 0f)
-            {
+        static string FormatFps(float averageMilliseconds) {
+            if (averageMilliseconds <= 0f) {
                 return UnavailableFpsText;
             }
 
             return $"{Mathf.RoundToInt(1000f / averageMilliseconds)} fps";
         }
 
-        void NotifyBindingChanged([CallerMemberName] string propertyName = "")
-        {
+        void NotifyBindingChanged([CallerMemberName] string propertyName = "") {
             propertyChanged?.Invoke(this, new BindablePropertyChangedEventArgs(propertyName));
         }
     }
