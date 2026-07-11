@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.5.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.4.0...v1.5.0) (2026-07-11)
+
+
+### Features
+
+* Add AgX, ACES tonemapping ([#79](https://github.com/fresolina/Unity-Voxel-Lighting/issues/79)) ([215252e](https://github.com/fresolina/Unity-Voxel-Lighting/commit/215252eb8d8e9927ea3fa48a3d2716bffd7bb859))
+* **BufferGi:** Bake surface normals into its own buffer ([dc01a03](https://github.com/fresolina/Unity-Voxel-Lighting/commit/dc01a03bea4cf21624af7fecc0d62082dcaf4cce))
+* **BufferGi:** Bake voxelized data to disk ([#66](https://github.com/fresolina/Unity-Voxel-Lighting/issues/66)) ([344c314](https://github.com/fresolina/Unity-Voxel-Lighting/commit/344c314524466944f9f231590bf718abc5d66ee3))
+* **BufferGi:** Cheap baked voxel shadows ([8762676](https://github.com/fresolina/Unity-Voxel-Lighting/commit/8762676e963429366b6cc5c788ec0ef49f799c94))
+* **BufferGi:** Optimize, add air distance to surface buffer ([0e4e36e](https://github.com/fresolina/Unity-Voxel-Lighting/commit/0e4e36e69366a13cdff757fc774b3c6520fa2265))
+* **BufferGi:** optimized occupancy buffer, new surface buffer (normals, AO, flags) ([0bf5915](https://github.com/fresolina/Unity-Voxel-Lighting/commit/0bf5915b1ae48bd9adee084a8a730d2302b91b9a))
+* **BufferGI:** Show debug UI of voxel buffers ([#69](https://github.com/fresolina/Unity-Voxel-Lighting/issues/69)) ([a2e9b18](https://github.com/fresolina/Unity-Voxel-Lighting/commit/a2e9b18cfb63c143b1e5de40b4c2bf4b1c3220cf))
+* load remote scenes, Sponza added ([#68](https://github.com/fresolina/Unity-Voxel-Lighting/issues/68)) ([0da948f](https://github.com/fresolina/Unity-Voxel-Lighting/commit/0da948f7321bec333233a5dbd61159ecfbf1f6eb))
+* Major refactor renamed classes ([229ca41](https://github.com/fresolina/Unity-Voxel-Lighting/commit/229ca41d2195d9be81f8658fa569584a0f390249))
+* new gi buffer only cache-performant ([46875be](https://github.com/fresolina/Unity-Voxel-Lighting/commit/46875be7a0ba9d9e317d12efdcfb67044789ab38))
+* refactor lots, move files to subdirs, extract autoexposure, fix gi radiance self-occlusion ([a8698f1](https://github.com/fresolina/Unity-Voxel-Lighting/commit/a8698f1d38a3706915433223d709dd4bc22450ad))
+* Show more lighting controls in UI ([#76](https://github.com/fresolina/Unity-Voxel-Lighting/issues/76)) ([5b400d2](https://github.com/fresolina/Unity-Voxel-Lighting/commit/5b400d2d5d889174aae4b48b40cc725da89e2749))
+* Voxelize albedo color and transparency ([#65](https://github.com/fresolina/Unity-Voxel-Lighting/issues/65)) ([f2668d1](https://github.com/fresolina/Unity-Voxel-Lighting/commit/f2668d1aaa8570d13e897e898f7feae022729d40))
+
+
+### Bug Fixes
+
+* Reduce GI noise with fadein and fix emissive material fireflies ([581ff7b](https://github.com/fresolina/Unity-Voxel-Lighting/commit/581ff7bc890f9f3c4c93b9cd21be9f22ee35898f))
+* UI textfield lost focus immediately in WebGL ([#75](https://github.com/fresolina/Unity-Voxel-Lighting/issues/75)) ([f28dff6](https://github.com/fresolina/Unity-Voxel-Lighting/commit/f28dff6f5933c1f439e32acd3c361d1864ef9cd7))
+
 ## [1.4.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.3.0...v1.4.0) (2026-06-23)
 
 
