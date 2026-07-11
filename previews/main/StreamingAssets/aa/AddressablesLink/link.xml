@@ -3,30 +3,13 @@
     <type fullname="Lotec.Demo.SceneSpawnPoint" preserve="all" />
   </assembly>
   <assembly fullname="Lotec.Lighting, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
-    <type fullname="Lotec.Lighting.BakeHandler" preserve="all" />
     <type fullname="Lotec.Lighting.BufferGiBakeAsset" preserve="all" />
-    <type fullname="Lotec.Lighting.BufferGiUpdater" preserve="all" />
-    <type fullname="Lotec.Lighting.GiFieldUpdater" preserve="all" />
-    <type fullname="Lotec.Lighting.LightingManager" preserve="all" />
+    <type fullname="Lotec.Lighting.BufferGiFields" preserve="all" />
     <type fullname="Lotec.Lighting.MeshBounds" preserve="all" />
-    <type fullname="Lotec.Lighting.SdfAmbientOcclusion" preserve="all" />
-    <type fullname="Lotec.Lighting.SdfShadow" preserve="all" />
-    <type fullname="Lotec.Lighting.VoxelMaterialBaker" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelMaterialField" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelOcclusionBitmask" preserve="all" />
-    <type fullname="Lotec.Lighting.VoxelOcclusionBitmaskBaker" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelOcclusionField" preserve="all" />
-    <type fullname="Lotec.Lighting.VoxelOcclusionFieldBaker" preserve="all" />
-    <type fullname="Lotec.Lighting.VoxelSdfBaker" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelVolume" preserve="all" />
-    <type fullname="Lotec.Lighting.AutoExposure" preserve="nothing" serialized="true" />
-    <type fullname="Lotec.Lighting.ExactSdfBake" preserve="nothing" serialized="true" />
-    <type fullname="Lotec.Lighting.JfaSdfBake" preserve="nothing" serialized="true" />
-    <type fullname="Lotec.Lighting.MaterialBake" preserve="nothing" serialized="true" />
-    <type fullname="Lotec.Lighting.OcclusionBitmaskBake" preserve="nothing" serialized="true" />
-    <type fullname="Lotec.Lighting.OcclusionFieldBake" preserve="nothing" serialized="true" />
-    <type fullname="Lotec.Lighting.SdfAoConfig" preserve="nothing" serialized="true" />
-    <type fullname="Lotec.Lighting.SdfShadowConfig" preserve="nothing" serialized="true" />
   </assembly>
   <assembly fullname="Unity.Addressables, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null" preserve="all">
     <type fullname="UnityEngine.AddressableAssets.Addressables" preserve="all" />
@@ -41,7 +24,6 @@
     <type fullname="UnityEngine.ResourceManagement.ResourceProviders.SceneProvider" preserve="all" />
   </assembly>
   <assembly fullname="UnityEngine.CoreModule, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
-    <type fullname="UnityEngine.ComputeShader" preserve="all" />
     <type fullname="UnityEngine.Cubemap" preserve="all" />
     <type fullname="UnityEngine.GameObject" preserve="all" />
     <type fullname="UnityEngine.Light" preserve="all" />
@@ -52,11 +34,9 @@
     <type fullname="UnityEngine.Object" preserve="all" />
     <type fullname="UnityEngine.RenderSettings" preserve="all" />
     <type fullname="UnityEngine.Shader" preserve="all" />
-    <type fullname="UnityEngine.Texture2D" preserve="all" />
     <type fullname="UnityEngine.Texture3D" preserve="all" />
     <type fullname="UnityEngine.Transform" preserve="all" />
     <type fullname="UnityEngine.Bounds" preserve="nothing" serialized="true" />
-    <type fullname="UnityEngine.Color" preserve="nothing" serialized="true" />
     <type fullname="UnityEngine.RenderingLayerMask" preserve="nothing" serialized="true" />
     <type fullname="UnityEngine.Vector2" preserve="nothing" serialized="true" />
     <type fullname="UnityEngine.Vector3" preserve="nothing" serialized="true" />
