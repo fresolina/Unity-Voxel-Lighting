@@ -94,28 +94,27 @@ namespace Lotec.Lighting {
         [Tooltip("Shader 'Hidden/Lotec/BufferGiVoxelize' - GPU 3-axis rasterizer that voxelizes " +
                  "scene meshes into the occupancy/albedo buffer.")]
         [SerializeField] Shader _voxelizeShader;
-        [Tooltip("MeshBounds covering the whole scene, used as the coarse (low-detail, far) GI " +
-                 "field - a 32^3 grid over its larger bounds (bigger voxels). Should be larger " +
-                 "than the active fine volume. Leave null for fine only.")]
-        [SerializeField] MeshBounds _coarseField;
-        [Tooltip("Fine 'detailed' fields to bake to disk (the inspector's 'Bake Voxelization To Disk' " +
-                 "button bakes the coarse field + each of these). Each should sit on a GameObject that " +
-                 "also has a VoxelVolume (its padded bounds are the runtime fine grid). Reset auto-fills " +
-                 "this with every MeshBounds in the scene except the coarse one.")]
-        [SerializeField] List<MeshBounds> _detailedFields = new List<MeshBounds>();
-        [Tooltip("Voxelizations baked to disk (one per field: coarse + each detailed field), set by " +
-                 "the 'Bake Voxelization To Disk' button. At load the coarse asset + the asset matching " +
-                 "the active fine volume are uploaded instead of re-rasterizing the scene meshes; on a " +
-                 "mismatch (moved/rescaled bounds, changed normal source) it warns and falls back to " +
-                 "runtime voxelization.")]
-        [SerializeField] List<BufferGiBakeAsset> _bakeAssets = new List<BufferGiBakeAsset>();
+        // The per-level field inputs (coarse field, detailed fields, disk bakes) used to be serialized
+        // here, but this updater is a persistent bootstrap-scene singleton and those reference per-level
+        // scene objects/assets. They now live on a BufferGiFields in the level scene, resolved from the
+        // active volume's scene when the volume changes (see Update). Null when no level provides one.
+        BufferGiFields _fields;
 
+        /// <summary>The active level's Buffer GI field provider (null when no loaded level supplies one).</summary>
+        public BufferGiFields Fields => _fields;
         /// <summary>Fine fields the editor bake button voxelizes (in addition to the coarse field).</summary>
-        public IReadOnlyList<MeshBounds> DetailedFields => _detailedFields;
+        public IReadOnlyList<MeshBounds> DetailedFields =>
+            _fields != null ? _fields.DetailedFields : System.Array.Empty<MeshBounds>();
         /// <summary>Coarse-field MeshBounds (null = fine only), for the editor bake button.</summary>
-        public MeshBounds CoarseBounds => _coarseField;
-        /// <summary>Disk bakes uploaded instead of runtime voxelization; the editor bake button rewrites this.</summary>
-        public List<BufferGiBakeAsset> BakeAssets { get => _bakeAssets; set => _bakeAssets = value; }
+        public MeshBounds CoarseBounds => _fields != null ? _fields.CoarseField : null;
+        /// <summary>Disk bakes uploaded instead of runtime voxelization; the editor bake button rewrites these.</summary>
+        public List<BufferGiBakeAsset> BakeAssets => _fields != null ? _fields.BakeAssets : null;
+
+#if UNITY_EDITOR
+        /// <summary>Editor bake helper: bind the per-level provider so CoarseBounds/CoarseOrigin/Size and
+        /// the coarse voxelize use it immediately, without waiting for the Update that normally resolves it.</summary>
+        public void EditorBindFields(BufferGiFields fields) => _fields = fields;
+#endif
 
         ComputeBuffer _materialBuffer;
         ComputeBuffer _radianceBuffer;
@@ -226,12 +225,12 @@ namespace Lotec.Lighting {
         const float CoarsePaddingVoxels = 2f;
         Bounds CoarseWorldBounds {
             get {
-                Bounds b = _coarseField.Bounds;
+                Bounds b = _fields.CoarseField.Bounds;
                 b.size *= Grid / (Grid - 2f * CoarsePaddingVoxels);
                 return b;
             }
         }
-        public bool HasCoarse => _coarseField != null;
+        public bool HasCoarse => _fields != null && _fields.CoarseField != null;
         public Vector3 CoarseOrigin => HasCoarse ? CoarseWorldBounds.min : GridOrigin;
         public Vector3 CoarseSize => HasCoarse ? CoarseWorldBounds.size : GridSize;
         public Vector3 CoarseVoxelSize => CoarseSize / Grid;
@@ -341,16 +340,6 @@ namespace Lotec.Lighting {
             _collectedSamples = 0;
         }
 
-        // Editor: prefill the detailed-field list with every MeshBounds in the scene except the coarse
-        // one, so a freshly added component already lists the fine fields to bake.
-        void Reset() {
-            _detailedFields.Clear();
-            MeshBounds[] all = FindObjectsByType<MeshBounds>();
-            foreach (MeshBounds mb in all) {
-                if (mb != null && mb != _coarseField) _detailedFields.Add(mb);
-            }
-        }
-
         // Wake the solver when the sun changes. Local lights are intentionally excluded (GI may drop
         // them); add a local-light hash here if that changes. Sky/ambient changes come in via OnValidate.
         bool HasSunChanged() {
@@ -375,6 +364,9 @@ namespace Lotec.Lighting {
                 // teardown (null) falls back to a full cold-start (re)init.
                 bool warmSwitch = _volume != null && active != null && _irradianceBuffer != null;
                 _volume = active;
+                // Pull this level's coarse field + disk bakes from its BufferGiFields (the fine field
+                // is the active volume itself). Null for a fine-only, runtime-voxelized level.
+                _fields = BufferGiFields.Find(active);
                 _hasLoggedMissingReferences = false;
                 if (warmSwitch) {
                     _materialBaked = false;
@@ -585,10 +577,11 @@ namespace Lotec.Lighting {
         // stored; the derive passes re-run on GPU, so the assets survive derive-kernel changes. Needs
         // BOTH the fine match and (when a coarse field exists) the coarse match, else falls back.
         bool TryLoadBakeAssets() {
-            if (_bakeAssets == null || _bakeAssets.Count == 0) return false;
+            List<BufferGiBakeAsset> bakeAssets = BakeAssets;
+            if (bakeAssets == null || bakeAssets.Count == 0) return false;
 
             BufferGiBakeAsset coarse = null, fine = null;
-            foreach (BufferGiBakeAsset a in _bakeAssets) {
+            foreach (BufferGiBakeAsset a in bakeAssets) {
                 if (a == null || !BakeAssetValid(a)) continue;
                 if (a.isCoarse) {
                     if (HasCoarse && NearlyEqual(a.origin, CoarseOrigin) && NearlyEqual(a.size, CoarseSize)) coarse = a;
@@ -645,10 +638,11 @@ namespace Lotec.Lighting {
             sb.AppendLine($"  expected: grid={Grid} version={BufferGiBakeAsset.Version} VoxelCount={VoxelCount} bakedNormals={_bakedNormals}");
             sb.AppendLine($"  expected FINE   origin={GridOrigin.ToString("F4")} size={GridSize.ToString("F4")}");
             sb.AppendLine($"  HasCoarse={HasCoarse}" + (HasCoarse ? $" expected COARSE origin={CoarseOrigin.ToString("F4")} size={CoarseSize.ToString("F4")}" : ""));
-            sb.AppendLine($"  _bakeAssets.Count={(_bakeAssets == null ? -1 : _bakeAssets.Count)}");
-            if (_bakeAssets != null) {
-                for (int i = 0; i < _bakeAssets.Count; i++) {
-                    BufferGiBakeAsset a = _bakeAssets[i];
+            List<BufferGiBakeAsset> bakeAssets = BakeAssets;
+            sb.AppendLine($"  BufferGiFields={(_fields != null ? _fields.name : "<none>")} bakeAssets.Count={(bakeAssets == null ? -1 : bakeAssets.Count)}");
+            if (bakeAssets != null) {
+                for (int i = 0; i < bakeAssets.Count; i++) {
+                    BufferGiBakeAsset a = bakeAssets[i];
                     if (a == null) {
                         sb.AppendLine($"  [{i}] <null> - reference did not resolve (asset not in the bundle?).");
                         continue;
@@ -788,7 +782,7 @@ namespace Lotec.Lighting {
             // Each field rasterizes its OWN volume's geometry into its slice (coarse = a separate,
             // scene-covering MeshBounds with its own root).
             VoxelizeFieldInto(cmd, fineRoot, GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
-            Transform coarseRoot = _coarseField != null ? _coarseField.Root : null;
+            Transform coarseRoot = HasCoarse ? _fields.CoarseField.Root : null;
             if (coarseRoot != null) {
                 VoxelizeFieldInto(cmd, coarseRoot, CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount);
             }

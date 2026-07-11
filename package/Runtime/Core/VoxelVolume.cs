@@ -25,6 +25,10 @@ namespace Lotec.Lighting {
         /// <summary>All enabled, registered volumes in the scene.</summary>
         public static IReadOnlyList<VoxelVolume> All => s_all;
 
+        /// <summary>True while this volume is registered (enabled and auto-registering). Lets a
+        /// persistent LightingManager notice when its active volume's level unloaded or was disabled.</summary>
+        public static bool IsRegistered(VoxelVolume volume) => volume != null && s_all.Contains(volume);
+
         [Header("Bake Input")]
         [Tooltip("Maximum voxel resolution along the largest axis.")]
         [Min(4)]
