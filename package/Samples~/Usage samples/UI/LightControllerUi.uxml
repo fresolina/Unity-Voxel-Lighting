@@ -39,11 +39,11 @@
                         <ui:DataBinding property="value" data-source-path="ShadowMode" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
-                <ui:Toggle name="tonemap-toggle" label="Tonemap In Shader" tooltip="Apply the display transform (exposure + tonemap) in the lit shader. Off = output linear HDR for a post-processing stack (also skips auto-exposure)." class="setting-field">
+                <ui:EnumField label="Tonemap" value="Reinhard" type="Lotec.Lighting.AutoExposure+TonemapMode, Lotec.Lighting" name="tonemap-enum" tooltip="In-shader tonemap operator (with exposure). Reinhard: cheap classic rolloff. AgX: film-like desaturated highlights. Off: output linear HDR for a post-processing stack (also skips auto-exposure)." class="setting-field">
                     <Bindings>
-                        <ui:DataBinding property="value" data-source-path="TonemapInShader" binding-mode="TwoWay"/>
+                        <ui:DataBinding property="value" data-source-path="Tonemap" binding-mode="TwoWay"/>
                     </Bindings>
-                </ui:Toggle>
+                </ui:EnumField>
                 <ui:FloatField name="enabled-light-intensity-field" label="Light Intensity [1-9]" is-delayed="true" tooltip="Type a value and press Enter or click away. Applies to the enabled flashlight and candle." tabindex="-1" class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="EnabledLightIntensity" binding-mode="TwoWay"/>

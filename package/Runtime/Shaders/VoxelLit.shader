@@ -46,6 +46,8 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelDirectLighting.hlsl"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelGi.hlsl"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/BufferGi.hlsl"
+            // Display-transform tonemap operators (Reinhard / AgX / ACES), selected by _Tonemap.
+            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/Tonemap.hlsl"
 
             // Shadow source (default = SDF): directional bitmask (point / 8-tap) or occlusion field.
             #pragma multi_compile __ BITMASK_POINT BITMASK_8TAP OCC_FIELD
@@ -56,9 +58,6 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // AO (GiFieldUpdater). GI_VOXEL_BUFFER: the buffer GI read filter (BufferGiUpdater).
             // Mutually exclusive - whichever updater is active enables its keyword.
             #pragma multi_compile GI_OFF GI_VOXEL_TEXTURE GI_VOXEL_BUFFER
-            // Global (set by GiFieldUpdater): the in-shader display transform = exposure +
-            // tonemap. TONEMAP_OFF outputs linear HDR for a post-processing stack instead.
-            #pragma multi_compile _ TONEMAP_OFF
 
             CBUFFER_START(UnityPerMaterial)
                 TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
@@ -73,6 +72,9 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
 
             // Scene-wide exposure (EV stops), published as a global by the GiFieldUpdater (auto or manual).
             float _Exposure;
+            // In-shader display transform, published as a global by the GI updater. Matches
+            // AutoExposure.TonemapMode: 0 = Off (linear HDR out), 1 = Reinhard, 2 = AgX, 3 = ACES.
+            int _Tonemap;
 
             struct v {
                 float4 positionOS : POSITION;
@@ -160,18 +162,21 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     lit += _EmissionColor.rgb * SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, IN.uv).rgb;
                 #endif
 
-                // In-shader display transform (exposure + Reinhard tonemap). Skipped when a
-                // post-processing stack does it on the composited HDR (GiFieldUpdater toggle).
-                #if !defined(TONEMAP_OFF)
+                // In-shader display transform (exposure + selected tonemap operator). _Tonemap == 0
+                // (Off) outputs linear HDR for a post-processing stack instead. The branch is on a
+                // global, so it's uniform across the frame - no warp divergence, effectively free.
+                if (_Tonemap != 0) {
                     #if defined(GI_VOXEL_TEXTURE) || defined(GI_VOXEL_BUFFER)
                         lit *= exp2(_Exposure);   // exposure only meaningful when GI drives it
                     #endif
-                    lit = lit / (1.0h + lit);
+                    if (_Tonemap == 2) lit = AgxTonemap(lit);
+                    else if (_Tonemap == 3) lit = AcesTonemap(lit);
+                    else lit = ReinhardTonemap(lit);
                     // Interleaved-gradient-noise dither (~1/255) so the smooth GI gradients don't
-                    // band when written to an 8-bit target. Skipped under TONEMAP_OFF (HDR output).
-                    float ign = frac(52.9829189 * frac(dot(IN.positionHCS.xy, float2(0.06711056, 0.00583715))));
-                    lit += (half3)((ign - 0.5) * (1.0 / 255.0));
-                #endif
+                    // band when written to an 8-bit target. Skipped when Off (HDR output).
+                    half ign = frac(52.9829189h * frac(dot(IN.positionHCS.xy, half2(0.06711056h, 0.00583715h))));
+                    lit += (ign - 0.5h) * (1.0h / 255.0h);
+                }
 
                 return half4(lit, _BaseColor.a);
             }
