@@ -17,13 +17,11 @@ namespace Lotec.Lighting {
     public class LightingManager : MonoBehaviour {
         public static LightingManager Instance { get; private set; }
 
-        [Tooltip("Default active volume. A runtime override (SetActiveVolume / auto-switch) takes " +
-                 "precedence while set.")]
-        [SerializeField] VoxelVolume _volume;
         [Tooltip("Automatically activate the registered volume closest to the main camera.")]
         [SerializeField] bool _autoSwitchToClosestVolume;
         [SerializeField] bool _updateInEditor = true;
 
+        VoxelVolume _volume;
         /// <summary>The currently active volume: the runtime override if set, else the serialized
         /// default.</summary>
         public VoxelVolume Volume => _volume;
@@ -48,6 +46,13 @@ namespace Lotec.Lighting {
         }
 
         void Update() {
+            // The manager is persistent (it lives in the bootstrap scene and outlives level scenes),
+            // so the active volume comes and goes with the loaded level. Forget a volume whose level
+            // unloaded (destroyed and deregistered) so we re-adopt the next one below.
+            if (_volume != null && !VoxelVolume.IsRegistered(_volume))
+                _volume = null;
+            // Adopt a registered volume when we have none, and - when enabled - keep tracking the
+            // closest (for a level that holds several volumes, e.g. adjacent rooms).
             if (_autoSwitchToClosestVolume)
                 SwitchToClosestVolume();
             if (Application.isPlaying || _updateInEditor)
@@ -62,16 +67,31 @@ namespace Lotec.Lighting {
         }
 
         void SwitchToClosestVolume() {
+            var all = VoxelVolume.All;
+            if (all.Count == 0) {
+                SetActiveVolume(null); // no level loaded - drop the stale globals source
+                return;
+            }
+            // A single registered volume is unambiguous: adopt it regardless of camera or SDF state
+            // (a BufferGI-only volume may have no baked SDF; features that need it no-op when absent).
+            if (all.Count == 1) {
+                SetActiveVolume(all[0]);
+                return;
+            }
+
             Camera cam = Camera.main;
-            if (cam == null) return;
+            if (cam == null) {
+                if (_volume == null) SetActiveVolume(all[0]);
+                return;
+            }
 
             Vector3 camPos = cam.transform.position;
             VoxelVolume closest = null;
             float closestDist = float.MaxValue;
 
-            for (int i = 0; i < VoxelVolume.All.Count; i++) {
-                VoxelVolume vol = VoxelVolume.All[i];
-                if (vol == null || vol.sdfHiresTexture == null) continue;
+            for (int i = 0; i < all.Count; i++) {
+                VoxelVolume vol = all[i];
+                if (vol == null) continue;
 
                 float dist = vol.Bounds.SqrDistance(camPos);
                 if (dist < closestDist) {

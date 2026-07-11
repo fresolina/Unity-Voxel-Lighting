@@ -39,8 +39,20 @@ namespace Lotec.Lighting.Editor {
             // Play gives via its domain reload, so baking no longer needs a Play round-trip first.
             gi.ReleaseBuffers();
 
+            // Per-level inputs (coarse field, detailed fields, bake assets) live on the level's
+            // BufferGiFields, not on this persistent updater. Resolve it from the active volume's scene
+            // and bind it so CoarseOrigin/Size use this provider's coarse field during capture.
+            BufferGiFields fields = gi.Fields != null ? gi.Fields : BufferGiFields.Find(gi.Volume);
+            if (fields == null) {
+                Debug.LogError("Buffer GI bake: no BufferGiFields found for the active volume's level. Open " +
+                               "the level scene (which holds the BufferGiFields provider) alongside the bootstrap " +
+                               "scene, make its volume active, then bake.", gi);
+                return;
+            }
+            gi.EditorBindFields(fields);
+
             // Bake folder is scene-adjacent; derive it from any volume in the scene.
-            VoxelVolume folderVolume = gi.Volume != null ? gi.Volume : FindAnyDetailedVolume(gi);
+            VoxelVolume folderVolume = gi.Volume != null ? gi.Volume : FindAnyDetailedVolume(fields);
             if (folderVolume == null) {
                 Debug.LogError("Buffer GI bake: need at least one VoxelVolume (the active volume or a detailed field with a VoxelVolume sibling) to resolve the save folder.", gi);
                 return;
@@ -52,17 +64,17 @@ namespace Lotec.Lighting.Editor {
             var assets = new List<BufferGiBakeAsset>();
 
             // Coarse field (one asset, named for the coarse MeshBounds).
-            if (gi.CoarseBounds != null && gi.CoarseBounds.Root != null) {
+            if (fields.CoarseField != null && fields.CoarseField.Root != null) {
                 var coarse = ScriptableObject.CreateInstance<BufferGiBakeAsset>();
-                coarse.name = gi.CoarseBounds.name + AssetSuffix;
-                if (gi.CaptureFieldToAsset(coarse, true, gi.CoarseBounds.Root, gi.CoarseOrigin, gi.CoarseSize))
+                coarse.name = fields.CoarseField.name + AssetSuffix;
+                if (gi.CaptureFieldToAsset(coarse, true, fields.CoarseField.Root, gi.CoarseOrigin, gi.CoarseSize))
                     assets.Add(Save(coarse, folder));
                 else
                     Object.DestroyImmediate(coarse);
             }
 
             // Each detailed (fine) field: its runtime grid is its sibling VoxelVolume's padded bounds.
-            foreach (MeshBounds field in gi.DetailedFields) {
+            foreach (MeshBounds field in fields.DetailedFields) {
                 if (field == null) continue;
                 if (!gi.TryGetDetailedFieldGrid(field, out Transform root, out Vector3 origin, out Vector3 size))
                     continue;
@@ -79,16 +91,17 @@ namespace Lotec.Lighting.Editor {
                 return;
             }
 
-            // Assign the freshly baked set (replacing the old list) so load uploads them.
-            serializedObject.Update();
-            SerializedProperty list = serializedObject.FindProperty("_bakeAssets");
+            // Assign the freshly baked set onto the level's provider (replacing the old list) so load
+            // uploads them for this level instead of re-rasterizing.
+            var fieldsSo = new SerializedObject(fields);
+            SerializedProperty list = fieldsSo.FindProperty("_bakeAssets");
             list.ClearArray();
             for (int i = 0; i < assets.Count; i++) {
                 list.InsertArrayElementAtIndex(i);
                 list.GetArrayElementAtIndex(i).objectReferenceValue = assets[i];
             }
-            serializedObject.ApplyModifiedProperties();
-            Debug.Log($"Buffer GI: baked {assets.Count} field voxelization asset(s) to '{folder}'.", gi);
+            fieldsSo.ApplyModifiedProperties();
+            Debug.Log($"Buffer GI: baked {assets.Count} field voxelization asset(s) to '{folder}', assigned to '{fields.name}'.", gi);
         }
 
         // Save (or overwrite in place) one field asset in the bake folder.
@@ -97,8 +110,8 @@ namespace Lotec.Lighting.Editor {
             return VoxelBakeEditorUtil.SaveAsset(asset, path, "Buffer GI Voxelization");
         }
 
-        static VoxelVolume FindAnyDetailedVolume(BufferGiUpdater gi) {
-            foreach (MeshBounds field in gi.DetailedFields) {
+        static VoxelVolume FindAnyDetailedVolume(BufferGiFields fields) {
+            foreach (MeshBounds field in fields.DetailedFields) {
                 if (field == null) continue;
                 VoxelVolume vv = field.GetComponent<VoxelVolume>();
                 if (vv != null) return vv;
