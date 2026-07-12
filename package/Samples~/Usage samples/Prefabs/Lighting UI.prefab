@@ -178,7 +178,7 @@ MonoBehaviour:
   _panel: {fileID: 963349087938242428}
   _panelSettings: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
   _visualTreeAsset: {fileID: 9197481963319205126, guid: b0bfbb45eb9d7064ebe5d88e71b8887b, type: 3}
-  _sortingOrder: 1002
+  _sortingOrder: 1000
 --- !u!1931382934 &963349087938242428
 PanelRenderer:
   m_ObjectHideFlags: 0
@@ -225,7 +225,7 @@ PanelRenderer:
   m_GlobalIlluminationMeshLod: 0
   m_SortingLayerID: 0
   m_SortingLayer: 0
-  m_SortingOrder: 1002
+  m_SortingOrder: 1000
   m_MaskInteraction: 0
   serializedVersion: 1
   m_PanelSettings: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
