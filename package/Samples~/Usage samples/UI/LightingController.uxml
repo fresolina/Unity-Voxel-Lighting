@@ -1,5 +1,5 @@
 <ui:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ui="UnityEngine.UIElements" editor-extension-mode="False">
-    <Style src="project://database/Assets/_Samples/Usage%20samples/UI/LightControllerUi.uss?fileID=7433441132597879392&amp;guid=8d4ea996832866749b010f7cdbe934ac&amp;type=3#LightControllerUi"/>
+    <Style src="project://database/Assets/_Samples/Usage%20samples/UI/LightingController.uss?fileID=7433441132597879392&amp;guid=8d4ea996832866749b010f7cdbe934ac&amp;type=3#LightingController"/>
     <ui:VisualElement name="screen" class="screen">
         <ui:VisualElement name="panel" class="panel">
             <ui:VisualElement name="panel-header" class="panel-header">
@@ -34,7 +34,7 @@
                         <ui:DataBinding property="value" data-source-path="AoStrength" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:Slider>
-                <ui:EnumField label="Shadow Mode" value="Baked" type="Lotec.Lighting.Samples.LightControllerUi+ShadowUiMode, Assembly-CSharp" name="shadow-mode-enum" tooltip="Baked: BufferGI fine-field voxel sun-shadow (pre-marched, soft, cheap). Others: the volume shadow source used by the SDF/texture shadow path." class="setting-field">
+                <ui:EnumField label="Shadow Mode" value="Baked" type="Lotec.Lighting.Samples.LightingController+ShadowUiMode, Assembly-CSharp" name="shadow-mode-enum" tooltip="Baked: BufferGI fine-field voxel sun-shadow (pre-marched, soft, cheap). Others: the volume shadow source used by the SDF/texture shadow path." class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="ShadowMode" binding-mode="TwoWay"/>
                     </Bindings>
@@ -44,21 +44,6 @@
                         <ui:DataBinding property="value" data-source-path="Tonemap" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
-                <ui:FloatField name="enabled-light-intensity-field" label="Light Intensity [1-9]" is-delayed="true" tooltip="Type a value and press Enter or click away. Applies to the enabled flashlight and candle." tabindex="-1" class="setting-field">
-                    <Bindings>
-                        <ui:DataBinding property="value" data-source-path="EnabledLightIntensity" binding-mode="TwoWay"/>
-                    </Bindings>
-                </ui:FloatField>
-                <ui:Toggle name="flashlight-toggle" label="Flashlight [F]" class="setting-field">
-                    <Bindings>
-                        <ui:DataBinding property="value" data-source-path="FlashlightEnabled" binding-mode="TwoWay"/>
-                    </Bindings>
-                </ui:Toggle>
-                <ui:Toggle name="candle-toggle" label="Candle [G]" class="setting-field">
-                    <Bindings>
-                        <ui:DataBinding property="value" data-source-path="CandleEnabled" binding-mode="TwoWay"/>
-                    </Bindings>
-                </ui:Toggle>
             </ui:VisualElement>
             <ui:VisualElement style="flex-direction: row; align-items: flex-start;">
                 <ui:VisualElement class="section-body debug-info-section">
@@ -82,7 +67,8 @@
             </ui:VisualElement>
             <ui:VisualElement class="hint-card">
                 <ui:Label text="CTRL + mouse: rotate the sun light." class="hint-text"/>
-                <ui:Label text="H: toggle UI." class="hint-text"/>
+                <ui:Label text="F / G: toggle flashlight / candle. 1-9: light intensity." class="hint-text"/>
+                <ui:Label text="` : cycle GI method.  H: toggle UI." class="hint-text"/>
             </ui:VisualElement>
             </ui:VisualElement>
         </ui:VisualElement>

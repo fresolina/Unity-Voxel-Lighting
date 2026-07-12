@@ -2,21 +2,22 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 
 namespace Lotec.Lighting.Samples {
+    /// <summary>
+    /// Keyboard/mouse control of the actual scene lights: CTRL+mouse rotates the sun, F/G toggle the
+    /// flashlight/candle, and digits 1-9 set the enabled light's intensity. This is input only and has
+    /// no UI - the GI / <see cref="LightingManager"/> settings (and their panel) live in
+    /// <see cref="LightingController"/>.
+    /// </summary>
     public class LightController : MonoBehaviour {
         [SerializeField] Light _flashlight;
         [SerializeField] Light _candle;
         [SerializeField] float _mouseRotationSpeed = 120f;
-
-        public float EnabledLightIntensity => GetEnabledLightIntensity();
-        public bool FlashlightEnabled => _flashlight.enabled;
-        public bool CandleEnabled => _candle.enabled;
 
         Light _sunLight;
         Keyboard _keyboard;
         Mouse _mouse;
         float _xRotation;
         float _yRotation;
-        bool _uiFolded;
 
         void Awake() {
             InputSystem.onDeviceChange += HandleDeviceChange;
@@ -36,18 +37,8 @@ namespace Lotec.Lighting.Samples {
         }
 
         void Update() {
-            if (LightControllerUi.IsTextInputFocused || BufferGiDebugUi.IsTextInputFocused) {
+            if (LightingController.IsTextInputFocused || BufferGiDebugUi.IsTextInputFocused) {
                 return;
-            }
-
-            if (_keyboard.hKey.wasPressedThisFrame) {
-                _uiFolded = !_uiFolded;
-                LightControllerUi.SetFolded(_uiFolded);
-                BufferGiDebugUi.SetFolded(_uiFolded);
-            }
-
-            if (_keyboard.backquoteKey.wasPressedThisFrame) {
-                ToggleLightingMethod();
             }
 
             if (_keyboard.fKey.wasPressedThisFrame) {
@@ -98,10 +89,6 @@ namespace Lotec.Lighting.Samples {
             }
         }
 
-        public void ToggleLightingMethod() {
-            GiFieldUpdater.Instance?.ToggleLightingMethod();
-        }
-
         void ToggleFlashlight() {
             _flashlight.enabled = !_flashlight.enabled;
         }
@@ -110,15 +97,7 @@ namespace Lotec.Lighting.Samples {
             _candle.enabled = !_candle.enabled;
         }
 
-        public void SetFlashlightEnabled(bool isEnabled) {
-            _flashlight.enabled = isEnabled;
-        }
-
-        public void SetCandleEnabled(bool isEnabled) {
-            _candle.enabled = isEnabled;
-        }
-
-        public void SetEnabledLightIntensity(float intensity) {
+        void SetEnabledLightIntensity(float intensity) {
             float clampedIntensity = Mathf.Max(0f, intensity);
 
             if (_flashlight.enabled) {
@@ -138,18 +117,6 @@ namespace Lotec.Lighting.Samples {
             Vector3 eulerAngles = _sunLight.transform.rotation.eulerAngles;
             _xRotation = NormalizeAngle(eulerAngles.x);
             _yRotation = NormalizeAngle(eulerAngles.y);
-        }
-
-        float GetEnabledLightIntensity() {
-            if (_flashlight.enabled) {
-                return _flashlight.intensity;
-            }
-
-            if (_candle.enabled) {
-                return _candle.intensity;
-            }
-
-            return 0f;
         }
 
         bool TryReadIntensityShortcut(out float targetIntensity) {
