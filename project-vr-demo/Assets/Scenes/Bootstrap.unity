@@ -166,7 +166,7 @@ MonoBehaviour:
   _scenes:
   - sceneAsset: {fileID: 102900000, guid: 3458888643dcf8845ba294559a6ad23d, type: 3}
     displayName: Sponza
-    scenePath: Assets/Scenes/Sponza.unity
+    scenePath: Assets/Scenes/Sponza-vr.unity
   _loadStartupScene: 1
   _startupSceneIndex: 0
 --- !u!1 &39292453
@@ -346,7 +346,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &526675351
 Transform:
   m_ObjectHideFlags: 0
@@ -458,7 +458,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiUpdater
   _maxSamples: 500
-  _samplesPerFrame: 10
+  _samplesPerFrame: 1
   _confidenceCurve: 2
   _continuousGi: 0
   _giFireflyClamp: 8
@@ -943,6 +943,10 @@ PrefabInstance:
       value: XR Origin (XR Rig)
       objectReference: {fileID: 0}
     - target: {fileID: 1717954561962503726, guid: f6336ac4ac8b4d34bc5072418cdc62a0, type: 3}
+      propertyPath: m_LocalPosition.z
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 1717954561962503726, guid: f6336ac4ac8b4d34bc5072418cdc62a0, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
       value: 0
       objectReference: {fileID: 0}
@@ -1037,21 +1041,41 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 1899375100}
     m_Modifications:
+    - target: {fileID: 963349087938242428, guid: fbbb8144e302703418d50f0687c50497, type: 3}
+      propertyPath: m_PanelSettings
+      value: 
+      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
+    - target: {fileID: 1511711785825087114, guid: fbbb8144e302703418d50f0687c50497, type: 3}
+      propertyPath: _panelSettings
+      value: 
+      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
+    - target: {fileID: 2992777844278637658, guid: fbbb8144e302703418d50f0687c50497, type: 3}
+      propertyPath: _panelSettings
+      value: 
+      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
+    - target: {fileID: 4129790502506348898, guid: fbbb8144e302703418d50f0687c50497, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: -2
+      objectReference: {fileID: 0}
+    - target: {fileID: 7587838476165272829, guid: fbbb8144e302703418d50f0687c50497, type: 3}
+      propertyPath: m_PanelSettings
+      value: 
+      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
     - target: {fileID: 7963081529532598383, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalPosition.x
-      value: 2
+      value: 1.18
       objectReference: {fileID: 0}
     - target: {fileID: 7963081529532598383, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 1.346
+      value: 1.31
       objectReference: {fileID: 0}
     - target: {fileID: 7963081529532598383, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 0.72
+      value: 1.09
       objectReference: {fileID: 0}
     - target: {fileID: 7963081529532598383, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalRotation.w
-      value: 0.9033353
+      value: 0.92652863
       objectReference: {fileID: 0}
     - target: {fileID: 7963081529532598383, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalRotation.x
@@ -1059,7 +1083,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7963081529532598383, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalRotation.y
-      value: 0.42893514
+      value: 0.37622422
       objectReference: {fileID: 0}
     - target: {fileID: 7963081529532598383, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalRotation.z
@@ -1071,11 +1095,15 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 7963081529532598383, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalEulerAnglesHint.y
-      value: 50.8
+      value: 44.2
       objectReference: {fileID: 0}
     - target: {fileID: 7963081529532598383, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8380266693716886362, guid: fbbb8144e302703418d50f0687c50497, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 2
       objectReference: {fileID: 0}
     - target: {fileID: 9061140893801023932, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_Name

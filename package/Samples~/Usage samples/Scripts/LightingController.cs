@@ -224,14 +224,9 @@ namespace Lotec.Lighting.Samples {
                 return;
             }
 
-            PanelSettings panelSettings = AssetDatabase.LoadAssetAtPath<PanelSettings>($"{sampleDirectory}/UI/LightingControllerPanelSettings.asset");
             VisualTreeAsset visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>($"{sampleDirectory}/UI/LightingController.uxml");
 
             bool wasChanged = false;
-            if (_panelSettings != panelSettings) {
-                _panelSettings = panelSettings;
-                wasChanged = true;
-            }
 
             if (_visualTreeAsset != visualTree) {
                 _visualTreeAsset = visualTree;

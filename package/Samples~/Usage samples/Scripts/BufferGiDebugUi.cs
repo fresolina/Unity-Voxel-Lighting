@@ -141,14 +141,9 @@ namespace Lotec.Lighting.Samples {
                 return;
 
             // Reuse the LightingController panel settings (shared panel, layered by sorting order).
-            PanelSettings panelSettings = AssetDatabase.LoadAssetAtPath<PanelSettings>($"{sampleDirectory}/UI/LightingControllerPanelSettings.asset");
             VisualTreeAsset visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>($"{sampleDirectory}/UI/BufferGiDebugUi.uxml");
 
             bool wasChanged = false;
-            if (_panelSettings != panelSettings) {
-                _panelSettings = panelSettings;
-                wasChanged = true;
-            }
             if (_visualTreeAsset != visualTree) {
                 _visualTreeAsset = visualTree;
                 wasChanged = true;
