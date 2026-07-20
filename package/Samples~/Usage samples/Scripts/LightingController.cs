@@ -15,7 +15,8 @@ namespace Lotec.Lighting.Samples {
     /// <summary>
     /// Runtime UI Toolkit panel for the GI / <see cref="LightingManager"/> settings (GI method,
     /// samples/frame, shadow mode, AO, confidence, tonemap) plus the FPS / frame-time readout, and
-    /// the GI-related hotkeys (backquote cycles the lighting method, H folds the panels). The actual
+    /// the GI-related hotkeys (backquote cycles the lighting method; H - or the VR left-controller Menu
+    /// button - folds the panels). The actual
     /// scene lights (sun, flashlight, candle) live in <see cref="LightController"/> and have no UI.
     /// <para>VR: this renders as a screen Overlay today. To make it VR-accessible with no VR package,
     /// switch the shared PanelSettings render mode to World Space and position the "Lighting UI" root
@@ -73,6 +74,7 @@ namespace Lotec.Lighting.Samples {
         AutoExposure.TonemapMode _lastTonemap;
         Keyboard _keyboard;
         bool _uiFolded;
+        bool _menuHeldLastFrame;
 
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
@@ -136,6 +138,7 @@ namespace Lotec.Lighting.Samples {
             UpdateFrameTimeStats();
             RefreshUi(true);
             HandleHotkeys();
+            HandleVrMenuButton();
         }
 
         // GI-panel hotkeys: H folds both runtime panels, backquote cycles the GI lighting method.
@@ -159,6 +162,28 @@ namespace Lotec.Lighting.Samples {
             if (_keyboard.backquoteKey.wasPressedThisFrame) {
                 GiFieldUpdater.Instance?.ToggleLightingMethod();
             }
+        }
+
+        // VR: the LEFT Touch controller's Menu button toggles both panels (same fold as the H hotkey),
+        // so the UI is reachable in-headset. Polled through the XR input subsystem (OpenXR feeds it) -
+        // no action asset or scene wiring, matching the keyboard poll above; on desktop (no XR device)
+        // GetDeviceAtXRNode returns an invalid device and this is a harmless no-op. XR types are fully
+        // qualified to avoid the InputSystem/XR CommonUsages + InputDevice name clash. Not gated by the
+        // text-focus guard - the button is not a character, so it should always toggle.
+        void HandleVrMenuButton() {
+            UnityEngine.XR.InputDevice leftHand =
+                UnityEngine.XR.InputDevices.GetDeviceAtXRNode(UnityEngine.XR.XRNode.LeftHand);
+            bool pressed = leftHand.isValid
+                && leftHand.TryGetFeatureValue(UnityEngine.XR.CommonUsages.menuButton, out bool held)
+                && held;
+
+            // Rising-edge only, so holding the button doesn't flip the panels every frame.
+            if (pressed && !_menuHeldLastFrame) {
+                _uiFolded = !_uiFolded;
+                SetFolded(_uiFolded);
+                BufferGiDebugUi.SetFolded(_uiFolded);
+            }
+            _menuHeldLastFrame = pressed;
         }
 
         // PanelRenderer hands us the freshly loaded root here - on initial setup and whenever the
