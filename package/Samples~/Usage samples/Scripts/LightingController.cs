@@ -287,12 +287,12 @@ namespace Lotec.Lighting.Samples {
             EnumField giField = root.Q<EnumField>("gi-enum");
             EnumField giMethodField = root.Q<EnumField>("lighting-method-enum");
             EnumField shadowModeField = root.Q<EnumField>("shadow-mode-enum");
-            IntegerField samplesPerFrameField = root.Q<IntegerField>("samples-per-frame-field");
+            SliderInt samplesPerFrameSlider = root.Q<SliderInt>("samples-per-frame-slider");
             Slider confidenceCurveSlider = root.Q<Slider>("confidence-curve-slider");
             Slider aoStrengthSlider = root.Q<Slider>("ao-strength-slider");
             EnumField tonemapField = root.Q<EnumField>("tonemap-enum");
 
-            if (giField == null || giMethodField == null || shadowModeField == null || samplesPerFrameField == null || confidenceCurveSlider == null || aoStrengthSlider == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
+            if (giField == null || giMethodField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
@@ -334,7 +334,7 @@ namespace Lotec.Lighting.Samples {
                 _boundRoot.Q<EnumField>("gi-enum")?.ClearBindings();
                 _boundRoot.Q<EnumField>("lighting-method-enum")?.ClearBindings();
                 _boundRoot.Q<EnumField>("shadow-mode-enum")?.ClearBindings();
-                _boundRoot.Q<IntegerField>("samples-per-frame-field")?.ClearBindings();
+                _boundRoot.Q<SliderInt>("samples-per-frame-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("confidence-curve-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("ao-strength-slider")?.ClearBindings();
                 _boundRoot.Q<EnumField>("tonemap-enum")?.ClearBindings();

@@ -19,11 +19,11 @@
                         <ui:DataBinding property="value" data-source-path="LightingMethod" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
-                <ui:IntegerField name="samples-per-frame-field" label="GI Samples/Frame" is-delayed="true" tooltip="Buffer GI samples (rays) gathered per voxel per frame. Higher converges faster but costs more (1 for Quest)." tabindex="-1" class="setting-field">
+                <ui:SliderInt name="samples-per-frame-slider" label="GI Samples/Frame" low-value="1" high-value="8" show-input-field="true" tooltip="Buffer GI samples (rays) gathered per voxel per frame. Higher converges faster but costs more (1 for Quest)." class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="SamplesPerFrame" binding-mode="TwoWay"/>
                     </Bindings>
-                </ui:IntegerField>
+                </ui:SliderInt>
                 <ui:Slider name="confidence-curve-slider" label="Confidence Curve" low-value="1" high-value="8" show-input-field="true" tooltip="Ease-in exponent for the displayed reveal/fade (1 = linear). Higher keeps noisy early accumulation frames hidden." class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="ConfidenceCurve" binding-mode="TwoWay"/>

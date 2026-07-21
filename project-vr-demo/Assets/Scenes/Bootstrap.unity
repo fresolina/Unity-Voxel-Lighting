@@ -493,7 +493,7 @@ MonoBehaviour:
   _giComputeShader: {fileID: 7200000, guid: 02f9a08ea0218754cac3ba8d03fd4a99, type: 3}
   _continuousGi: 1
   _maxSamples: 500
-  _raysPerFrame: 10
+  _raysPerFrame: 1
   _giFireflyClamp: 3
   _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
   _exposureControl:
