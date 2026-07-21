@@ -56,8 +56,11 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             #pragma multi_compile __ SDF_AO_LQ SDF_AO_HQ
             // GI_OFF (default): direct lighting only. GI_VOXEL_TEXTURE: texture irradiance field +
             // AO (GiFieldUpdater). GI_VOXEL_BUFFER: the buffer GI read filter (BufferGiUpdater).
-            // Mutually exclusive - whichever updater is active enables its keyword.
-            #pragma multi_compile GI_OFF GI_VOXEL_TEXTURE GI_VOXEL_BUFFER
+            // GI_UNITY: Unity's built-in indirect (SampleSH) - a component-less A/B baseline for
+            // measuring the voxel GI's runtime cost against the engine's baked path.
+            // Mutually exclusive - the active updater enables its keyword; GiMethodSelector drives the
+            // component-less GI_UNITY / GI_OFF.
+            #pragma multi_compile GI_OFF GI_VOXEL_TEXTURE GI_VOXEL_BUFFER GI_UNITY
 
             CBUFFER_START(UnityPerMaterial)
                 TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
@@ -154,6 +157,12 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     float3 gi = SampleBufferGI(IN.positionWS, N);
                     float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
                     lit += albedo * gi * ao;
+                #elif defined(GI_UNITY)
+                    // A/B baseline: Unity's built-in indirect diffuse (ambient / light probes via
+                    // SampleSH). No voxel fields are read or bound in this variant (honest perf +
+                    // WebGPU-safe), and no voxel-GI exposure is applied below - so this measures the
+                    // engine's baked indirect against the voxel GI with direct lighting held constant.
+                    lit += albedo * SampleSH(N);
                 #endif
 
                 // Self-emission, added before the display transform so it is exposed/tonemapped

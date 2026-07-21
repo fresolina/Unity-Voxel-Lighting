@@ -3,6 +3,7 @@ setlocal
 
 set "REPO_ROOT=%~dp0.."
 set "ASSETS_DIR=%REPO_ROOT%\project-demo\Assets"
+set "ASSETS_DIR2=%REPO_ROOT%\project-vr-demo\Assets"
 set "LINK_NAME=_Samples"
 set "LINK_PATH=%ASSETS_DIR%\%LINK_NAME%"
 set "TARGET_PATH=..\..\package\Samples~"
@@ -19,6 +20,11 @@ if exist "%LINK_PATH%" (
 )
 
 pushd "%ASSETS_DIR%"
+mklink /D "%LINK_NAME%" "%TARGET_PATH%"
+set "EXIT_CODE=%ERRORLEVEL%"
+popd
+
+pushd "%ASSETS_DIR2%"
 mklink /D "%LINK_NAME%" "%TARGET_PATH%"
 set "EXIT_CODE=%ERRORLEVEL%"
 popd

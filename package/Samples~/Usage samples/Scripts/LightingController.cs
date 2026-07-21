@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using Unity.Properties;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.UIElements;
 
 #if UNITY_EDITOR
@@ -11,8 +12,19 @@ using UnityEditor;
 #endif
 
 namespace Lotec.Lighting.Samples {
+    /// <summary>
+    /// Runtime UI Toolkit panel for the GI / <see cref="LightingManager"/> settings (GI method,
+    /// samples/frame, shadow mode, AO, confidence, tonemap) plus the FPS / frame-time readout, and
+    /// the GI-related hotkeys (backquote cycles the lighting method; H - or the VR left-controller Menu
+    /// button - folds the panels). The actual
+    /// scene lights (sun, flashlight, candle) live in <see cref="LightController"/> and have no UI.
+    /// <para>VR: this renders as a screen Overlay today. To make it VR-accessible with no VR package,
+    /// switch the shared PanelSettings render mode to World Space and position the "Lighting UI" root
+    /// in the scene - the auto-generated panel collider then receives an XR ray interactor's pointer
+    /// events, no code change required.</para>
+    /// </summary>
     [RequireComponent(typeof(PanelRenderer))]
-    public class LightControllerUi : MonoBehaviour, INotifyBindablePropertyChanged {
+    public class LightingController : MonoBehaviour, INotifyBindablePropertyChanged {
         const float OneSecondWindowDuration = 1f;
         const string UnavailableFrameTimeText = "--.-- ms";
         const string UnavailableFpsText = "-- fps";
@@ -32,9 +44,8 @@ namespace Lotec.Lighting.Samples {
         /// fine field's baked shadow; any other entry turns it off and selects that shadow source.</summary>
         public enum ShadowUiMode { Baked, SDF, BitmaskPoint, Bitmask8Tap, OcclusionField }
 
-        static LightControllerUi s_instance;
+        static LightingController s_instance;
 
-        [SerializeField] LightController _lightController;
         [SerializeField] PanelRenderer _panel;
         [SerializeField] PanelSettings _panelSettings;
         [SerializeField] VisualTreeAsset _visualTreeAsset;
@@ -57,13 +68,13 @@ namespace Lotec.Lighting.Samples {
         GiMethod _lastGiMethod;
         GiFieldUpdater.LightingMethod _lastLightingMethod;
         ShadowUiMode _lastShadowMode;
-        float _lastEnabledLightIntensity;
-        bool _lastFlashlightEnabled;
-        bool _lastCandleEnabled;
         int _lastSamplesPerFrame;
         float _lastConfidenceCurve;
         float _lastAoStrength;
         AutoExposure.TonemapMode _lastTonemap;
+        Keyboard _keyboard;
+        bool _uiFolded;
+        bool _menuHeldLastFrame;
 
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
@@ -80,7 +91,6 @@ namespace Lotec.Lighting.Samples {
 
 #if UNITY_EDITOR
         void OnValidate() {
-            EnsureLightController();
             EnsurePanel();
             EnsurePanelAssets();
         }
@@ -91,15 +101,13 @@ namespace Lotec.Lighting.Samples {
         }
 
         void Start() {
-            // Panel + reload callback are set up in OnEnable; re-ensure the controller in case OnEnable
-            // ran before it existed, and re-apply assets idempotently. Binding happens in OnUiReload.
-            EnsureLightController();
+            // Panel + reload callback are set up in OnEnable; re-apply assets idempotently here.
+            // Binding happens in OnUiReload.
             ApplyPanelAssets();
             RefreshUi(false);
         }
 
         void OnEnable() {
-            EnsureLightController();
             EnsurePanel();
             if (_panel != null) {
                 // Register before assigning the tree so we receive the initial load's root here.
@@ -129,6 +137,53 @@ namespace Lotec.Lighting.Samples {
         void Update() {
             UpdateFrameTimeStats();
             RefreshUi(true);
+            HandleHotkeys();
+            HandleVrMenuButton();
+        }
+
+        // GI-panel hotkeys: H folds both runtime panels, backquote cycles the GI lighting method.
+        // Guarded so typing in a field (this panel or the debug panel) doesn't trigger them.
+        void HandleHotkeys() {
+            _keyboard = Keyboard.current;
+            if (_keyboard == null) {
+                return;
+            }
+
+            if (IsTextInputFocused || BufferGiDebugUi.IsTextInputFocused) {
+                return;
+            }
+
+            if (_keyboard.hKey.wasPressedThisFrame) {
+                _uiFolded = !_uiFolded;
+                SetFolded(_uiFolded);
+                BufferGiDebugUi.SetFolded(_uiFolded);
+            }
+
+            if (_keyboard.backquoteKey.wasPressedThisFrame) {
+                GiFieldUpdater.Instance?.ToggleLightingMethod();
+            }
+        }
+
+        // VR: the LEFT Touch controller's Menu button toggles both panels (same fold as the H hotkey),
+        // so the UI is reachable in-headset. Polled through the XR input subsystem (OpenXR feeds it) -
+        // no action asset or scene wiring, matching the keyboard poll above; on desktop (no XR device)
+        // GetDeviceAtXRNode returns an invalid device and this is a harmless no-op. XR types are fully
+        // qualified to avoid the InputSystem/XR CommonUsages + InputDevice name clash. Not gated by the
+        // text-focus guard - the button is not a character, so it should always toggle.
+        void HandleVrMenuButton() {
+            UnityEngine.XR.InputDevice leftHand =
+                UnityEngine.XR.InputDevices.GetDeviceAtXRNode(UnityEngine.XR.XRNode.LeftHand);
+            bool pressed = leftHand.isValid
+                && leftHand.TryGetFeatureValue(UnityEngine.XR.CommonUsages.menuButton, out bool held)
+                && held;
+
+            // Rising-edge only, so holding the button doesn't flip the panels every frame.
+            if (pressed && !_menuHeldLastFrame) {
+                _uiFolded = !_uiFolded;
+                SetFolded(_uiFolded);
+                BufferGiDebugUi.SetFolded(_uiFolded);
+            }
+            _menuHeldLastFrame = pressed;
         }
 
         // PanelRenderer hands us the freshly loaded root here - on initial setup and whenever the
@@ -137,12 +192,6 @@ namespace Lotec.Lighting.Samples {
             _root = root;
             BindUi();
             RefreshUi(false);
-        }
-
-        void EnsureLightController() {
-            if (_lightController == null) {
-                _lightController = FindAnyObjectByType<LightController>();
-            }
         }
 
         void EnsurePanel() {
@@ -175,14 +224,9 @@ namespace Lotec.Lighting.Samples {
                 return;
             }
 
-            PanelSettings panelSettings = AssetDatabase.LoadAssetAtPath<PanelSettings>($"{sampleDirectory}/UI/LightControllerUiPanelSettings.asset");
-            VisualTreeAsset visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>($"{sampleDirectory}/UI/LightControllerUi.uxml");
+            VisualTreeAsset visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>($"{sampleDirectory}/UI/LightingController.uxml");
 
             bool wasChanged = false;
-            if (_panelSettings != panelSettings) {
-                _panelSettings = panelSettings;
-                wasChanged = true;
-            }
 
             if (_visualTreeAsset != visualTree) {
                 _visualTreeAsset = visualTree;
@@ -242,16 +286,13 @@ namespace Lotec.Lighting.Samples {
 
             EnumField giField = root.Q<EnumField>("gi-enum");
             EnumField giMethodField = root.Q<EnumField>("lighting-method-enum");
-            FloatField enabledLightIntensityField = root.Q<FloatField>("enabled-light-intensity-field");
-            Toggle flashlightToggle = root.Q<Toggle>("flashlight-toggle");
-            Toggle candleToggle = root.Q<Toggle>("candle-toggle");
             EnumField shadowModeField = root.Q<EnumField>("shadow-mode-enum");
-            IntegerField samplesPerFrameField = root.Q<IntegerField>("samples-per-frame-field");
+            SliderInt samplesPerFrameSlider = root.Q<SliderInt>("samples-per-frame-slider");
             Slider confidenceCurveSlider = root.Q<Slider>("confidence-curve-slider");
             Slider aoStrengthSlider = root.Q<Slider>("ao-strength-slider");
             EnumField tonemapField = root.Q<EnumField>("tonemap-enum");
 
-            if (giField == null || giMethodField == null || enabledLightIntensityField == null || flashlightToggle == null || candleToggle == null || shadowModeField == null || samplesPerFrameField == null || confidenceCurveSlider == null || aoStrengthSlider == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
+            if (giField == null || giMethodField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
@@ -292,11 +333,8 @@ namespace Lotec.Lighting.Samples {
             if (_boundRoot != null) {
                 _boundRoot.Q<EnumField>("gi-enum")?.ClearBindings();
                 _boundRoot.Q<EnumField>("lighting-method-enum")?.ClearBindings();
-                _boundRoot.Q<FloatField>("enabled-light-intensity-field")?.ClearBindings();
-                _boundRoot.Q<Toggle>("flashlight-toggle")?.ClearBindings();
-                _boundRoot.Q<Toggle>("candle-toggle")?.ClearBindings();
                 _boundRoot.Q<EnumField>("shadow-mode-enum")?.ClearBindings();
-                _boundRoot.Q<IntegerField>("samples-per-frame-field")?.ClearBindings();
+                _boundRoot.Q<SliderInt>("samples-per-frame-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("confidence-curve-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("ao-strength-slider")?.ClearBindings();
                 _boundRoot.Q<EnumField>("tonemap-enum")?.ClearBindings();
@@ -341,33 +379,6 @@ namespace Lotec.Lighting.Samples {
                     return;
                 }
 
-                RefreshUi(true);
-            }
-        }
-
-        [CreateProperty]
-        float EnabledLightIntensity {
-            get => _lightController.EnabledLightIntensity;
-            set {
-                _lightController.SetEnabledLightIntensity(value);
-                RefreshUi(true);
-            }
-        }
-
-        [CreateProperty]
-        bool FlashlightEnabled {
-            get => _lightController.FlashlightEnabled;
-            set {
-                _lightController.SetFlashlightEnabled(value);
-                RefreshUi(true);
-            }
-        }
-
-        [CreateProperty]
-        bool CandleEnabled {
-            get => _lightController.CandleEnabled;
-            set {
-                _lightController.SetCandleEnabled(value);
                 RefreshUi(true);
             }
         }
@@ -582,9 +593,6 @@ namespace Lotec.Lighting.Samples {
         void UpdateBindingSnapshot(bool notifyChanges) {
             GiMethod giMethod = Gi;
             GiFieldUpdater.LightingMethod lightingMethod = LightingMethod;
-            float enabledLightIntensity = EnabledLightIntensity;
-            bool flashlightEnabled = FlashlightEnabled;
-            bool candleEnabled = CandleEnabled;
             ShadowUiMode shadowMode = ShadowMode;
             int samplesPerFrame = SamplesPerFrame;
             float confidenceCurve = ConfidenceCurve;
@@ -594,9 +602,6 @@ namespace Lotec.Lighting.Samples {
             if (!_hasBindingSnapshot) {
                 _lastGiMethod = giMethod;
                 _lastLightingMethod = lightingMethod;
-                _lastEnabledLightIntensity = enabledLightIntensity;
-                _lastFlashlightEnabled = flashlightEnabled;
-                _lastCandleEnabled = candleEnabled;
                 _lastShadowMode = shadowMode;
                 _lastSamplesPerFrame = samplesPerFrame;
                 _lastConfidenceCurve = confidenceCurve;
@@ -608,9 +613,6 @@ namespace Lotec.Lighting.Samples {
 
             UpdateEnumSnapshot(ref _lastGiMethod, giMethod, notifyChanges, nameof(Gi));
             UpdateEnumSnapshot(ref _lastLightingMethod, lightingMethod, notifyChanges, nameof(LightingMethod));
-            UpdateFloatSnapshot(ref _lastEnabledLightIntensity, enabledLightIntensity, notifyChanges, nameof(EnabledLightIntensity));
-            UpdateBoolSnapshot(ref _lastFlashlightEnabled, flashlightEnabled, notifyChanges, nameof(FlashlightEnabled));
-            UpdateBoolSnapshot(ref _lastCandleEnabled, candleEnabled, notifyChanges, nameof(CandleEnabled));
             UpdateEnumSnapshot(ref _lastShadowMode, shadowMode, notifyChanges, nameof(ShadowMode));
             UpdateIntSnapshot(ref _lastSamplesPerFrame, samplesPerFrame, notifyChanges, nameof(SamplesPerFrame));
             UpdateFloatSnapshot(ref _lastConfidenceCurve, confidenceCurve, notifyChanges, nameof(ConfidenceCurve));
@@ -631,17 +633,6 @@ namespace Lotec.Lighting.Samples {
 
         void UpdateFloatSnapshot(ref float currentValue, float nextValue, bool notifyChanges, string propertyName) {
             if (Mathf.Approximately(currentValue, nextValue)) {
-                return;
-            }
-
-            currentValue = nextValue;
-            if (notifyChanges) {
-                NotifyBindingChanged(propertyName);
-            }
-        }
-
-        void UpdateBoolSnapshot(ref bool currentValue, bool nextValue, bool notifyChanges, string propertyName) {
-            if (currentValue == nextValue) {
                 return;
             }
 

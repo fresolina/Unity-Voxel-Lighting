@@ -6,7 +6,7 @@ namespace Lotec.Lighting.Samples {
     /// programmatic call (so a hotkey can fold every panel at once). A UXML panel opts in by giving
     /// its clickable header row the name "panel-header", the foldable content a wrapper named
     /// "panel-body", and (optionally) a "fold-arrow" label whose glyph flips ▾/▸. Shared by
-    /// <see cref="LightControllerUi"/> and <see cref="BufferGiDebugUi"/>.
+    /// <see cref="LightingController"/> and <see cref="BufferGiDebugUi"/>.
     /// </summary>
     static class FoldoutHeader {
         public static void Setup(VisualElement root) {

@@ -34,15 +34,23 @@ namespace Lotec.Lighting {
     /// variants consistently (and so it is discoverable which keywords the package owns).
     /// </summary>
     public static class LightingKeywords {
-        /// <summary>GI method (VoxelLit: multi_compile GI_OFF GI_VOXEL_TEXTURE GI_VOXEL_BUFFER).
-        /// Owned by whichever GI updater component is enabled; GI_OFF when none.</summary>
-        public static readonly ShaderKeywordGroup Gi = new ShaderKeywordGroup("GI_OFF", "GI_VOXEL_TEXTURE", "GI_VOXEL_BUFFER");
+        /// <summary>GI method (VoxelLit: multi_compile GI_OFF GI_VOXEL_TEXTURE GI_VOXEL_BUFFER
+        /// GI_UNITY). Owned by whichever GI updater component is enabled; the component-less options
+        /// (GI_OFF / GI_UNITY) are driven by GiMethodSelector. GI_UNITY selects Unity's built-in
+        /// indirect (SampleSH) as an A/B performance baseline against the voxel GI.</summary>
+        public static readonly ShaderKeywordGroup Gi = new ShaderKeywordGroup("GI_OFF", "GI_VOXEL_TEXTURE", "GI_VOXEL_BUFFER", "GI_UNITY");
         public const string GiOff = "GI_OFF";
         public const string GiTexture = "GI_VOXEL_TEXTURE";
         public const string GiBuffer = "GI_VOXEL_BUFFER";
+        public const string GiUnity = "GI_UNITY";
 
         static object s_giOwner;
         static string s_giKeyword = GiOff;
+
+        /// <summary>The GI keyword currently active (whatever the last ClaimGi/ReleaseGi set). Lets a
+        /// caller tell the two component-less options apart - GI_OFF vs GI_UNITY both mean "no updater
+        /// enabled".</summary>
+        public static string ActiveGiKeyword => s_giKeyword;
 
         /// <summary>Claim the GI group for a GI updater and activate its keyword. Change-only (safe
         /// to call every frame), and ownership-aware: a later claim simply takes over.</summary>

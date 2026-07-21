@@ -14,7 +14,7 @@ namespace Lotec.Lighting.Samples {
     /// Runtime UI Toolkit panel that mirrors the <see cref="BufferGiDebug"/> inspector: every field
     /// the inspector exposes is a live, in-game control here (mode/field enums, the toggles, stride,
     /// cube fill, normal-line length, intensity, min luminance). Uses the same data-binding pattern
-    /// as <see cref="LightControllerUi"/> - <see cref="CreateProperty"/> getters/setters over the
+    /// as <see cref="LightingController"/> - <see cref="CreateProperty"/> getters/setters over the
     /// component plus a per-frame snapshot so external (inspector) edits reflect back into the UI.
     /// </summary>
     [RequireComponent(typeof(PanelRenderer))]
@@ -25,7 +25,7 @@ namespace Lotec.Lighting.Samples {
         [SerializeField] PanelRenderer _panel;
         [SerializeField] PanelSettings _panelSettings;
         [SerializeField] VisualTreeAsset _visualTreeAsset;
-        [SerializeField] int _sortingOrder = 1001; // above LightControllerUi (1000) so popups layer on top
+        [SerializeField] int _sortingOrder = 1001; // above LightingController (1000) so popups layer on top
 
         // PanelRenderer has no synchronous rootVisualElement; the root arrives via OnUiReload and is
         // cached here for the lifetime of the loaded tree. _boundRoot tracks the last root we bound.
@@ -140,15 +140,10 @@ namespace Lotec.Lighting.Samples {
             if (string.IsNullOrEmpty(sampleDirectory))
                 return;
 
-            // Reuse the LightControllerUi panel settings (shared panel, layered by sorting order).
-            PanelSettings panelSettings = AssetDatabase.LoadAssetAtPath<PanelSettings>($"{sampleDirectory}/UI/LightControllerUiPanelSettings.asset");
+            // Reuse the LightingController panel settings (shared panel, layered by sorting order).
             VisualTreeAsset visualTree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>($"{sampleDirectory}/UI/BufferGiDebugUi.uxml");
 
             bool wasChanged = false;
-            if (_panelSettings != panelSettings) {
-                _panelSettings = panelSettings;
-                wasChanged = true;
-            }
             if (_visualTreeAsset != visualTree) {
                 _visualTreeAsset = visualTree;
                 wasChanged = true;
@@ -174,7 +169,7 @@ namespace Lotec.Lighting.Samples {
                 _panel.visualTreeAsset = _visualTreeAsset;
                 wasChanged = true;
             }
-            // sortingOrder is inherited from Renderer (int) - layers this panel above LightControllerUi.
+            // sortingOrder is inherited from Renderer (int) - layers this panel above LightingController.
             if (_panel.sortingOrder != _sortingOrder) {
                 _panel.sortingOrder = _sortingOrder;
                 wasChanged = true;
