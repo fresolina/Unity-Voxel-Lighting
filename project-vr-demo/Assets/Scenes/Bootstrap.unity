@@ -406,9 +406,6 @@ GameObject:
   - component: {fileID: 1437948842}
   - component: {fileID: 1437948843}
   - component: {fileID: 1437948845}
-  - component: {fileID: 1437948853}
-  - component: {fileID: 1437948854}
-  - component: {fileID: 1437948855}
   m_Layer: 0
   m_Name: Lighting manager
   m_TagString: Untagged
@@ -466,7 +463,7 @@ MonoBehaviour:
   _reachBoost: 1
   _bakedNormals: 1
   _aoStrength: 0
-  _fineShadow: 0
+  _fineShadow: 1
   _coarseShadow: 1
   _exposureControl:
     _tonemap: 2
@@ -478,69 +475,6 @@ MonoBehaviour:
     _measureRadius: 3
   _computeShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
   _voxelizeShader: {fileID: 4800000, guid: fb19bf6e7b7d7e24bb740879f668a9bd, type: 3}
---- !u!114 &1437948853
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1437948840}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 511cad81882958d489e01a3d1e19706e, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.GiFieldUpdater
-  _giComputeShader: {fileID: 7200000, guid: 02f9a08ea0218754cac3ba8d03fd4a99, type: 3}
-  _continuousGi: 1
-  _maxSamples: 500
-  _raysPerFrame: 1
-  _giFireflyClamp: 3
-  _blueNoiseTexture: {fileID: 2800000, guid: caa192f1738ff67489fbb2b0e95477bb, type: 3}
-  _exposureControl:
-    _tonemap: 1
-    _exposure: 0
-    _auto: 1
-    _min: -2
-    _max: 2
-    _adaptationSpeed: 2
-    _measureRadius: 3
-  _lightingMethod: 0
-  _lpvDecay: 0.97
-  _raymarchMaxSteps: 64
-  _raymarchSoftness: 0.5
---- !u!114 &1437948854
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1437948840}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 4a9b32c8dae15f60b7c8d9e0f1020314, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.SdfShadow
-  _config:
-    <MaxSteps>k__BackingField: 64
-    <Softness>k__BackingField: 13
-    <StartOffset>k__BackingField: 0.5
-    <MinStep>k__BackingField: 0.1
---- !u!114 &1437948855
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1437948840}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5bac43d9ebf2607108d9e0f102031425, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.SdfAmbientOcclusion
-  _config:
-    <Step>k__BackingField: 0.08
-    <Intensity>k__BackingField: 1.95
-    <SampleQuality>k__BackingField: 0
 --- !u!1 &1500960146
 GameObject:
   m_ObjectHideFlags: 0
@@ -751,7 +685,8 @@ PrefabInstance:
       propertyPath: m_Name
       value: EventSystem
       objectReference: {fileID: 0}
-    m_RemovedComponents: []
+    m_RemovedComponents:
+    - {fileID: 2180409137848799242, guid: 6fb9121b1b112fc4bac08e36a15f229f, type: 3}
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
     m_AddedComponents: []
@@ -785,9 +720,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3f8a21b7c9d04e5fa6b7c8d9e0f10203, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.LocalLightsPublisher
-  _additionalLights:
-  - {fileID: 1697248655}
-  - {fileID: 333063937}
+  _additionalLights: []
 --- !u!4 &1689317578
 Transform:
   m_ObjectHideFlags: 0
@@ -1056,6 +989,10 @@ PrefabInstance:
     - target: {fileID: 4129790502506348898, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalPosition.x
       value: -2
+      objectReference: {fileID: 0}
+    - target: {fileID: 6917518582505818305, guid: fbbb8144e302703418d50f0687c50497, type: 3}
+      propertyPath: m_IsActive
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 7587838476165272829, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_PanelSettings
