@@ -8,7 +8,7 @@ namespace Lotec.Lighting {
     /// Owns the ComputeBuffers, voxelizes the scene mesh into the occupancy/albedo buffer once (GPU 3-axis
     /// raster, BufferGiVoxelize.shader), and runs the per-frame solve: inject (solid voxels
     /// emit/reflect) then gather (air voxels integrate 1 ray/frame with the temporal resolve fused
-    /// in) then a blur pass. The lit shader reads it via SampleBufferGI (BufferGi.hlsl).
+    /// in) then a blur pass. The lit shader reads it via BgiGatherIndirect (BufferGi.hlsl).
     ///
     /// All fields are a fixed 32^3 so a voxel index fits in 16 bits and the whole grid stays
     /// resident in the GPU L2. (Single fine cascade for now; a coarse cascade + scheduler is the
@@ -464,7 +464,7 @@ namespace Lotec.Lighting {
             p.y >= origin.y && p.y <= origin.y + size.y &&
             p.z >= origin.z && p.z <= origin.z + size.z;
 
-        // Publish the buffers + grid mapping + confidence the lit shader's SampleBufferGI reads.
+        // Publish the buffers + grid mapping + confidence the lit shader's BgiGatherIndirect reads.
         void SetGlobals() {
             // Fragment solidity = the 8 KB bitfield; _Material is no longer bound to the lit shader.
             Shader.SetGlobalBuffer(s_occupancy, _occupancyBuffer);

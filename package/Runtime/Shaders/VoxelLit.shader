@@ -25,7 +25,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             Tags { "LightMode" = "UniversalForward" }
 
             HLSLPROGRAM
-            // 4.5 (SM5.0) required: SampleBufferGI reads StructuredBuffers in the fragment stage
+            // 4.5 (SM5.0) required: the buffer GI reads StructuredBuffers in the fragment stage
             // (GI_VOXEL_BUFFER). The package already targets compute-capable hardware, so this is safe.
             #pragma target 4.5
             #pragma vertex vert
@@ -140,10 +140,20 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 half3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
                 half3 albedo = _BaseColor.rgb * texAlbedo;
 
-                // Main light: its shadow source is resolved inside GetShadow (VoxelDirectLighting) -
-                // under the buffer GI, the per-field baked voxel sun-shadow is one of the selectable
-                // sources there, so no shadow multiply is applied here.
-                half3 lit = GetMainDirectLighting(light, IN.positionWS, N, albedo);
+                // Main light. Under the buffer GI the baked sun shadow and the baked AO read the SAME
+                // 4 face voxels, so resolve BOTH in one face loop (BgiSampleFaceAoShadow) and feed the
+                // shadow straight into the main light - instead of a separate BgiTrySunShadow (inside
+                // GetShadow) plus BgiSurfaceAO (inside the gather), which walked those voxels twice.
+                // Other GI modes resolve the main-light shadow inside GetShadow as before.
+                #if defined(GI_VOXEL_BUFFER)
+                    half bgiAo, bgiShadow; bool bgiShadowValid;
+                    BgiSampleFaceAoShadow(IN.positionWS, N, bgiAo, bgiShadow, bgiShadowValid);
+                    half3 lit = bgiShadowValid
+                        ? GetMainDirectLightingShadow(light, IN.positionWS, N, albedo, bgiShadow)
+                        : GetMainDirectLighting(light, IN.positionWS, N, albedo);
+                #else
+                    half3 lit = GetMainDirectLighting(light, IN.positionWS, N, albedo);
+                #endif
                 lit += GetPointLightDirect(IN.positionWS, N, albedo);
                 lit += GetSpotLightDirect(IN.positionWS, N, albedo);
 
@@ -153,10 +163,10 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
                     lit += albedo * gi * ao;
                 #elif defined(GI_VOXEL_BUFFER)
-                    // Indirect lit (buffer GI) modulated by SDF ambient occlusion.
-                    float3 gi = SampleBufferGI(IN.positionWS, N);
-                    float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
-                    lit += albedo * gi * ao;
+                    // Indirect lit (buffer GI) modulated by the buffer's OWN baked AO (bgiAo, resolved
+                    // above together with the sun shadow). No SDF AO here - the buffer GI carries its
+                    // own openness, so this path no longer samples the SDF texture at all.
+                    lit += albedo * BgiGatherIndirect(IN.positionWS, N) * bgiAo;
                 #elif defined(GI_UNITY)
                     // A/B baseline: Unity's built-in indirect diffuse (ambient / light probes via
                     // SampleSH). No voxel fields are read or bound in this variant (honest perf +

@@ -9,7 +9,6 @@
 #include "VoxelSdfShadows.hlsl" // GetShadowFromSdf (default shadow source)
 #include "VoxelSdfAo.hlsl"      // GetAmbientOcclusionFromSdf
 #include "VoxelOcclusion.hlsl"  // GetBitmaskShadow / GetOccFieldShadow (baked shadow sources)
-#include "BufferGi.hlsl"        // GI_VOXEL_BUFFER voxel sun-shadow source (BgiTrySunShadow); empty otherwise
 
 #ifndef MAX_POINT_LIGHTS
 #define MAX_POINT_LIGHTS 4
@@ -27,15 +26,12 @@ float4 _SpotLightPositionRange[MAX_SPOT_LIGHTS];
 float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
 float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 
-// Resolve the shadow term for a surface point. Defaults to SDF; the bitmask /
-// occlusion-field modes are selected by their compile-time keywords. Under the buffer GI, the
-// per-field voxel sun-shadow (baked or realtime) takes over as the source when its mode is active.
+// Resolve the shadow term for a surface point. Defaults to SDF; the bitmask / occlusion-field modes
+// are selected by their compile-time keywords. Under the buffer GI the per-field baked voxel sun-shadow
+// is resolved in the fragment alongside the baked AO (one shared face read - see BgiSampleFaceAoShadow)
+// and fed to GetMainDirectLightingShadow, so it does NOT route through here; this only serves the main
+// light when the buffer sun-shadow is Off (falls through to SDF/bitmask/occ) plus all local lights.
 inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal) {
-    #if defined(GI_VOXEL_BUFFER)
-        half voxelShadow;
-        if (BgiTrySunShadow(worldPos, normal, voxelShadow))
-            return voxelShadow;
-    #endif
     #if defined(OCC_FIELD)
         return GetOccFieldShadow(worldPos, normal);
     #elif defined(BITMASK_POINT) || defined(BITMASK_8TAP)
@@ -86,6 +82,17 @@ inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, floa
 
 inline half3 GetMainDirectLighting(Light light, float3 worldPos, half3 normal, half3 albedo) {
     return GetDirectLighting(worldPos, normal, albedo, light.direction, light.color, 1.0);
+}
+
+// Main directional light with an externally-resolved shadow term - used by the buffer-GI path, which
+// computes the baked sun visibility together with the baked AO in a single face read
+// (BgiSampleFaceAoShadow) and passes it in here, so the shadow is not resolved again via GetShadow.
+inline half3 GetMainDirectLightingShadow(Light light, float3 worldPos, half3 normal, half3 albedo, half shadow) {
+    half3 normalizedLightDir = normalize(light.direction);
+    half ndotl = saturate(dot(normal, normalizedLightDir));
+    if (ndotl <= 0.0h)
+        return 0.0h;
+    return albedo * light.color * (ndotl * shadow);
 }
 
 inline half3 GetPointLightDirect(float3 worldPos, half3 normal, half3 albedo) {

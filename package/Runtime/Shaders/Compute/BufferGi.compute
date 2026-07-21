@@ -211,7 +211,7 @@ float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
 
 // Direct lighting at a surface voxel, with DDA shadow rays and an N.L cosine term. `sunVis` returns
 // the main directional light's raw visibility (1 lit, 0 shadowed) so the fragment can read a cheap
-// baked voxel sun-shadow straight from the radiance field's spare w channel (see BgiTrySunShadow).
+// baked voxel sun-shadow straight from the radiance field's spare w channel (see BgiSampleFaceAoShadow).
 float3 GetDirectLight(int3 cell, float3 normal, out float sunVis)
 {
     float3 voxelCenter = BgiVoxelCenter((uint3)cell);
