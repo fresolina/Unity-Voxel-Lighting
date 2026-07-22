@@ -34,6 +34,31 @@
                         <ui:DataBinding property="value" data-source-path="AoStrength" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:Slider>
+                <ui:Toggle name="fast-gi-toggle" label="GI Gather: 1-tap" tooltip="Profiling: collapse the 9-tap B-spline irradiance gather to 1 nearest tap (keyword BGI_FAST_PATH). Isolates the gather's cost/register pressure." class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="FastGi" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Toggle>
+                <ui:Toggle name="face-1tap-toggle" label="Face read: 1-tap" tooltip="Profiling: collapse the 4-tap AO+sun-shadow face read to 1 nearest tap (keyword BGI_FACE_1TAP). Independent of GI Gather - both on = the old bundled fast GI." class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="Face1Tap" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Toggle>
+                <ui:Toggle name="run-inject-toggle" label="Solve: Inject" tooltip="Profiling: run the per-frame Inject solve pass. Off freezes the radiance field (GI wrong) but isolates this pass's GPU cost." class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="RunInject" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Toggle>
+                <ui:Toggle name="run-gather-toggle" label="Solve: Gather" tooltip="Profiling: run the per-frame Gather solve pass. Off isolates this pass's GPU cost." class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="RunGather" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Toggle>
+                <ui:Toggle name="run-blur-toggle" label="Solve: Blur" tooltip="Profiling: run the per-frame Blur solve pass. Off isolates this pass's GPU cost. Turn all three Solve toggles off = whole solve off." class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="RunBlur" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Toggle>
                 <ui:EnumField label="Shadow Mode" value="Baked" type="Lotec.Lighting.Samples.LightingController+ShadowUiMode, Assembly-CSharp" name="shadow-mode-enum" tooltip="Baked: BufferGI fine-field voxel sun-shadow (pre-marched, soft, cheap). Others: the volume shadow source used by the SDF/texture shadow path." class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="ShadowMode" binding-mode="TwoWay"/>

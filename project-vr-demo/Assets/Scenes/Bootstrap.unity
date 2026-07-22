@@ -465,6 +465,11 @@ MonoBehaviour:
   _aoStrength: 0
   _fineShadow: 1
   _coarseShadow: 1
+  _fastGi: 0
+  _face1Tap: 0
+  _runInject: 1
+  _runGather: 1
+  _runBlur: 1
   _exposureControl:
     _tonemap: 2
     _exposure: 0
@@ -518,7 +523,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1500960146}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 42e7201bd07ab1d4bb0f05b18e75ebbb, type: 3}
   m_Name: 

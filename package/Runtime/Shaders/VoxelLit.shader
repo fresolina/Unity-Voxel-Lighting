@@ -61,6 +61,12 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // Mutually exclusive - the active updater enables its keyword; GiMethodSelector drives the
             // component-less GI_UNITY / GI_OFF.
             #pragma multi_compile GI_OFF GI_VOXEL_TEXTURE GI_VOXEL_BUFFER GI_UNITY
+            // Buffer-GI fast paths as REAL variants (not uniform branches), so the fast path does not
+            // compile the heavy loop - frees its registers, honest 1-tap occupancy. Two independent axes
+            // to bisect which code path is slow: BGI_FAST_PATH = GI gather 9->1 tap; BGI_FACE_1TAP =
+            // AO+shadow face read 4->1 tap. Both driven by BufferGiUpdater.
+            #pragma multi_compile __ BGI_FAST_PATH
+            #pragma multi_compile __ BGI_FACE_1TAP
 
             CBUFFER_START(UnityPerMaterial)
                 TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);

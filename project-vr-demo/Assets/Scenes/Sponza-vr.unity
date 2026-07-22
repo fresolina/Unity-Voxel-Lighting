@@ -1261,7 +1261,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &1172965616
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1300,6 +1300,8 @@ GameObject:
   - component: {fileID: 1649028918}
   - component: {fileID: 1649028919}
   - component: {fileID: 1649028920}
+  - component: {fileID: 1649028922}
+  - component: {fileID: 1649028921}
   m_Layer: 0
   m_Name: Static Environment
   m_TagString: Untagged
@@ -1354,12 +1356,41 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelVolume
   _maxResolution: 128
   _autoRegisterWithManager: 1
-  sdfHiresTexture: {fileID: 0}
-  sdfLowresTexture: {fileID: 0}
+  sdfHiresTexture: {fileID: 11700000, guid: 80252cb1950bc014ab733d29f852024c, type: 2}
+  sdfLowresTexture: {fileID: 11700000, guid: dcc3907538707b046837715b808666c4, type: 2}
   _trimmedMaxResolution: {x: 81, y: 56, z: 128}
   _bounds:
     m_Center: {x: 0, y: 6.9300017, z: 0}
     m_Extent: {x: 10.803828, y: 7.469313, z: 17.072716}
+--- !u!114 &1649028921
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1517074019}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 82756e4c53a5250448bd5340c704fdc8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionField
+  occlusionFieldTextures:
+  - {fileID: 11700000, guid: 0950b1f0954e24345b4ae52f477656b8, type: 2}
+  occlusionFieldDirections:
+  - {x: -0, y: 0.9848078, z: -0.17364824}
+--- !u!114 &1649028922
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1517074019}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1134c2de4dbd4b942a474b7f33ce0b1d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelMaterialField
+  materialAlbedoIntensityTexture: {fileID: 11700000, guid: 463137fba4871074395738d6c6c68357, type: 2}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

@@ -82,6 +82,23 @@ namespace Lotec.Lighting {
                  "reach).\n Off: none.\n Baked: the solve's pre-marched sun visibility, interpolated - " +
                  "the cheap way to get far shadows. It replaces the material's shadow source where active.")]
         [SerializeField] ShadowMode _coarseShadow = ShadowMode.Off;
+        [Tooltip("Profiling: GI gather 1-tap. Collapses the 9-tap B-spline irradiance gather to a single " +
+                 "nearest tap (keyword BGI_FAST_PATH). Independent of the face-read toggle - both on = " +
+                 "the old bundled fast GI. Isolates the gather's cost/register pressure.")]
+        [SerializeField] bool _fastGi;
+        [Tooltip("Profiling: AO+shadow face read 1-tap. Collapses the 4-tap bilinear face read (baked AO " +
+                 "openness + sun visibility) to a single nearest tap (keyword BGI_FACE_1TAP). AO still " +
+                 "honours AO Strength, shadow still honours Shadow Mode - only the tap count drops.")]
+        [SerializeField] bool _face1Tap;
+        [Tooltip("Profiling: run the per-frame Inject solve pass (solid voxels emit/reflect). Off freezes " +
+                 "the radiance field - GI goes wrong, but isolates this pass's GPU cost.")]
+        [SerializeField] bool _runInject = true;
+        [Tooltip("Profiling: run the per-frame Gather solve pass (fold radiance into irradiance; the " +
+                 "1-ray/frame integrate). Off isolates this pass's GPU cost.")]
+        [SerializeField] bool _runGather = true;
+        [Tooltip("Profiling: run the per-frame Blur solve pass (spatial smoothing into the buffer the " +
+                 "fragment reads). Off isolates this pass's GPU cost. Turn all three off = whole solve off.")]
+        [SerializeField] bool _runBlur = true;
 
         [Header("Lighting")]
         [Tooltip("Display transform (exposure + tonemap operator), with optional auto-exposure. " +
@@ -214,6 +231,45 @@ namespace Lotec.Lighting {
             set => _fineShadow = value;
         }
 
+        /// <summary>Profiling: GI gather 1-tap (BGI_FAST_PATH) - collapse the 9-tap B-spline to nearest.</summary>
+        public bool FastGi {
+            get => _fastGi;
+            set => _fastGi = value;
+        }
+
+        /// <summary>Profiling: AO+shadow face read 1-tap (BGI_FACE_1TAP) - collapse the 4-tap face read.</summary>
+        public bool Face1Tap {
+            get => _face1Tap;
+            set => _face1Tap = value;
+        }
+
+        /// <summary>Profiling: run the per-frame Inject solve pass (off isolates its GPU cost).</summary>
+        public bool RunInject {
+            get => _runInject;
+            set { if (_runInject != value) { _runInject = value; RestartSolve(); } }
+        }
+
+        /// <summary>Profiling: run the per-frame Gather solve pass (off isolates its GPU cost).</summary>
+        public bool RunGather {
+            get => _runGather;
+            set { if (_runGather != value) { _runGather = value; RestartSolve(); } }
+        }
+
+        /// <summary>Profiling: run the per-frame Blur solve pass (off isolates its GPU cost).</summary>
+        public bool RunBlur {
+            get => _runBlur;
+            set { if (_runBlur != value) { _runBlur = value; RestartSolve(); } }
+        }
+
+        // Restart the progressive solve from a cleared fine field, so a per-pass profiling toggle
+        // actually re-runs the (gated) solve instead of sitting on the already-converged result. Mirrors
+        // the reset a GI-mode switch does. Note the solve re-converges then idles again (unless the
+        // continuous-GI path is on), so watch the transient - or keep it re-running to measure the solve.
+        void RestartSolve() {
+            _resetFineField = true;
+            _collectedSamples = 0;
+        }
+
         /// <summary>Display-transform controller (exposure + tonemap), e.g. to toggle in-shader tonemap from a UI.</summary>
         public AutoExposure ExposureControl => _exposureControl;
 
@@ -277,6 +333,9 @@ namespace Lotec.Lighting {
         static readonly int s_aoStrength = Shader.PropertyToID("_BgiAoStrength");
         static readonly int s_shadowModeFine = Shader.PropertyToID("_BgiShadowModeFine");
         static readonly int s_shadowModeCoarse = Shader.PropertyToID("_BgiShadowModeCoarse");
+        // Fast GI path is a shader variant (VoxelLit multi_compile __ BGI_FAST_PATH), not a uniform, so
+        // the fast path drops the 9-tap gather's registers - toggled as a global keyword here.
+        const string FastGiKeyword = "BGI_FAST_PATH";
         static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
         static readonly int s_cameraPosition = Shader.PropertyToID("_CameraPosition");
         static readonly int s_cameraForward = Shader.PropertyToID("_CameraForward");
@@ -488,6 +547,8 @@ namespace Lotec.Lighting {
             Shader.SetGlobalBuffer(s_radiance, _radianceBuffer);
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
+            if (_fastGi) Shader.EnableKeyword(FastGiKeyword);
+            else Shader.DisableKeyword(FastGiKeyword);
             // The display transform (_Exposure + _Tonemap) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value (e.g. left by GiFieldUpdater) can't darken it.
         }
@@ -994,28 +1055,36 @@ namespace Lotec.Lighting {
             // Inject: solid voxels emit/reflect. Bounce = the surface's own last-frame incident
             // irradiance (its _Irradiance slot, built by gather). The ONLY kernel that still reads
             // _Material (albedo/emission); solidity comes from the bitfield.
-            _computeShader.SetBuffer(_injectKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
-            _computeShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
-            _computeShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_injectKernel, s_surface, _surfaceBuffer);
-            _computeShader.Dispatch(_injectKernel, Groups, 1, 1);
+            // Per-pass profiling guards (_runInject/_runGather/_runBlur): skipping a pass leaves stale
+            // data (GI looks wrong) but isolates that dispatch's GPU cost. Kept always-on in normal use.
+            if (_runInject) {
+                _computeShader.SetBuffer(_injectKernel, s_occupancy, _occupancyBuffer);
+                _computeShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
+                _computeShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
+                _computeShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
+                _computeShader.SetBuffer(_injectKernel, s_surface, _surfaceBuffer);
+                _computeShader.Dispatch(_injectKernel, Groups, 1, 1);
+            }
 
             // Gather: off the fresh _Radiance, fold into _Irradiance - AIR voxels omnidirectionally
             // (the read field), SOLID voxels over their front hemisphere (next frame's inject bounce).
             // All its solidity (DDA + gates) is the bitfield; it never touches _Material.
-            _computeShader.SetBuffer(_gatherKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
-            _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
-            _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
+            if (_runGather) {
+                _computeShader.SetBuffer(_gatherKernel, s_occupancy, _occupancyBuffer);
+                _computeShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
+                _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
+                _computeShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
+                _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
+            }
 
             // Blur: occupancy-gated spatial smoothing into the buffer the fragment read samples, and
             // the confidence ease (CSBlur) that hides the warm-up. Required, always run.
-            _computeShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
-            _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
+            if (_runBlur) {
+                _computeShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
+                _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
+                _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
+                _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
+            }
         }
 
         void SetDirectionalLightUniforms() {

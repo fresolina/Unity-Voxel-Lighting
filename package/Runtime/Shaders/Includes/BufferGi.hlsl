@@ -46,6 +46,12 @@ float _BgiAoStrength;
 // fragment picks fine vs coarse by whether the shading point is inside the fine volume.
 int _BgiShadowModeFine;
 int _BgiShadowModeCoarse;
+// Two independent fast-path variants (multi_compile in VoxelLit, driven by BufferGiUpdater) so each
+// code path's cost/register pressure can be measured in isolation:
+//   BGI_FAST_PATH : GI gather 9-tap B-spline -> 1 nearest tap (BgiGatherIndirect).
+//   BGI_FACE_1TAP : AO + sun-shadow face read 4-tap bilinear -> 1 nearest tap (BgiSampleFaceAoShadow).
+// Real variants (not uniform branches) so the fast path does not compile the heavy loop - honest
+// occupancy. Both on = the old bundled "fast GI" (~2 reads/pixel).
 
 // Which field (fine vs coarse) a shading point falls in, plus that field's grid + buffer slice.
 // Shared by the GI gather and the AO/sun-shadow face read so they all agree on the same voxels.
@@ -77,10 +83,27 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, out half ao, out half
     bool insideFine; float3 origin, voxelSize; uint baseOffset;
     BgiSelectField(worldPos, insideFine, origin, voxelSize, baseOffset);
     int mode = insideFine ? _BgiShadowModeFine : _BgiShadowModeCoarse;
+    shadowValid = (mode != 0);
 
+#if defined(BGI_FACE_1TAP)
+    // Face read collapsed to ONE nearest surface voxel (vs the 4-tap bilinear blend): reads the same
+    // openness (AO) + radiance.w (sun vis) from the single cell the shading point sits in. AO still
+    // honours _BgiAoStrength, shadow still honours the mode - only the tap COUNT drops.
     bool wantAo = _BgiAoStrength > 0.0;
-    bool wantShadow = (mode != 0);
-    shadowValid = wantShadow;
+    if (wantAo || shadowValid) {
+        int3 c = (int3)floor(BgiWorldToGridAt(worldPos, origin, voxelSize));
+        if (BgiInBounds(c)) {
+            uint slot = baseOffset + BgiIndex((uint3)c);
+            if (BgiSolidBit(slot)) {
+                if (wantAo)     ao     = lerp(1.0h, (half)BgiSurfaceOpenness(_Surface[slot]), (half)_BgiAoStrength);
+                if (shadowValid) { float3 rgb; float w; BgiUnpackRgb(_Radiance[slot], rgb, w); shadow = saturate((half)w); }
+            }
+        }
+    }
+    return;
+#else
+    bool wantAo = _BgiAoStrength > 0.0;
+    bool wantShadow = shadowValid;
     if (!wantAo && !wantShadow) return; // nothing to gather
 
     // Face plane: the dominant normal axis is fixed; u,v are the two in-plane axes we interpolate over.
@@ -126,6 +149,7 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, out half ao, out half
         if (wantAo)     ao     = lerp(1.0h, opennessAcc / wsum, (half)_BgiAoStrength);
         if (wantShadow) shadow = saturate(shadowAcc / wsum);
     }
+#endif // BGI_FACE_1TAP
 }
 
 // One field's 9-tap front-face read. `origin`/`voxelSize` are that field's grid; `baseOffset` is its
@@ -200,6 +224,24 @@ float3 BgiSampleField(float3 worldPos, float3 normal, float3 origin, float3 voxe
     return (wsum > (half)1e-3) ? (float3)(acc / wsum) : 0.0;
 }
 
+// Fast path: single NEAREST tap of the air voxel one step in front of the surface - no B-spline blend,
+// no neighbour renormalise (~1 buffer read vs the 9-tap gather). The perf floor for the GI gather.
+float3 BgiSampleFieldNearest(float3 worldPos, float3 normal, float3 origin, float3 voxelSize, uint baseOffset)
+{
+    int3 cell = (int3)floor(BgiWorldToGridAt(worldPos, origin, voxelSize));
+    float3 aN = abs(normal);
+    int3 stepDir = int3(0, 0, 0);
+    if (aN.x >= aN.y && aN.x >= aN.z)      stepDir.x = normal.x >= 0 ? 1 : -1;
+    else if (aN.y >= aN.z)                 stepDir.y = normal.y >= 0 ? 1 : -1;
+    else                                   stepDir.z = normal.z >= 0 ? 1 : -1;
+    int3 c = cell + stepDir; // the air voxel one step in front of the surface
+    if (!BgiInBounds(c)) return 0.0;
+    uint idx = baseOffset + BgiIndex((uint3)c);
+    if (BgiSolidBit(idx)) return 0.0;
+    float3 col; float n; BgiUnpackRgb(_Irradiance[idx], col, n);
+    return col;
+}
+
 // Raw buffer-GI irradiance at a surface point (NO AO - the caller multiplies in the merged AO from
 // BgiSampleFaceAoShadow). Fine field inside its box, coarse outside; scaled by _BgiIntensity.
 float3 BgiGatherIndirect(float3 worldPos, float3 normal)
@@ -207,7 +249,11 @@ float3 BgiGatherIndirect(float3 worldPos, float3 normal)
     bool insideFine; float3 origin, voxelSize; uint baseOff;
     BgiSelectField(worldPos, insideFine, origin, voxelSize, baseOff);
 
+#if defined(BGI_FAST_PATH)
+    float3 result = BgiSampleFieldNearest(worldPos, normal, origin, voxelSize, baseOff);
+#else
     float3 result = BgiSampleField(worldPos, normal, origin, voxelSize, baseOff);
+#endif
 
     // Final safety net: guarantee finite, non-negative GI so the additive term can never darken a
     // surface (a NaN/negative here renders black even over directly-lit pixels). (<1e8 catches Inf+NaN.)
