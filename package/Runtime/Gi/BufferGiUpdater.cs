@@ -146,7 +146,6 @@ namespace Lotec.Lighting {
         int _injectKernel = -1;
         int _gatherKernel = -1;
         int _blurKernel = -1;
-        int _copyToTextureKernel = -1;        // CSCopyIrradianceToTexture (mirror an SSBO irradiance slice -> Texture3D)
         RenderTexture _irradianceTex;          // fine field's blurred irradiance as a Texture3D (default read source)
         RenderTexture _irradianceTexCoarse;    // coarse field's blurred irradiance as a Texture3D
         int _initFineKernel = -1;
@@ -537,7 +536,6 @@ namespace Lotec.Lighting {
             _injectKernel = _computeShader.FindKernel("CSInject");
             _gatherKernel = _computeShader.FindKernel("CSGather");
             _blurKernel = _computeShader.FindKernel("CSBlur");
-            _copyToTextureKernel = _computeShader.FindKernel("CSCopyIrradianceToTexture");
             _initFineKernel = _computeShader.FindKernel("CSInitFineFromCoarse");
             _averageLuminanceKernel = _computeShader.FindKernel("CSAverageLuminance");
             _buildOccupancyKernel = _computeShader.FindKernel("CSBuildOccupancy");
@@ -1007,18 +1005,17 @@ namespace Lotec.Lighting {
             LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_computeShader);
 
             // The EMA blend weight (samplesPerFrame/maxSamples) is computed in the compute itself.
-            SolveField(GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
-            CopyIrradianceToTexture(FineField * VoxelCount, _irradianceTex);
+            // CSBlur mirrors each field's blurred irradiance straight into its Texture3D (the fragment's
+            // 1-tap read source). No coarse write when there's no coarse field: the read-side bounds check
+            // means the coarse texture is never sampled with a valid uvw outside the fine box.
+            SolveField(GridOrigin, GridSize, VoxelSize, FineField * VoxelCount, _irradianceTex);
             if (HasCoarse) {
-                SolveField(CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount);
+                SolveField(CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount, _irradianceTexCoarse);
             }
-            // Mirror the coarse slice too, so the texture read is valid outside the fine box. When there
-            // is no coarse field the slice is zero -> the texture reads 0, matching the SSBO gather.
-            CopyIrradianceToTexture(CoarseField * VoxelCount, _irradianceTexCoarse);
         }
 
-        // Inject -> gather -> (optional) blur for one field's slice.
-        void SolveField(Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset) {
+        // Inject -> gather -> blur for one field's slice; blur also mirrors the result into irradianceTex.
+        void SolveField(Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset, RenderTexture irradianceTex) {
             SetGridUniforms(origin, size, voxelSize);
             _computeShader.SetInt(s_fieldOffset, fieldOffset);
 
@@ -1041,11 +1038,13 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
             _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
 
-            // Blur: occupancy-gated spatial smoothing into the buffer the fragment read samples, and
-            // the confidence ease (CSBlur) that hides the warm-up.
+            // Blur: occupancy-gated spatial smoothing + the confidence ease (CSBlur) that hides the
+            // warm-up, written to _IrradianceBlur AND mirrored into this field's Texture3D (the fragment's
+            // 1-tap read source) in the same pass - no separate SSBO->texture copy dispatch.
             _computeShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _computeShader.SetTexture(_blurKernel, s_bgiIrradianceTexWrite, irradianceTex);
             _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
         }
 
@@ -1093,16 +1092,6 @@ namespace Lotec.Lighting {
             };
             rt.Create();
             return rt;
-        }
-
-        // Mirror one field's blurred irradiance (SSBO slice at fieldOffset) into its Texture3D so the
-        // fragment reads it with one hardware-trilinear tap. Sets _FieldOffset for the copy kernel.
-        void CopyIrradianceToTexture(int fieldOffset, RenderTexture tex) {
-            if (_copyToTextureKernel < 0 || tex == null || _irradianceBlurBuffer == null) return;
-            _computeShader.SetInt(s_fieldOffset, fieldOffset);
-            _computeShader.SetBuffer(_copyToTextureKernel, s_irradianceBlur, _irradianceBlurBuffer);
-            _computeShader.SetTexture(_copyToTextureKernel, s_bgiIrradianceTexWrite, tex);
-            _computeShader.Dispatch(_copyToTextureKernel, Groups, 1, 1);
         }
 
         public void ReleaseBuffers() {

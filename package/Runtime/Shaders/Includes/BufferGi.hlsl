@@ -27,10 +27,10 @@ StructuredBuffer<uint2> _Irradiance; // accumulated incoming light (rgb) + sampl
 StructuredBuffer<uint>  _Surface;    // per-voxel surface word - static openness/AO in bits 16-23
 StructuredBuffer<uint2> _Radiance;   // per-solid-voxel outgoing radiance (rgb) + baked sun visibility (w)
 
-// Each field's blurred irradiance, mirrored from the _IrradianceBlur SSBO into a Texture3D by
-// CSCopyIrradianceToTexture. The DEFAULT read path taps these with ONE hardware-trilinear fetch
-// instead of the 9-tap SSBO B-spline (the Adreno win). Bound whenever BufferGI is active
-// (BufferGiUpdater), so they are never unbound WebGPU globals. One per field (fine + coarse).
+// Each field's blurred irradiance, written straight into a Texture3D by CSBlur (fused - no separate
+// copy pass). The DEFAULT read path taps these with ONE hardware-trilinear fetch instead of the 9-tap
+// SSBO B-spline (the Adreno win). Bound whenever BufferGI is active (BufferGiUpdater), so they are
+// never unbound WebGPU globals. One per field (fine + coarse).
 Texture3D<float4> _BgiIrradianceTex;             // fine field
 SamplerState sampler_BgiIrradianceTex;
 Texture3D<float4> _BgiIrradianceTexCoarse;       // coarse field
