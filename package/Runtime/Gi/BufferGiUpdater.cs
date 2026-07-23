@@ -8,7 +8,7 @@ namespace Lotec.Lighting {
     /// Owns the ComputeBuffers, voxelizes the scene mesh into the occupancy/albedo buffer once (GPU 3-axis
     /// raster, BufferGiVoxelize.shader), and runs the per-frame solve: inject (solid voxels
     /// emit/reflect) then gather (air voxels integrate 1 ray/frame with the temporal resolve fused
-    /// in) then a blur pass. The lit shader reads it via SampleBufferGI (BufferGi.hlsl).
+    /// in) then a blur pass. The lit shader reads it via BgiGatherIndirect (BufferGi.hlsl).
     ///
     /// All fields are a fixed 32^3 so a voxel index fits in 16 bits and the whole grid stays
     /// resident in the GPU L2. (Single fine cascade for now; a coarse cascade + scheduler is the
@@ -82,6 +82,10 @@ namespace Lotec.Lighting {
                  "reach).\n Off: none.\n Baked: the solve's pre-marched sun visibility, interpolated - " +
                  "the cheap way to get far shadows. It replaces the material's shadow source where active.")]
         [SerializeField] ShadowMode _coarseShadow = ShadowMode.Off;
+        [Tooltip("A/B: read the GI from the original StructuredBuffer gather instead of the mirrored " +
+                 "irradiance texture (keyword BGI_SSBO_READ). Off (default) = one hardware-trilinear " +
+                 "texture tap, much cheaper on Adreno/Quest. On = the SSBO gather, kept for comparison.")]
+        [SerializeField] bool _ssboRead;
 
         [Header("Lighting")]
         [Tooltip("Display transform (exposure + tonemap operator), with optional auto-exposure. " +
@@ -142,6 +146,9 @@ namespace Lotec.Lighting {
         int _injectKernel = -1;
         int _gatherKernel = -1;
         int _blurKernel = -1;
+        int _copyToTextureKernel = -1;        // CSCopyIrradianceToTexture (mirror an SSBO irradiance slice -> Texture3D)
+        RenderTexture _irradianceTex;          // fine field's blurred irradiance as a Texture3D (default read source)
+        RenderTexture _irradianceTexCoarse;    // coarse field's blurred irradiance as a Texture3D
         int _initFineKernel = -1;
         int _averageLuminanceKernel = -1;
         int _buildOccupancyKernel = -1;
@@ -214,6 +221,12 @@ namespace Lotec.Lighting {
             set => _fineShadow = value;
         }
 
+        /// <summary>A/B: read GI from the SSBO gather (BGI_SSBO_READ) instead of the default texture tap.</summary>
+        public bool SsboRead {
+            get => _ssboRead;
+            set => _ssboRead = value;
+        }
+
         /// <summary>Display-transform controller (exposure + tonemap), e.g. to toggle in-shader tonemap from a UI.</summary>
         public AutoExposure ExposureControl => _exposureControl;
 
@@ -241,6 +254,9 @@ namespace Lotec.Lighting {
         static readonly int s_radiance = Shader.PropertyToID("_Radiance");
         static readonly int s_irradiance = Shader.PropertyToID("_Irradiance");
         static readonly int s_irradianceBlur = Shader.PropertyToID("_IrradianceBlur");
+        static readonly int s_bgiIrradianceTexWrite = Shader.PropertyToID("_BgiIrradianceTexWrite");
+        static readonly int s_bgiIrradianceTex = Shader.PropertyToID("_BgiIrradianceTex");
+        static readonly int s_bgiIrradianceTexCoarse = Shader.PropertyToID("_BgiIrradianceTexCoarse");
         static readonly int s_voxAlbedo = Shader.PropertyToID("_VoxAlbedo");
         static readonly int s_voxEmission = Shader.PropertyToID("_VoxEmission8");
         static readonly int s_voxBaseMap = Shader.PropertyToID("_VoxBaseMap");
@@ -277,6 +293,8 @@ namespace Lotec.Lighting {
         static readonly int s_aoStrength = Shader.PropertyToID("_BgiAoStrength");
         static readonly int s_shadowModeFine = Shader.PropertyToID("_BgiShadowModeFine");
         static readonly int s_shadowModeCoarse = Shader.PropertyToID("_BgiShadowModeCoarse");
+        // Fragment read source: default = mirrored-texture tap; this keyword flips to the SSBO gather for A/B.
+        const string SsboReadKeyword = "BGI_SSBO_READ";
         static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
         static readonly int s_cameraPosition = Shader.PropertyToID("_CameraPosition");
         static readonly int s_cameraForward = Shader.PropertyToID("_CameraForward");
@@ -464,7 +482,7 @@ namespace Lotec.Lighting {
             p.y >= origin.y && p.y <= origin.y + size.y &&
             p.z >= origin.z && p.z <= origin.z + size.z;
 
-        // Publish the buffers + grid mapping + confidence the lit shader's SampleBufferGI reads.
+        // Publish the buffers + grid mapping + confidence the lit shader's BgiGatherIndirect reads.
         void SetGlobals() {
             // Fragment solidity = the 8 KB bitfield; _Material is no longer bound to the lit shader.
             Shader.SetGlobalBuffer(s_occupancy, _occupancyBuffer);
@@ -488,6 +506,11 @@ namespace Lotec.Lighting {
             Shader.SetGlobalBuffer(s_radiance, _radianceBuffer);
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
+            // Mirrored irradiance textures (the default fragment read source), one per field.
+            Shader.SetGlobalTexture(s_bgiIrradianceTex, _irradianceTex);
+            Shader.SetGlobalTexture(s_bgiIrradianceTexCoarse, _irradianceTexCoarse);
+            if (_ssboRead) Shader.EnableKeyword(SsboReadKeyword);
+            else Shader.DisableKeyword(SsboReadKeyword);
             // The display transform (_Exposure + _Tonemap) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value (e.g. left by GiFieldUpdater) can't darken it.
         }
@@ -514,6 +537,7 @@ namespace Lotec.Lighting {
             _injectKernel = _computeShader.FindKernel("CSInject");
             _gatherKernel = _computeShader.FindKernel("CSGather");
             _blurKernel = _computeShader.FindKernel("CSBlur");
+            _copyToTextureKernel = _computeShader.FindKernel("CSCopyIrradianceToTexture");
             _initFineKernel = _computeShader.FindKernel("CSInitFineFromCoarse");
             _averageLuminanceKernel = _computeShader.FindKernel("CSAverageLuminance");
             _buildOccupancyKernel = _computeShader.FindKernel("CSBuildOccupancy");
@@ -527,6 +551,9 @@ namespace Lotec.Lighting {
             _irradianceBlurBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
             _surfaceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));      // 32-bit surface word/voxel
             _occupancyBuffer = new ComputeBuffer(TotalVoxels / 32, sizeof(uint)); // 1 bit/voxel
+            // Each field's blurred irradiance mirrored into a Texture3D for the default trilinear read.
+            _irradianceTex = CreateIrradianceTexture("BgiIrradianceTex");
+            _irradianceTexCoarse = CreateIrradianceTexture("BgiIrradianceTexCoarse");
             _materialBaked = false;
 
             ClearDynamicFields();
@@ -981,9 +1008,13 @@ namespace Lotec.Lighting {
 
             // The EMA blend weight (samplesPerFrame/maxSamples) is computed in the compute itself.
             SolveField(GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
+            CopyIrradianceToTexture(FineField * VoxelCount, _irradianceTex);
             if (HasCoarse) {
                 SolveField(CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount);
             }
+            // Mirror the coarse slice too, so the texture read is valid outside the fine box. When there
+            // is no coarse field the slice is zero -> the texture reads 0, matching the SSBO gather.
+            CopyIrradianceToTexture(CoarseField * VoxelCount, _irradianceTexCoarse);
         }
 
         // Inject -> gather -> (optional) blur for one field's slice.
@@ -1011,7 +1042,7 @@ namespace Lotec.Lighting {
             _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
 
             // Blur: occupancy-gated spatial smoothing into the buffer the fragment read samples, and
-            // the confidence ease (CSBlur) that hides the warm-up. Required, always run.
+            // the confidence ease (CSBlur) that hides the warm-up.
             _computeShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
@@ -1046,6 +1077,34 @@ namespace Lotec.Lighting {
             outCoeff[6] = new Vector4(sh[0, 8], sh[1, 8], sh[2, 8], 1f);                       // L2 (5th)
         }
 
+        // Create a field's irradiance Texture3D (RGBA16F for reliable compute random-write + trilinear
+        // sampling; can drop to RGB111110 later). Grid^3, bilinear/clamp.
+        RenderTexture CreateIrradianceTexture(string name) {
+            var desc = new RenderTextureDescriptor(Grid, Grid, RenderTextureFormat.ARGBHalf, 0) {
+                dimension = TextureDimension.Tex3D,
+                volumeDepth = Grid,
+                enableRandomWrite = true,
+                msaaSamples = 1
+            };
+            var rt = new RenderTexture(desc) {
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp,
+                name = name
+            };
+            rt.Create();
+            return rt;
+        }
+
+        // Mirror one field's blurred irradiance (SSBO slice at fieldOffset) into its Texture3D so the
+        // fragment reads it with one hardware-trilinear tap. Sets _FieldOffset for the copy kernel.
+        void CopyIrradianceToTexture(int fieldOffset, RenderTexture tex) {
+            if (_copyToTextureKernel < 0 || tex == null || _irradianceBlurBuffer == null) return;
+            _computeShader.SetInt(s_fieldOffset, fieldOffset);
+            _computeShader.SetBuffer(_copyToTextureKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _computeShader.SetTexture(_copyToTextureKernel, s_bgiIrradianceTexWrite, tex);
+            _computeShader.Dispatch(_copyToTextureKernel, Groups, 1, 1);
+        }
+
         public void ReleaseBuffers() {
             _materialBuffer?.Release();
             _radianceBuffer?.Release();
@@ -1059,6 +1118,8 @@ namespace Lotec.Lighting {
             _irradianceBlurBuffer = null;
             _surfaceBuffer = null;
             _occupancyBuffer = null;
+            if (_irradianceTex != null) { _irradianceTex.Release(); _irradianceTex = null; }
+            if (_irradianceTexCoarse != null) { _irradianceTexCoarse.Release(); _irradianceTexCoarse = null; }
             _materialBaked = false;
             _resetFineField = false;
             _collectedSamples = 0; // gather from scratch while the freshly-cleared field fills in

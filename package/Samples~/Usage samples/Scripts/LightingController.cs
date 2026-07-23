@@ -71,10 +71,13 @@ namespace Lotec.Lighting.Samples {
         int _lastSamplesPerFrame;
         float _lastConfidenceCurve;
         float _lastAoStrength;
+        bool _lastSsboRead;
         AutoExposure.TonemapMode _lastTonemap;
         Keyboard _keyboard;
         bool _uiFolded;
+#if LOTEC_XR
         bool _menuHeldLastFrame;
+#endif
 
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
@@ -138,7 +141,9 @@ namespace Lotec.Lighting.Samples {
             UpdateFrameTimeStats();
             RefreshUi(true);
             HandleHotkeys();
+#if LOTEC_XR
             HandleVrMenuButton();
+#endif
         }
 
         // GI-panel hotkeys: H folds both runtime panels, backquote cycles the GI lighting method.
@@ -170,6 +175,10 @@ namespace Lotec.Lighting.Samples {
         // GetDeviceAtXRNode returns an invalid device and this is a harmless no-op. XR types are fully
         // qualified to avoid the InputSystem/XR CommonUsages + InputDevice name clash. Not gated by the
         // text-focus guard - the button is not a character, so it should always toggle.
+        //
+        // Gated by LOTEC_XR so this shared sample compiles in the non-XR project-demo, where the
+        // UnityEngine.XR module isn't present. The VR project defines LOTEC_XR (project-vr-demo/Assets/csc.rsp).
+#if LOTEC_XR
         void HandleVrMenuButton() {
             UnityEngine.XR.InputDevice leftHand =
                 UnityEngine.XR.InputDevices.GetDeviceAtXRNode(UnityEngine.XR.XRNode.LeftHand);
@@ -185,6 +194,7 @@ namespace Lotec.Lighting.Samples {
             }
             _menuHeldLastFrame = pressed;
         }
+#endif
 
         // PanelRenderer hands us the freshly loaded root here - on initial setup and whenever the
         // visual tree reloads (asset swap / live reload) - replacing UIDocument's rootVisualElement poll.
@@ -290,9 +300,10 @@ namespace Lotec.Lighting.Samples {
             SliderInt samplesPerFrameSlider = root.Q<SliderInt>("samples-per-frame-slider");
             Slider confidenceCurveSlider = root.Q<Slider>("confidence-curve-slider");
             Slider aoStrengthSlider = root.Q<Slider>("ao-strength-slider");
+            Toggle ssboReadToggle = root.Q<Toggle>("ssbo-read-toggle");
             EnumField tonemapField = root.Q<EnumField>("tonemap-enum");
 
-            if (giField == null || giMethodField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
+            if (giField == null || giMethodField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || ssboReadToggle == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
@@ -337,6 +348,7 @@ namespace Lotec.Lighting.Samples {
                 _boundRoot.Q<SliderInt>("samples-per-frame-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("confidence-curve-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("ao-strength-slider")?.ClearBindings();
+                _boundRoot.Q<Toggle>("ssbo-read-toggle")?.ClearBindings();
                 _boundRoot.Q<EnumField>("tonemap-enum")?.ClearBindings();
                 _boundRoot.dataSource = null;
             }
@@ -473,6 +485,23 @@ namespace Lotec.Lighting.Samples {
         }
 
         [CreateProperty]
+        bool SsboRead {
+            get {
+                BufferGiUpdater gi = BufferGiUpdater.Instance;
+                return gi != null && gi.SsboRead;
+            }
+            set {
+                BufferGiUpdater gi = BufferGiUpdater.Instance;
+                if (gi == null) {
+                    return;
+                }
+
+                gi.SsboRead = value;
+                RefreshUi(true);
+            }
+        }
+
+        [CreateProperty]
         AutoExposure.TonemapMode Tonemap {
             get {
                 // Only the ACTIVE GI method exposes an Instance (the other is disabled). Report
@@ -597,6 +626,7 @@ namespace Lotec.Lighting.Samples {
             int samplesPerFrame = SamplesPerFrame;
             float confidenceCurve = ConfidenceCurve;
             float aoStrength = AoStrength;
+            bool ssboRead = SsboRead;
             AutoExposure.TonemapMode tonemap = Tonemap;
 
             if (!_hasBindingSnapshot) {
@@ -606,6 +636,7 @@ namespace Lotec.Lighting.Samples {
                 _lastSamplesPerFrame = samplesPerFrame;
                 _lastConfidenceCurve = confidenceCurve;
                 _lastAoStrength = aoStrength;
+                _lastSsboRead = ssboRead;
                 _lastTonemap = tonemap;
                 _hasBindingSnapshot = true;
                 return;
@@ -617,6 +648,7 @@ namespace Lotec.Lighting.Samples {
             UpdateIntSnapshot(ref _lastSamplesPerFrame, samplesPerFrame, notifyChanges, nameof(SamplesPerFrame));
             UpdateFloatSnapshot(ref _lastConfidenceCurve, confidenceCurve, notifyChanges, nameof(ConfidenceCurve));
             UpdateFloatSnapshot(ref _lastAoStrength, aoStrength, notifyChanges, nameof(AoStrength));
+            UpdateBoolSnapshot(ref _lastSsboRead, ssboRead, notifyChanges, nameof(SsboRead));
             UpdateEnumSnapshot(ref _lastTonemap, tonemap, notifyChanges, nameof(Tonemap));
         }
 
@@ -643,6 +675,17 @@ namespace Lotec.Lighting.Samples {
         }
 
         void UpdateIntSnapshot(ref int currentValue, int nextValue, bool notifyChanges, string propertyName) {
+            if (currentValue == nextValue) {
+                return;
+            }
+
+            currentValue = nextValue;
+            if (notifyChanges) {
+                NotifyBindingChanged(propertyName);
+            }
+        }
+
+        void UpdateBoolSnapshot(ref bool currentValue, bool nextValue, bool notifyChanges, string propertyName) {
             if (currentValue == nextValue) {
                 return;
             }
