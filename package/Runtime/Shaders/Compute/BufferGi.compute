@@ -14,6 +14,7 @@
 #pragma kernel CSInject
 #pragma kernel CSGather
 #pragma kernel CSBlur
+#pragma kernel CSCopyIrradianceToTexture
 #pragma kernel CSInitFineFromCoarse
 #pragma kernel CSAverageLuminance
 #pragma kernel CSBuildOccupancy
@@ -30,6 +31,9 @@
 RWStructuredBuffer<uint2> _Radiance;    // outgoing radiance (fp16x3), stored in solid voxels
 RWStructuredBuffer<uint2> _Irradiance;  // accumulated incoming light (rgb) + sample count (w)
 RWStructuredBuffer<uint2> _IrradianceBlur; // spatially blurred irradiance, sampled by the fragment read
+// MILESTONE 1: one field's blurred irradiance mirrored into a Texture3D so the fragment reads it with a
+// single hardware-trilinear tap instead of the 9-tap SSBO B-spline (the SSBO gather is the perf pig).
+RWTexture3D<float4> _BgiIrradianceTexWrite;
 RWStructuredBuffer<uint>  _LuminanceResult; // [0] = encoded log-luminance sum, [1] = sample count (auto-exposure)
 StructuredBuffer<uint>    _Material;      // albedo/emission (voxelized by BufferGiVoxelize.shader); inject-only cold data
 // Occupancy as a 1-bit-per-voxel bitfield (uint packs 32 voxels): 4 KB per field, so the WHOLE
@@ -688,4 +692,18 @@ void CSBuildAirDistance(uint3 id : SV_DispatchThreadID)
         best = min(best, min(nd + 1u, BGI_MAX_AIR_DIST));
     }
     _Surface[slot] = (_Surface[slot] & ~0x00ff0000u) | BgiPackAirDist(best);
+}
+
+// ----------------------------------------------------------
+// Mirror one field's blurred irradiance (SSBO) into a Texture3D for the default hardware-trilinear
+// fragment read. Dispatched once per field via _FieldOffset; writes the field-local voxel coord.
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSCopyIrradianceToTexture(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+    float3 rgb; float w;
+    BgiUnpackRgb(_IrradianceBlur[_FieldOffset + i], rgb, w);
+    _BgiIrradianceTexWrite[BgiCoord(i)] = float4(rgb, 1.0);
 }

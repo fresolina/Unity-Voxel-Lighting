@@ -71,11 +71,7 @@ namespace Lotec.Lighting.Samples {
         int _lastSamplesPerFrame;
         float _lastConfidenceCurve;
         float _lastAoStrength;
-        bool _lastFastGi;
-        bool _lastFace1Tap;
-        bool _lastRunInject;
-        bool _lastRunGather;
-        bool _lastRunBlur;
+        bool _lastSsboRead;
         AutoExposure.TonemapMode _lastTonemap;
         Keyboard _keyboard;
         bool _uiFolded;
@@ -295,14 +291,10 @@ namespace Lotec.Lighting.Samples {
             SliderInt samplesPerFrameSlider = root.Q<SliderInt>("samples-per-frame-slider");
             Slider confidenceCurveSlider = root.Q<Slider>("confidence-curve-slider");
             Slider aoStrengthSlider = root.Q<Slider>("ao-strength-slider");
-            Toggle fastGiToggle = root.Q<Toggle>("fast-gi-toggle");
-            Toggle face1TapToggle = root.Q<Toggle>("face-1tap-toggle");
-            Toggle runInjectToggle = root.Q<Toggle>("run-inject-toggle");
-            Toggle runGatherToggle = root.Q<Toggle>("run-gather-toggle");
-            Toggle runBlurToggle = root.Q<Toggle>("run-blur-toggle");
+            Toggle ssboReadToggle = root.Q<Toggle>("ssbo-read-toggle");
             EnumField tonemapField = root.Q<EnumField>("tonemap-enum");
 
-            if (giField == null || giMethodField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || fastGiToggle == null || face1TapToggle == null || runInjectToggle == null || runGatherToggle == null || runBlurToggle == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
+            if (giField == null || giMethodField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || ssboReadToggle == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
@@ -347,11 +339,7 @@ namespace Lotec.Lighting.Samples {
                 _boundRoot.Q<SliderInt>("samples-per-frame-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("confidence-curve-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("ao-strength-slider")?.ClearBindings();
-                _boundRoot.Q<Toggle>("fast-gi-toggle")?.ClearBindings();
-                _boundRoot.Q<Toggle>("face-1tap-toggle")?.ClearBindings();
-                _boundRoot.Q<Toggle>("run-inject-toggle")?.ClearBindings();
-                _boundRoot.Q<Toggle>("run-gather-toggle")?.ClearBindings();
-                _boundRoot.Q<Toggle>("run-blur-toggle")?.ClearBindings();
+                _boundRoot.Q<Toggle>("ssbo-read-toggle")?.ClearBindings();
                 _boundRoot.Q<EnumField>("tonemap-enum")?.ClearBindings();
                 _boundRoot.dataSource = null;
             }
@@ -488,10 +476,10 @@ namespace Lotec.Lighting.Samples {
         }
 
         [CreateProperty]
-        bool FastGi {
+        bool SsboRead {
             get {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
-                return gi != null && gi.FastGi;
+                return gi != null && gi.SsboRead;
             }
             set {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
@@ -499,75 +487,7 @@ namespace Lotec.Lighting.Samples {
                     return;
                 }
 
-                gi.FastGi = value;
-                RefreshUi(true);
-            }
-        }
-
-        [CreateProperty]
-        bool Face1Tap {
-            get {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                return gi != null && gi.Face1Tap;
-            }
-            set {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi == null) {
-                    return;
-                }
-
-                gi.Face1Tap = value;
-                RefreshUi(true);
-            }
-        }
-
-        [CreateProperty]
-        bool RunInject {
-            get {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                return gi == null || gi.RunInject;
-            }
-            set {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi == null) {
-                    return;
-                }
-
-                gi.RunInject = value;
-                RefreshUi(true);
-            }
-        }
-
-        [CreateProperty]
-        bool RunGather {
-            get {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                return gi == null || gi.RunGather;
-            }
-            set {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi == null) {
-                    return;
-                }
-
-                gi.RunGather = value;
-                RefreshUi(true);
-            }
-        }
-
-        [CreateProperty]
-        bool RunBlur {
-            get {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                return gi == null || gi.RunBlur;
-            }
-            set {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi == null) {
-                    return;
-                }
-
-                gi.RunBlur = value;
+                gi.SsboRead = value;
                 RefreshUi(true);
             }
         }
@@ -697,11 +617,7 @@ namespace Lotec.Lighting.Samples {
             int samplesPerFrame = SamplesPerFrame;
             float confidenceCurve = ConfidenceCurve;
             float aoStrength = AoStrength;
-            bool fastGi = FastGi;
-            bool face1Tap = Face1Tap;
-            bool runInject = RunInject;
-            bool runGather = RunGather;
-            bool runBlur = RunBlur;
+            bool ssboRead = SsboRead;
             AutoExposure.TonemapMode tonemap = Tonemap;
 
             if (!_hasBindingSnapshot) {
@@ -711,11 +627,7 @@ namespace Lotec.Lighting.Samples {
                 _lastSamplesPerFrame = samplesPerFrame;
                 _lastConfidenceCurve = confidenceCurve;
                 _lastAoStrength = aoStrength;
-                _lastFastGi = fastGi;
-                _lastFace1Tap = face1Tap;
-                _lastRunInject = runInject;
-                _lastRunGather = runGather;
-                _lastRunBlur = runBlur;
+                _lastSsboRead = ssboRead;
                 _lastTonemap = tonemap;
                 _hasBindingSnapshot = true;
                 return;
@@ -727,11 +639,7 @@ namespace Lotec.Lighting.Samples {
             UpdateIntSnapshot(ref _lastSamplesPerFrame, samplesPerFrame, notifyChanges, nameof(SamplesPerFrame));
             UpdateFloatSnapshot(ref _lastConfidenceCurve, confidenceCurve, notifyChanges, nameof(ConfidenceCurve));
             UpdateFloatSnapshot(ref _lastAoStrength, aoStrength, notifyChanges, nameof(AoStrength));
-            UpdateBoolSnapshot(ref _lastFastGi, fastGi, notifyChanges, nameof(FastGi));
-            UpdateBoolSnapshot(ref _lastFace1Tap, face1Tap, notifyChanges, nameof(Face1Tap));
-            UpdateBoolSnapshot(ref _lastRunInject, runInject, notifyChanges, nameof(RunInject));
-            UpdateBoolSnapshot(ref _lastRunGather, runGather, notifyChanges, nameof(RunGather));
-            UpdateBoolSnapshot(ref _lastRunBlur, runBlur, notifyChanges, nameof(RunBlur));
+            UpdateBoolSnapshot(ref _lastSsboRead, ssboRead, notifyChanges, nameof(SsboRead));
             UpdateEnumSnapshot(ref _lastTonemap, tonemap, notifyChanges, nameof(Tonemap));
         }
 
