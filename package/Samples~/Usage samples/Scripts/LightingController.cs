@@ -75,7 +75,9 @@ namespace Lotec.Lighting.Samples {
         AutoExposure.TonemapMode _lastTonemap;
         Keyboard _keyboard;
         bool _uiFolded;
+#if LOTEC_XR
         bool _menuHeldLastFrame;
+#endif
 
         public static bool IsTextInputFocused => s_instance != null && s_instance.HasFocusedTextInput();
 
@@ -139,7 +141,9 @@ namespace Lotec.Lighting.Samples {
             UpdateFrameTimeStats();
             RefreshUi(true);
             HandleHotkeys();
+#if LOTEC_XR
             HandleVrMenuButton();
+#endif
         }
 
         // GI-panel hotkeys: H folds both runtime panels, backquote cycles the GI lighting method.
@@ -171,6 +175,10 @@ namespace Lotec.Lighting.Samples {
         // GetDeviceAtXRNode returns an invalid device and this is a harmless no-op. XR types are fully
         // qualified to avoid the InputSystem/XR CommonUsages + InputDevice name clash. Not gated by the
         // text-focus guard - the button is not a character, so it should always toggle.
+        //
+        // Gated by LOTEC_XR so this shared sample compiles in the non-XR project-demo, where the
+        // UnityEngine.XR module isn't present. The VR project defines LOTEC_XR (project-vr-demo/Assets/csc.rsp).
+#if LOTEC_XR
         void HandleVrMenuButton() {
             UnityEngine.XR.InputDevice leftHand =
                 UnityEngine.XR.InputDevices.GetDeviceAtXRNode(UnityEngine.XR.XRNode.LeftHand);
@@ -186,6 +194,7 @@ namespace Lotec.Lighting.Samples {
             }
             _menuHeldLastFrame = pressed;
         }
+#endif
 
         // PanelRenderer hands us the freshly loaded root here - on initial setup and whenever the
         // visual tree reloads (asset swap / live reload) - replacing UIDocument's rootVisualElement poll.
