@@ -29,9 +29,13 @@ namespace Lotec.Lighting {
         public const int CoarseField = 0;
         public const int FineField = 1;
 
-        // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGi.hlsl). Off = none;
-        // Baked = read the solve's pre-marched sun visibility (radiance.w), interpolated across the face.
-        public enum ShadowMode { Off = 0, Baked = 1 }
+        // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGi.hlsl). Off = fall
+        // through to the material's shadow source (SDF/bitmask/occ); Baked = read the solve's
+        // pre-marched sun visibility (radiance.w), interpolated across the face; Sdf = a crisp
+        // per-pixel raymarch of the hi-res SDF (VoxelGI-parity), selected per field and independent
+        // of the shadow-source keyword. Sdf needs an SDF baked on the volume (VoxelSdfBaker); it has
+        // no effect where the SDF doesn't reach (e.g. the coarse field beyond the fine bounds).
+        public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2 }
 
         public static BufferGiUpdater Instance { get; private set; }
 
@@ -74,13 +78,16 @@ namespace Lotec.Lighting {
                  "voxel's precomputed openness - restores contact shadowing the omnidirectional gather " +
                  "reads only weakly. Requires a re-bake to recompute openness after a geometry change.")]
         [Range(0f, 1f)][SerializeField] float _aoStrength;
-        [Tooltip("Voxel sun-shadow for the FINE volume (the active, detailed field).\n Off: none.\n " +
-                 "Baked: the solve's pre-marched sun visibility, interpolated across the surface - soft " +
-                 "and cheap (no per-pixel ray). It replaces the material's shadow source where active.")]
+        [Tooltip("Sun-shadow for the FINE volume (the active, detailed field).\n Off: fall through to " +
+                 "the material's shadow source.\n Baked: the solve's pre-marched sun visibility, " +
+                 "interpolated across the surface - soft and cheap (no per-pixel ray).\n Sdf: a crisp " +
+                 "per-pixel raymarch of the hi-res SDF (VoxelGI-parity) - needs an SDF baked on the " +
+                 "volume. It replaces the material's shadow source where active.")]
         [SerializeField] ShadowMode _fineShadow = ShadowMode.Off;
-        [Tooltip("Voxel sun-shadow for the COARSE volume (the big far field the SDF shadow can't " +
-                 "reach).\n Off: none.\n Baked: the solve's pre-marched sun visibility, interpolated - " +
-                 "the cheap way to get far shadows. It replaces the material's shadow source where active.")]
+        [Tooltip("Sun-shadow for the COARSE volume (the big far field the SDF shadow can't reach).\n " +
+                 "Off: fall through to the material's shadow source.\n Baked: the solve's pre-marched " +
+                 "sun visibility, interpolated - the cheap way to get far shadows.\n Sdf: has no effect " +
+                 "here (the SDF only covers the fine bounds); use Baked for the far field.")]
         [SerializeField] ShadowMode _coarseShadow = ShadowMode.Off;
         [Tooltip("A/B: read the GI from the original StructuredBuffer gather instead of the mirrored " +
                  "irradiance texture (keyword BGI_SSBO_READ). Off (default) = one hardware-trilinear " +
@@ -214,7 +221,7 @@ namespace Lotec.Lighting {
             set => _aoStrength = Mathf.Clamp01(value);
         }
 
-        /// <summary>Voxel sun-shadow mode for the FINE (active) volume: Off, or Baked pre-marched visibility.</summary>
+        /// <summary>Sun-shadow mode for the FINE (active) volume: Off, Baked pre-marched visibility, or a per-pixel SDF raymarch.</summary>
         public ShadowMode FineShadow {
             get => _fineShadow;
             set => _fineShadow = value;
@@ -500,8 +507,9 @@ namespace Lotec.Lighting {
             Light sun = RenderSettings.sun;
             Shader.SetGlobalFloat(s_intensity, sun != null ? sun.bounceIntensity : 1f);
             Shader.SetGlobalFloat(s_aoStrength, _aoStrength);
-            // Voxel sun-shadow, per field. Baked reads the sun visibility the solve stashed in the
-            // radiance's w channel; realtime marches the occupancy bitfield per pixel (both bound below).
+            // Sun-shadow, per field. Baked reads the sun visibility the solve stashed in the radiance's
+            // w channel (bound below); Sdf marches the hi-res SDF per pixel (the _SdfHires global the
+            // active volume already publishes - see VoxelVolume.ApplyShaderGlobals).
             Shader.SetGlobalBuffer(s_radiance, _radianceBuffer);
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);

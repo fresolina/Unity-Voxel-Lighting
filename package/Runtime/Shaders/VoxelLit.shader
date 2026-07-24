@@ -152,7 +152,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 // Other GI modes resolve the main-light shadow inside GetShadow as before.
                 #if defined(GI_VOXEL_BUFFER)
                     half bgiAo, bgiShadow; bool bgiShadowValid;
-                    BgiSampleFaceAoShadow(IN.positionWS, N, bgiAo, bgiShadow, bgiShadowValid);
+                    BgiSampleFaceAoShadow(IN.positionWS, N, light.direction, bgiAo, bgiShadow, bgiShadowValid);
                     half3 lit = bgiShadowValid
                         ? GetMainDirectLightingShadow(light, IN.positionWS, N, albedo, bgiShadow)
                         : GetMainDirectLighting(light, IN.positionWS, N, albedo);

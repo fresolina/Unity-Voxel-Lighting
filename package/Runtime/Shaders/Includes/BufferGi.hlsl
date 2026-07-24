@@ -17,6 +17,11 @@
 #if defined(GI_VOXEL_BUFFER)
 
 #include "BufferGiField.hlsl"
+// GetShadowFromSdf, for the per-field Sdf shadow mode. Self-contained like the other shadow-source
+// headers; the include guard makes it a no-op after VoxelDirectLighting's earlier include, and it
+// declares no NEW global here - _SdfHires is already declared unconditionally in every variant via
+// that same header (so this adds nothing to the WebGPU pipeline-layout surface).
+#include "VoxelSdfShadows.hlsl"
 
 // Bound as globals by BufferGiUpdater. The buffers are concatenated over all fields (coarse at
 // offset 0, fine at offset BGI_COUNT); the *fine* field's bounds are the shared _BgiGrid* (above).
@@ -50,9 +55,10 @@ float _BgiIntensity;
 // Strength of the baked static AO (0 = off). Darkens the GI in concave/contact regions using the
 // surface voxel's precomputed openness - restores the contact shadowing the omni gather reads weakly.
 float _BgiAoStrength;
-// Voxel sun-shadow mode PER FIELD: 0 = off, 1 = baked (interpolated pre-marched visibility from
-// _Radiance.w), 2 = realtime (per-pixel occupancy DDA toward the sun, like the SDF shadow). The
-// fragment picks fine vs coarse by whether the shading point is inside the fine volume.
+// Sun-shadow mode PER FIELD: 0 = off (caller falls back to its GetShadow source), 1 = baked
+// (interpolated pre-marched visibility from _Radiance.w), 2 = SDF (crisp per-pixel raymarch of the
+// hi-res SDF, VoxelGI-parity, independent of the shadow-source keyword). The fragment picks fine vs
+// coarse by whether the shading point is inside the fine volume.
 int _BgiShadowModeFine;
 int _BgiShadowModeCoarse;
 
@@ -75,10 +81,12 @@ void BgiSelectField(float3 worldPos, out bool insideFine, out float3 origin, out
 // sun-shadow mode is Off). Non-solid / out-of-bounds taps are SKIPPED and the weights RENORMALISED
 // over the solid taps, so a face edge takes the value of the surface voxels actually present.
 //   ao          : AO multiplier for the GI term (1 = no AO), already faded by _BgiAoStrength.
-//   shadow      : interpolated sun visibility (meaningful only when shadowValid is true).
+//   shadow      : sun visibility (meaningful only when shadowValid is true) - the baked value
+//                 interpolated across the face (mode Baked) or the SDF raymarch result (mode Sdf).
 //   shadowValid : false when this field's sun-shadow mode is Off -> caller falls back to its
 //                 GetShadow source (SDF / bitmask / occlusion) for the main light.
-void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, out half ao, out half shadow, out bool shadowValid)
+// lightDir is the direction TOWARD the main light (used only by the Sdf mode's raymarch).
+void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out half ao, out half shadow, out bool shadowValid)
 {
     ao = 1.0h;
     shadow = 1.0h;
@@ -88,9 +96,16 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, out half ao, out half
     int mode = insideFine ? _BgiShadowModeFine : _BgiShadowModeCoarse;
     shadowValid = (mode != 0);
 
+    // SDF mode (2): resolve the sun shadow with a crisp per-pixel raymarch of the hi-res SDF - the
+    // same march the material's SDF shadow source uses, but selected per BufferGI field and NOT gated
+    // by the shadow-source keyword. It's independent of the face read (which still runs below for AO).
+    bool sdfShadow = (mode == 2);
+    if (sdfShadow)
+        shadow = GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
+
     bool wantAo = _BgiAoStrength > 0.0;
-    bool wantShadow = shadowValid;
-    if (!wantAo && !wantShadow) return; // nothing to gather
+    bool wantShadow = shadowValid && !sdfShadow; // Sdf resolved above; only Baked reads the face plane
+    if (!wantAo && !wantShadow) return; // nothing left to gather from the face plane
 
     // Face plane: the dominant normal axis is fixed; u,v are the two in-plane axes we interpolate over.
     float3 aN = abs(normal);
