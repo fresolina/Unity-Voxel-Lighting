@@ -6,8 +6,9 @@
 // header it dispatches to, so the lit shader only needs this.
 // Assumes the including shader has already included URP Lighting.hlsl (for the Light type).
 
-#include "VoxelSdfShadows.hlsl" // GetShadowFromSdf (default shadow source)
-#include "VoxelOcclusion.hlsl"  // GetBitmaskShadow / GetOccFieldShadow (baked shadow sources)
+#include "VoxelSdfShadows.hlsl" // GetShadowFromSdf (the shadow source for this path)
+#include "VoxelOcclusion.hlsl"  // GetBitmaskShadow / GetOccFieldShadow - buffer-GI per-field shadow
+                                // sources; also keeps their globals declared in every variant (WebGPU-safe)
 
 #ifndef MAX_POINT_LIGHTS
 #define MAX_POINT_LIGHTS 4
@@ -25,19 +26,13 @@ float4 _SpotLightPositionRange[MAX_SPOT_LIGHTS];
 float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
 float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 
-// Resolve the shadow term for a surface point. Defaults to SDF; the bitmask / occlusion-field modes
-// are selected by their compile-time keywords. Under the buffer GI the per-field baked voxel sun-shadow
-// is resolved in the fragment alongside the baked AO (one shared face read - see BgiSampleFaceAoShadow)
-// and fed to GetMainDirectLightingShadow, so it does NOT route through here; this only serves the main
-// light when the buffer sun-shadow is Off (falls through to SDF/bitmask/occ) plus all local lights.
+// Resolve the shadow term for a surface point: always the SDF raymarch. (The baked bitmask /
+// occlusion-field sources are buffer-GI-only now - selected per field by BgiSampleFaceAoShadow, not
+// here.) Under the buffer GI the main-light sun-shadow is resolved entirely by BgiSampleFaceAoShadow
+// (Off = none, Baked, Sdf, OcclusionField, Bitmask) and fed to GetMainDirectLightingShadow, so the main
+// light NEVER routes through here; this serves the non-buffer GI modes' main light plus all local lights.
 inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal) {
-    #if defined(OCC_FIELD)
-        return GetOccFieldShadow(worldPos, normal);
-    #elif defined(BITMASK_POINT) || defined(BITMASK_8TAP)
-        return GetBitmaskShadow(worldPos, normal);
-    #else
-        return GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
-    #endif
+    return GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
 }
 
 // Finite-distance shadow for local (point/spot) lights: always SDF, so a blocker behind

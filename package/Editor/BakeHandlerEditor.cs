@@ -53,6 +53,8 @@ namespace Lotec.Lighting.Editor {
             if (!handler.Bake(volume))
                 return;
             VoxelBakeEditorUtil.SaveBakedAssets(volume, handler);
+            // Redraw with the freshly-published globals so a new bake shows without entering play mode.
+            SceneView.RepaintAll();
         }
     }
 }

@@ -48,8 +48,6 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // Display-transform tonemap operators (Reinhard / AgX / ACES), selected by _Tonemap.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/Tonemap.hlsl"
 
-            // Shadow source (default = SDF): directional bitmask (point / 8-tap) or occlusion field.
-            #pragma multi_compile __ BITMASK_POINT BITMASK_8TAP OCC_FIELD
             // GI_OFF (default): direct lighting only. GI_VOXEL_BUFFER: the buffer GI read filter
             // (BufferGiUpdater). GI_UNITY: Unity's built-in indirect (SampleSH) - a component-less A/B
             // baseline for measuring the voxel GI's runtime cost against the engine's baked path.
@@ -140,17 +138,15 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 half3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
                 half3 albedo = _BaseColor.rgb * texAlbedo;
 
-                // Main light. Under the buffer GI the baked sun shadow and the baked AO read the SAME
-                // 4 face voxels, so resolve BOTH in one face loop (BgiSampleFaceAoShadow) and feed the
-                // shadow straight into the main light - instead of a separate BgiTrySunShadow (inside
-                // GetShadow) plus BgiSurfaceAO (inside the gather), which walked those voxels twice.
-                // Other GI modes resolve the main-light shadow inside GetShadow as before.
+                // Main light. Under the buffer GI, BgiSampleFaceAoShadow is the SOLE authority for the
+                // main-light sun shadow (Off = no shadow, Baked = baked value, Sdf = SDF raymarch) and
+                // also resolves the baked AO from the same face read - so the shadow feeds straight into
+                // the main light and never falls through to GetShadow (SDF/bitmask/occlusion). Other GI
+                // modes resolve the main-light shadow inside GetShadow as before.
                 #if defined(GI_VOXEL_BUFFER)
-                    half bgiAo, bgiShadow; bool bgiShadowValid;
-                    BgiSampleFaceAoShadow(IN.positionWS, N, light.direction, bgiAo, bgiShadow, bgiShadowValid);
-                    half3 lit = bgiShadowValid
-                        ? GetMainDirectLightingShadow(light, IN.positionWS, N, albedo, bgiShadow)
-                        : GetMainDirectLighting(light, IN.positionWS, N, albedo);
+                    half bgiAo, bgiShadow;
+                    BgiSampleFaceAoShadow(IN.positionWS, N, light.direction, bgiAo, bgiShadow);
+                    half3 lit = GetMainDirectLightingShadow(light, IN.positionWS, N, albedo, bgiShadow);
                 #else
                     half3 lit = GetMainDirectLighting(light, IN.positionWS, N, albedo);
                 #endif

@@ -2,16 +2,16 @@ using UnityEngine;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Runtime binder for occlusion-field shadows. Reads the baked occlusion field off the
-    /// <see cref="VoxelVolume"/> on the same GameObject and publishes the per-direction field
-    /// globals, so the shadow term comes from the field with no SDF texture bound at runtime.
+    /// Passive holder for the baked occlusion field. Stores the per-direction field textures off the
+    /// <see cref="VoxelVolume"/> on the same GameObject and, on demand, publishes the field globals
+    /// (<see cref="Bind"/>) so the shadow term comes from the field with no SDF texture bound at runtime.
     /// The shared volume bounds it samples against are published by <see cref="LightingManager"/>.
     ///
-    /// Added automatically by the occlusion-field baker when it bakes. The ENABLED binder on the
-    /// active volume selects the OCC_FIELD shadow path (it owns the shadow keyword group); with no
-    /// enabled binder the SDF default is used. Mutually exclusive with the bitmask binder.
+    /// Added automatically by the occlusion-field baker when it bakes. This component does NOT run its
+    /// own update loop or claim any keyword: <see cref="BufferGiUpdater"/> is the sole driver - it calls
+    /// <see cref="Bind"/> for the field whose ShadowMode is OcclusionField. So there is no idle Update
+    /// cost, and it can coexist with the bitmask holder (each publishes disjoint globals).
     /// </summary>
-    [ExecuteInEditMode]
     [RequireComponent(typeof(VoxelVolume))]
     [AddComponentMenu("Lotec/Voxel Lighting/Binders/Voxel Occlusion Field")]
     public class VoxelOcclusionField : MonoBehaviour {
@@ -39,29 +39,6 @@ namespace Lotec.Lighting {
         public bool HasData =>
             occlusionFieldTextures != null && occlusionFieldTextures.Length > 0
             && occlusionFieldDirections != null && occlusionFieldDirections.Length > 0;
-
-        void OnEnable() {
-            // Shadow sources are mutually exclusive: enabling this binder turns the bitmask off.
-            if (TryGetComponent(out VoxelOcclusionBitmask bitmask) && bitmask.enabled)
-                bitmask.enabled = false;
-        }
-
-        void OnDisable() {
-            LightingKeywords.ReleaseShadow(this);
-        }
-
-        void Update() {
-            // Shader globals are singular, so only the active volume's binder publishes (and only
-            // the publishing binder holds the shadow-keyword claim).
-            LightingManager manager = LightingManager.Instance;
-            bool active = (manager == null || manager.Volume == Volume) && HasData;
-            if (!active) {
-                LightingKeywords.ReleaseShadow(this);
-                return;
-            }
-            LightingKeywords.ClaimShadow(this, LightingKeywords.ShadowOcclusionField);
-            Bind();
-        }
 
         /// <summary>Publish the occlusion-field globals + the occlusion-grid inverse voxel size
         /// (the volume bounds it samples against are published by the active VoxelVolume).</summary>

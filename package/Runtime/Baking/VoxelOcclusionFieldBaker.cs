@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Bakes the per-direction occlusion field used by the OCC_FIELD shadow mode
+    /// Bakes the per-direction occlusion field used by the OcclusionField buffer-GI shadow mode
     /// (hardware-interpolated). Reads the hi-res SDF, so it runs after
     /// <see cref="VoxelSdfBaker"/>.
     /// </summary>
@@ -27,6 +27,9 @@ namespace Lotec.Lighting {
             binder.occlusionFieldTextures = fieldTextures;
             binder.occlusionFieldDirections = fieldDirections;
 
+            // Push the fresh bake to the buffer-GI driver so the OcclusionField ShadowMode reflects it in
+            // edit mode right away (the holder is passive now - the updater publishes it).
+            BufferGiUpdater.RefreshOcclusionSourcesFor(volume);
             return true;
         }
 

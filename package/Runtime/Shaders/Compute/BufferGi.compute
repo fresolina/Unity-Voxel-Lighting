@@ -429,16 +429,28 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     }
     incoming *= rcp((float)sampleCount); // this frame's estimate = mean of sampleCount samples
 
+    // Baked SUN VISIBILITY for the air probe: one deterministic shadow-ray march toward the sun from
+    // this air voxel (1 = lit, 0 = shadowed). Carried in the irradiance w channel so CSBlur can mirror
+    // it into the displayed texture's ALPHA - the fragment then reads a baked sun shadow as a single
+    // hardware-interpolated texture tap instead of 4-8 StructuredBuffer face taps (the Adreno cost).
+    // Deterministic (no noise), so it's stable frame-to-frame and needs no temporal accumulation. Only
+    // AIR voxels (the read samples the air layer in front of surfaces); solid voxels store 1 (unused).
+    float sunVis = 1.0;
+    if (!solid) {
+        int3 sunHit;
+        sunVis = MarchOccupancy(cell, _DirectLightDir, BGI_MAX_RAY_DIST, sunHit) ? 0.0 : 1.0;
+    }
+
     // Temporal PROGRESSIVE average: fold this frame's sampleCount-ray estimate into the running mean of
     // all rays gathered so far, weight = sampleCount/totalSamples (_EmaWeight from C#). The field
     // ACCUMULATES so variance ~1/totalSamples -> it keeps getting cleaner and converges (not a fixed
     // window that shimmers forever). The first frame is ~weight 1 (noisy), but CSBlur's Confidence≈0
-    // hides that warm-up. No per-voxel count stored (packed 4th channel = 0).
+    // hides that warm-up. The w channel carries the baked sun visibility (above), not a sample count.
     float3 oldC; float oldN;
     BgiUnpackRgb(_Irradiance[_FieldOffset + i], oldC, oldN); // oldN unused
     float weight = min(1.0, _EmaWeight);
     float3 newC = SanitizeColor(lerp(oldC, incoming, weight));
-    _Irradiance[_FieldOffset + i] = BgiPackRgb(newC, 0.0);
+    _Irradiance[_FieldOffset + i] = BgiPackRgb(newC, sunVis);
 }
 
 // ----------------------------------------------------------
@@ -456,14 +468,22 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
 
     if (BgiSolidBit(_FieldOffset + i)) {
         _IrradianceBlur[_FieldOffset + i] = uint2(0u, 0u);
-        _BgiIrradianceTexWrite[BgiCoord(i)] = float4(0.0, 0.0, 0.0, 1.0);
+        // Solid voxels carry NO irradiance (rgb = 0), but their ALPHA must be the surface's own baked
+        // sun visibility (radiance.w), NOT a constant 1.0. The fragment's shadow tap sits ~1 voxel into
+        // the air but its trilinear footprint still catches these solid cells; a constant 1.0 here washes
+        // the shadow toward lit (the bug). Writing radiance.w keeps solid + air consistent so the tap
+        // interpolates a correct sun visibility across the surface.
+        float3 rgbIgnore; float solidSun;
+        BgiUnpackRgb(_Radiance[_FieldOffset + i], rgbIgnore, solidSun);
+        _BgiIrradianceTexWrite[BgiCoord(i)] = float4(0.0, 0.0, 0.0, solidSun);
         return;
     }
 
     int3 c = (int3)BgiCoord(i);
-    float3 sum; float count;
-    BgiUnpackRgb(_Irradiance[_FieldOffset + i], sum, count); // center
+    float3 sum; float centerSun;
+    BgiUnpackRgb(_Irradiance[_FieldOffset + i], sum, centerSun); // center rgb + baked sun vis (w)
     float wsum = 1.0;
+    float sunSum = centerSun; // baked sun visibility, gated-blurred alongside the irradiance
 
     const int3 axes[6] = {
         int3(1,0,0), int3(-1,0,0), int3(0,1,0), int3(0,-1,0), int3(0,0,1), int3(0,0,-1)
@@ -473,9 +493,10 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
         int3 nb = c + axes[k];
         if (!BgiInBounds(nb)) continue;
         if (BgiSolidBit(BgiSlot((uint3)nb))) continue; // gate: don't blur across surfaces
-        float3 nc; float nn;
-        BgiUnpackRgb(_Irradiance[BgiSlot((uint3)nb)], nc, nn);
+        float3 nc; float nsun;
+        BgiUnpackRgb(_Irradiance[BgiSlot((uint3)nb)], nc, nsun);
         sum += nc;
+        sunSum += nsun;
         wsum += 1.0;
     }
 
@@ -486,9 +507,10 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
     BgiUnpackRgb(_IrradianceBlur[_FieldOffset + i], prevBlur, pw);
     float3 result = lerp(prevBlur, blurred, _Confidence);
     _IrradianceBlur[_FieldOffset + i] = BgiPackRgb(result, 0.0);
-    // Fused mirror: write the displayed value straight into the field's Texture3D (the fragment's 1-tap
-    // read source), so no separate SSBO->texture copy dispatch is needed.
-    _BgiIrradianceTexWrite[BgiCoord(i)] = float4(result, 1.0);
+    // Fused mirror: write the displayed irradiance into the field's Texture3D rgb (the fragment's 1-tap
+    // GI read) and the gated-blurred sun visibility into its ALPHA (the fragment's 1-tap baked shadow).
+    // The sun vis is NOT confidence-eased - it's deterministic, so it responds immediately to a sun move.
+    _BgiIrradianceTexWrite[BgiCoord(i)] = float4(result, sunSum / wsum);
 }
 
 // ----------------------------------------------------------

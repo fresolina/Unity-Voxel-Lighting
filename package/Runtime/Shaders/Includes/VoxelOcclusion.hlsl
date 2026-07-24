@@ -1,9 +1,10 @@
 #ifndef LOTEC_VOXEL_OCCLUSION_INCLUDED
 #define LOTEC_VOXEL_OCCLUSION_INCLUDED
 
-// Directional occlusion shadows in two encodings, selected by keyword:
-//   BITMASK_POINT / BITMASK_8TAP -> per-voxel directional bitmask
-//   OCC_FIELD                    -> per-direction occlusion field
+// Baked directional occlusion shadow sources, read by the buffer-GI per-field shadow modes
+// (BgiSampleFaceAoShadow):
+//   GetBitmaskShadow   -> per-voxel directional bitmask (trilinear 8-tap)
+//   GetOccFieldShadow  -> per-direction occlusion field (hardware trilinear)
 // Both are baked alternatives to the runtime SDF shadow march.
 
 #include "Volume.hlsl"   // _VoxelVolumeBounds*, WorldToVoxelUV
@@ -85,15 +86,7 @@ inline float GetShadowBitTrilinear8Tap(float3 localPos, uint chosenIndex) {
 // Shadow query using the precomputed sun Fibonacci index. Returns 0.0 (shadow) to 1.0 (lit).
 float GetBitmaskShadow(float3 worldPos) {
     float3 localPos = (worldPos - _VoxelVolumeBoundsMin) * _VoxelSizeInverse;
-    uint chosenIndex = (uint)_BitmaskSunFibIndex;
-
-    #if defined(BITMASK_POINT)
-        int3 baseIdx = int3(floor(localPos));
-        uint2 mask = GetBitmaskAtVoxel(baseIdx);
-        return saturate(1.0 - (float)GetBit64(mask, chosenIndex));
-    #else
-        return GetShadowBitTrilinear8Tap(localPos, chosenIndex);
-    #endif
+    return GetShadowBitTrilinear8Tap(localPos, (uint)_BitmaskSunFibIndex);
 }
 
 // Variant with normal-based offset to reduce self-occlusion.

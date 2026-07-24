@@ -1302,6 +1302,7 @@ GameObject:
   - component: {fileID: 1649028920}
   - component: {fileID: 1649028921}
   - component: {fileID: 1649028923}
+  - component: {fileID: 1649028924}
   m_Layer: 0
   m_Name: Static Environment
   m_TagString: Untagged
@@ -1389,6 +1390,29 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelSdfField
   sdfTexture: {fileID: 11700000, guid: 80252cb1950bc014ab733d29f852024c, type: 2}
+--- !u!114 &1649028924
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1517074019}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ab66d466b2e7aec43941ef7eeaa2cc0f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionBitmask
+  occlusionBitmaskTexture: {fileID: 11700000, guid: bf0f5ea775e914e4b8d545cc63c8a548, type: 2}
+  occlusionBitmaskDirections:
+  - {x: 0.34798527, y: 0.9375, z: 0}
+  - {x: -0.4298574, y: 0.8125, z: 0.39378467}
+  - {x: 0.06348706, y: 0.6875, z: -0.7234039}
+  - {x: 0.50305593, y: 0.5625, z: 0.6561467}
+  - {x: -0.8854726, y: 0.4375, z: -0.1566273}
+  - {x: 0.801498, y: 0.3125, z: -0.50984764}
+  - {x: -0.25499916, y: 0.1875, z: 0.94858795}
+  - {x: -0.46000668, y: 0.0625, z: -0.88571304}
+  sampling: 0
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

@@ -68,33 +68,5 @@ namespace Lotec.Lighting {
             s_giKeyword = GiOff;
             Gi.Set(GiOff);
         }
-
-        /// <summary>Local-shadow source (VoxelLit: multi_compile __ BITMASK_POINT BITMASK_8TAP
-        /// OCC_FIELD). Bare default = the SDF path. Owned by the occlusion binder components.</summary>
-        public static readonly ShaderKeywordGroup ShadowSource = new ShaderKeywordGroup(null, "BITMASK_POINT", "BITMASK_8TAP", "OCC_FIELD");
-        public const string ShadowBitmaskPoint = "BITMASK_POINT";
-        public const string ShadowBitmask8Tap = "BITMASK_8TAP";
-        public const string ShadowOcclusionField = "OCC_FIELD";
-
-        static object s_shadowOwner;
-        static string s_shadowKeyword;
-
-        /// <summary>Claim the shadow-source group for a binder and activate its keyword. Change-only
-        /// and ownership-aware, safe to call every frame from the active binder.</summary>
-        public static void ClaimShadow(object owner, string keyword) {
-            if (s_shadowOwner == owner && s_shadowKeyword == keyword) return;
-            s_shadowOwner = owner;
-            s_shadowKeyword = keyword;
-            ShadowSource.Set(keyword);
-        }
-
-        /// <summary>Release the shadow-source group back to the SDF default - only if the caller
-        /// still owns it, so an old binder can't clobber the keyword after a source switch.</summary>
-        public static void ReleaseShadow(object owner) {
-            if (s_shadowOwner != owner) return;
-            s_shadowOwner = null;
-            s_shadowKeyword = null;
-            ShadowSource.Set(null);
-        }
     }
 }

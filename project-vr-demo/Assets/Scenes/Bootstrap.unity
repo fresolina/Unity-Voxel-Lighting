@@ -539,7 +539,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1500960146}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: f1ca66c064226da428d740f80012b968, type: 3}
   m_Name: 
@@ -859,8 +859,12 @@ PrefabInstance:
       value: XR Origin (XR Rig)
       objectReference: {fileID: 0}
     - target: {fileID: 1717954561962503726, guid: f6336ac4ac8b4d34bc5072418cdc62a0, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 1.19
+      objectReference: {fileID: 0}
+    - target: {fileID: 1717954561962503726, guid: f6336ac4ac8b4d34bc5072418cdc62a0, type: 3}
       propertyPath: m_LocalPosition.z
-      value: 0
+      value: 0.39
       objectReference: {fileID: 0}
     - target: {fileID: 1717954561962503726, guid: f6336ac4ac8b4d34bc5072418cdc62a0, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -960,27 +964,27 @@ PrefabInstance:
     - target: {fileID: 963349087938242428, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_PanelSettings
       value: 
-      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
+      objectReference: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
     - target: {fileID: 1511711785825087114, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: _panelSettings
       value: 
-      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
+      objectReference: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
     - target: {fileID: 2992777844278637658, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: _panelSettings
       value: 
-      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
+      objectReference: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
     - target: {fileID: 4129790502506348898, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalPosition.x
       value: -2
       objectReference: {fileID: 0}
     - target: {fileID: 6917518582505818305, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_IsActive
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 7587838476165272829, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_PanelSettings
       value: 
-      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
+      objectReference: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
     - target: {fileID: 7666243038324625568, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: mode
       value: 0
@@ -1039,7 +1043,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 9061140893801023932, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_IsActive
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
