@@ -474,6 +474,7 @@ MonoBehaviour:
     _max: 2
     _adaptationSpeed: 2
     _measureRadius: 3
+  _giResolution: 32
   _computeShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
   _voxelizeShader: {fileID: 4800000, guid: fb19bf6e7b7d7e24bb740879f668a9bd, type: 3}
 --- !u!1 &1500960146
@@ -959,15 +960,15 @@ PrefabInstance:
     - target: {fileID: 963349087938242428, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_PanelSettings
       value: 
-      objectReference: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
+      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
     - target: {fileID: 1511711785825087114, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: _panelSettings
       value: 
-      objectReference: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
+      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
     - target: {fileID: 2992777844278637658, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: _panelSettings
       value: 
-      objectReference: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
+      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
     - target: {fileID: 4129790502506348898, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_LocalPosition.x
       value: -2
@@ -979,7 +980,7 @@ PrefabInstance:
     - target: {fileID: 7587838476165272829, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_PanelSettings
       value: 
-      objectReference: {fileID: 11400000, guid: c9231dd7a6e6d4f49a2c4ac62ca79676, type: 2}
+      objectReference: {fileID: 11400000, guid: 95e930915a36cb043a461b91c9f67bae, type: 2}
     - target: {fileID: 7666243038324625568, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: mode
       value: 0
@@ -1038,7 +1039,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 9061140893801023932, guid: fbbb8144e302703418d50f0687c50497, type: 3}
       propertyPath: m_IsActive
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

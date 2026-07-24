@@ -10,10 +10,10 @@ namespace Lotec.Lighting {
     /// emit/reflect) then gather (air voxels integrate 1 ray/frame with the temporal resolve fused
     /// in) then a blur pass. The lit shader reads it via BgiGatherIndirect (BufferGi.hlsl).
     ///
-    /// All fields are a cubic grid whose resolution is taken from the active volume's
-    /// VoxelVolume._maxResolution (snapped to a power of two so the shift/mask index math holds);
-    /// the buffers resize when that changes. (Single fine cascade for now; a coarse cascade +
-    /// scheduler is the planned next step.)
+    /// All fields are a cubic grid whose resolution is this component's own _giResolution (snapped to a
+    /// power of two so the shift/mask index math holds), independent of the volume's bake resolution
+    /// (VoxelVolume._maxResolution, which the SDF/occlusion bakes use); the buffers resize when it
+    /// changes. (Single fine cascade for now; a coarse cascade + scheduler is the planned next step.)
     /// </summary>
     [DisallowMultipleComponent]
     [ExecuteAlways]
@@ -27,16 +27,16 @@ namespace Lotec.Lighting {
         public const int CoarseField = 0;
         public const int FineField = 1;
 
-        // Cubic grid resolution, derived from the active volume's VoxelVolume._maxResolution and
-        // snapped to a power of two (the index math is shift/mask based). Instance state now: it
-        // changes when the active volume changes, forcing a buffer reallocation. Defaults mirror the
-        // historical fixed 32^3 until a volume is resolved.
+        // Cubic grid resolution, derived from this component's own _giResolution (independent of the
+        // volume's bake resolution) and snapped to a power of two (the index math is shift/mask based).
+        // Instance state: it changes when _giResolution changes, forcing a buffer reallocation. Defaults
+        // mirror the serialized 32^3 until SyncGridResolution runs.
         int _grid = 32;
         int _gridLog2 = 5;
         int _voxelCount = 32 * 32 * 32;   // Grid^3 per field
         int _totalVoxels = FieldCount * 32 * 32 * 32;
 
-        /// <summary>Cubic grid resolution of each field (power of two, from VoxelVolume._maxResolution).</summary>
+        /// <summary>Cubic grid resolution of each field (power of two, from _giResolution).</summary>
         public int Grid => _grid;
         /// <summary>log2(Grid) - the shift amount for the linear&lt;-&gt;3D index math.</summary>
         public int GridLog2 => _gridLog2;
@@ -117,6 +117,13 @@ namespace Lotec.Lighting {
         [SerializeField] AutoExposure _exposureControl = new AutoExposure();
 
         [Header("Setup")]
+        [Tooltip("Voxel resolution of the GI grid - occupancy AND every lighting field, one shared grid. " +
+                 "Independent of the volume's bake resolution (VoxelVolume._maxResolution, which the SDF/" +
+                 "occlusion bakes use). The solve cost scales ~resolution^3, so this is the main perf lever. " +
+                 "Sharp sun shadows come from the SDF shadow mode (which stays at the volume's full " +
+                 "resolution), so this can be low without softening shadows. Snapped to a power of two, " +
+                 "clamped 4..256; a change reallocates the buffers and re-bakes.")]
+        [Min(4)][SerializeField] int _giResolution = 32;
         [SerializeField] ComputeShader _computeShader;
         [Tooltip("Shader 'Hidden/Lotec/BufferGiVoxelize' - GPU 3-axis rasterizer that voxelizes " +
                  "scene meshes into the occupancy/albedo buffer.")]
@@ -393,10 +400,10 @@ namespace Lotec.Lighting {
         }
 
         // BufferGI needs a power-of-two cubic grid (the shift/mask index math + the word-aligned
-        // occupancy bitfield both require it). Snap the volume's _maxResolution to the nearest power
+        // occupancy bitfield both require it). Snap the requested GI resolution to the nearest power
         // of two and clamp to a sane range. Grid >= 4 guarantees Grid^3 is a multiple of 32.
-        static int SnapGridResolution(int maxResolution) {
-            return Mathf.Clamp(Mathf.ClosestPowerOfTwo(Mathf.Max(4, maxResolution)), 4, 256);
+        static int SnapGridResolution(int resolution) {
+            return Mathf.Clamp(Mathf.ClosestPowerOfTwo(Mathf.Max(4, resolution)), 4, 256);
         }
 
         // Set the cubic grid resolution and the derived counts/log2. Caller reallocates the buffers.
@@ -408,11 +415,10 @@ namespace Lotec.Lighting {
             _totalVoxels = FieldCount * _voxelCount;
         }
 
-        // Match the grid resolution to the active volume's _maxResolution; on a change, release the
-        // buffers so they re-alloc + re-bake at the new size. Safe to call whenever _volume is set.
+        // Match the grid resolution to this component's own _giResolution (independent of the volume's
+        // bake resolution); on a change, release the buffers so they re-alloc + re-bake at the new size.
         void SyncGridResolution() {
-            if (_volume == null) return;
-            int grid = SnapGridResolution(_volume.MaxResolution);
+            int grid = SnapGridResolution(_giResolution);
             if (grid == _grid) return;
             SetGridResolution(grid);
             ReleaseBuffers();
