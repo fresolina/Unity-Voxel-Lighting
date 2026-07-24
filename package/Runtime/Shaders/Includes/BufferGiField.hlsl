@@ -1,24 +1,28 @@
 #ifndef LOTEC_BUFFER_GI_FIELD_INCLUDED
 #define LOTEC_BUFFER_GI_FIELD_INCLUDED
 
-// Shared layout for the buffer-based GI (the textureless, cache-resident GI). One fixed 32^3 grid
-// per cascade so a voxel index fits in 16 bits and the whole field stays inside the GPU L2. All
-// fields are flat StructuredBuffers indexed by BgiIndex; this header holds the index math, the
+// Shared layout for the buffer-based GI (the textureless voxel GI). One cubic grid per cascade,
+// sized at runtime from VoxelVolume._maxResolution (snapped to a power of two - see BufferGiUpdater).
+// All fields are flat StructuredBuffers indexed by BgiIndex; this header holds the index math, the
 // world<->grid mapping (its own _Bgi* grid, independent of the SDF/volume UVW space), and the
 // pack/unpack helpers shared by the compute solve, the fragment read, and the debug visualizer.
 // Buffers themselves are declared per-shader (RW in compute, read-only elsewhere).
 
-// 32^3 = 32768 voxels (< 65536, so a 16-bit index suffices). GRID is a power of two so the
-// linear<->3D index math reduces to shifts/masks.
-static const uint BGI_GRID = 32u;
-static const uint BGI_GRID_LOG2 = 5u;
-static const uint BGI_GRID_MASK = BGI_GRID - 1u;
-static const uint BGI_COUNT = BGI_GRID * BGI_GRID * BGI_GRID;
+// Grid resolution, published per active volume by BufferGiUpdater. It is always a power of two so the
+// linear<->3D index math reduces to shifts/masks: BGI_GRID_LOG2 = log2(BGI_GRID), and BGI_COUNT =
+// BGI_GRID^3 is a multiple of 32 (grid >= 4), so the occupancy bitfield stays word-aligned per field.
+uint _BgiGrid;      // cubic grid resolution (power of two)
+uint _BgiGridLog2;  // log2(_BgiGrid)
+uint _BgiCount;     // _BgiGrid^3 - voxels per field
+#define BGI_GRID _BgiGrid
+#define BGI_GRID_LOG2 _BgiGridLog2
+#define BGI_GRID_MASK (_BgiGrid - 1u)
+#define BGI_COUNT _BgiCount
 
 // Field slice offsets in the concatenated buffers (must match BufferGiUpdater CoarseField/FineField):
 // coarse = slot 0, fine = slot 1, so any future fine fields stay contiguous (slots 1..N-1).
 static const uint BGI_COARSE_OFFSET = 0u;
-static const uint BGI_FINE_OFFSET = BGI_COUNT;
+#define BGI_FINE_OFFSET _BgiCount
 
 // Cascade placement in world space (set by BufferGiUpdater). Voxels are per-axis (the grid
 // stretches to fill non-cubic volume bounds), so _BgiVoxelSize is a float3, not a scalar.

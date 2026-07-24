@@ -62,8 +62,9 @@ namespace Lotec.Lighting {
                 error = "OcclusionBitmaskBake: bitmaskBakeCompute not assigned";
                 return false;
             }
-            if (sourceVolume.sdfHiresTexture == null) {
-                error = "OcclusionBitmaskBake: sourceVolume has no sdfHiresTexture";
+            Texture3D sdfHires = sourceVolume.TryGetComponent(out VoxelSdfField sdfField) ? sdfField.sdfTexture : null;
+            if (sdfHires == null) {
+                error = "OcclusionBitmaskBake: sourceVolume has no VoxelSdfField.sdfTexture (run the SDF baker first)";
                 return false;
             }
 
@@ -93,7 +94,7 @@ namespace Lotec.Lighting {
             Vector3 voxelSize = new Vector3(bounds.size.x / resolution.x, bounds.size.y / resolution.y, bounds.size.z / resolution.z);
             float voxelDiag = voxelSize.magnitude;
 
-            bitmaskBakeCompute.SetTexture(kernelIdx, s_sdfHires, sourceVolume.sdfHiresTexture);
+            bitmaskBakeCompute.SetTexture(kernelIdx, s_sdfHires, sdfHires);
             bitmaskBakeCompute.SetInt(s_raymarchMaxSteps, 256);
             bitmaskBakeCompute.SetFloat(s_raymarchMinStep, voxelDiag * 0.01f);
             bitmaskBakeCompute.SetFloat(s_raymarchEpsilon, voxelDiag * 0.02f);

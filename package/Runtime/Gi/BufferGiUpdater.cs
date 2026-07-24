@@ -10,28 +10,48 @@ namespace Lotec.Lighting {
     /// emit/reflect) then gather (air voxels integrate 1 ray/frame with the temporal resolve fused
     /// in) then a blur pass. The lit shader reads it via BgiGatherIndirect (BufferGi.hlsl).
     ///
-    /// All fields are a fixed 32^3 so a voxel index fits in 16 bits and the whole grid stays
-    /// resident in the GPU L2. (Single fine cascade for now; a coarse cascade + scheduler is the
-    /// planned next step.)
+    /// All fields are a cubic grid whose resolution is this component's own _giResolution (snapped to a
+    /// power of two so the shift/mask index math holds), independent of the volume's bake resolution
+    /// (VoxelVolume._maxResolution, which the SDF/occlusion bakes use); the buffers resize when it
+    /// changes. (Single fine cascade for now; a coarse cascade + scheduler is the planned next step.)
     /// </summary>
     [DisallowMultipleComponent]
     [ExecuteAlways]
-    // GI methods are mutually exclusive: enabling this component disables GiFieldUpdater (and vice
-    // versa), and the enabled updater owns the GI keyword group + the _Exposure global.
+    // The enabled updater owns the GI keyword group + the _Exposure global (GiMethodSelector toggles
+    // this component's enabled state to switch GI on/off).
     [AddComponentMenu("Lotec/Voxel Lighting/Buffer GI")]
     public class BufferGiUpdater : MonoBehaviour {
-        public const int Grid = 32;
-        public const int VoxelCount = Grid * Grid * Grid; // 32768 per field
         // Concatenated fields: 0 = coarse (the big far volume), 1 = fine (the active volume). Coarse
         // is kept at slot 0 so any future fine fields stay contiguous (1..N-1) and just append.
         public const int FieldCount = 2;
-        public const int TotalVoxels = FieldCount * VoxelCount;
         public const int CoarseField = 0;
         public const int FineField = 1;
 
-        // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGi.hlsl). Off = none;
-        // Baked = read the solve's pre-marched sun visibility (radiance.w), interpolated across the face.
-        public enum ShadowMode { Off = 0, Baked = 1 }
+        // Cubic grid resolution, derived from this component's own _giResolution (independent of the
+        // volume's bake resolution) and snapped to a power of two (the index math is shift/mask based).
+        // Instance state: it changes when _giResolution changes, forcing a buffer reallocation. Defaults
+        // mirror the serialized 32^3 until SyncGridResolution runs.
+        int _grid = 32;
+        int _gridLog2 = 5;
+        int _voxelCount = 32 * 32 * 32;   // Grid^3 per field
+        int _totalVoxels = FieldCount * 32 * 32 * 32;
+
+        /// <summary>Cubic grid resolution of each field (power of two, from _giResolution).</summary>
+        public int Grid => _grid;
+        /// <summary>log2(Grid) - the shift amount for the linear&lt;-&gt;3D index math.</summary>
+        public int GridLog2 => _gridLog2;
+        /// <summary>Voxels per field (Grid^3).</summary>
+        public int VoxelCount => _voxelCount;
+        /// <summary>Voxels across all concatenated fields (FieldCount * VoxelCount).</summary>
+        public int TotalVoxels => _totalVoxels;
+
+        // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGi.hlsl). Off = fall
+        // through to the material's shadow source (SDF/bitmask/occ); Baked = read the solve's
+        // pre-marched sun visibility (radiance.w), interpolated across the face; Sdf = a crisp
+        // per-pixel raymarch of the hi-res SDF (VoxelGI-parity), selected per field and independent
+        // of the shadow-source keyword. Sdf needs an SDF baked on the volume (VoxelSdfBaker); it has
+        // no effect where the SDF doesn't reach (e.g. the coarse field beyond the fine bounds).
+        public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2 }
 
         public static BufferGiUpdater Instance { get; private set; }
 
@@ -74,13 +94,16 @@ namespace Lotec.Lighting {
                  "voxel's precomputed openness - restores contact shadowing the omnidirectional gather " +
                  "reads only weakly. Requires a re-bake to recompute openness after a geometry change.")]
         [Range(0f, 1f)][SerializeField] float _aoStrength;
-        [Tooltip("Voxel sun-shadow for the FINE volume (the active, detailed field).\n Off: none.\n " +
-                 "Baked: the solve's pre-marched sun visibility, interpolated across the surface - soft " +
-                 "and cheap (no per-pixel ray). It replaces the material's shadow source where active.")]
+        [Tooltip("Sun-shadow for the FINE volume (the active, detailed field).\n Off: fall through to " +
+                 "the material's shadow source.\n Baked: the solve's pre-marched sun visibility, " +
+                 "interpolated across the surface - soft and cheap (no per-pixel ray).\n Sdf: a crisp " +
+                 "per-pixel raymarch of the hi-res SDF (VoxelGI-parity) - needs an SDF baked on the " +
+                 "volume. It replaces the material's shadow source where active.")]
         [SerializeField] ShadowMode _fineShadow = ShadowMode.Off;
-        [Tooltip("Voxel sun-shadow for the COARSE volume (the big far field the SDF shadow can't " +
-                 "reach).\n Off: none.\n Baked: the solve's pre-marched sun visibility, interpolated - " +
-                 "the cheap way to get far shadows. It replaces the material's shadow source where active.")]
+        [Tooltip("Sun-shadow for the COARSE volume (the big far field the SDF shadow can't reach).\n " +
+                 "Off: fall through to the material's shadow source.\n Baked: the solve's pre-marched " +
+                 "sun visibility, interpolated - the cheap way to get far shadows.\n Sdf: has no effect " +
+                 "here (the SDF only covers the fine bounds); use Baked for the far field.")]
         [SerializeField] ShadowMode _coarseShadow = ShadowMode.Off;
         [Tooltip("A/B: read the GI from the original StructuredBuffer gather instead of the mirrored " +
                  "irradiance texture (keyword BGI_SSBO_READ). Off (default) = one hardware-trilinear " +
@@ -94,6 +117,13 @@ namespace Lotec.Lighting {
         [SerializeField] AutoExposure _exposureControl = new AutoExposure();
 
         [Header("Setup")]
+        [Tooltip("Voxel resolution of the GI grid - occupancy AND every lighting field, one shared grid. " +
+                 "Independent of the volume's bake resolution (VoxelVolume._maxResolution, which the SDF/" +
+                 "occlusion bakes use). The solve cost scales ~resolution^3, so this is the main perf lever. " +
+                 "Sharp sun shadows come from the SDF shadow mode (which stays at the volume's full " +
+                 "resolution), so this can be low without softening shadows. Snapped to a power of two, " +
+                 "clamped 4..256; a change reallocates the buffers and re-bakes.")]
+        [Min(4)][SerializeField] int _giResolution = 32;
         [SerializeField] ComputeShader _computeShader;
         [Tooltip("Shader 'Hidden/Lotec/BufferGiVoxelize' - GPU 3-axis rasterizer that voxelizes " +
                  "scene meshes into the occupancy/albedo buffer.")]
@@ -146,7 +176,6 @@ namespace Lotec.Lighting {
         int _injectKernel = -1;
         int _gatherKernel = -1;
         int _blurKernel = -1;
-        int _copyToTextureKernel = -1;        // CSCopyIrradianceToTexture (mirror an SSBO irradiance slice -> Texture3D)
         RenderTexture _irradianceTex;          // fine field's blurred irradiance as a Texture3D (default read source)
         RenderTexture _irradianceTexCoarse;    // coarse field's blurred irradiance as a Texture3D
         int _initFineKernel = -1;
@@ -215,7 +244,7 @@ namespace Lotec.Lighting {
             set => _aoStrength = Mathf.Clamp01(value);
         }
 
-        /// <summary>Voxel sun-shadow mode for the FINE (active) volume: Off, or Baked pre-marched visibility.</summary>
+        /// <summary>Sun-shadow mode for the FINE (active) volume: Off, Baked pre-marched visibility, or a per-pixel SDF raymarch.</summary>
         public ShadowMode FineShadow {
             get => _fineShadow;
             set => _fineShadow = value;
@@ -230,7 +259,7 @@ namespace Lotec.Lighting {
         /// <summary>Display-transform controller (exposure + tonemap), e.g. to toggle in-shader tonemap from a UI.</summary>
         public AutoExposure ExposureControl => _exposureControl;
 
-        // Coarse field: a scene-covering MeshBounds (32^3 grid, larger voxels). Falls back to the
+        // Coarse field: a scene-covering MeshBounds (same cubic grid, larger voxels). Falls back to the
         // fine bounds when unassigned so the read/visualizer degrade gracefully (empty slice -> 0).
         // MeshBounds is tight, so grow it by a border of coarse grid cells here (geometry exactly
         // on the boundary sits in half-clipped voxels): solving size' = size + 2*P*(size'/G) gives
@@ -239,7 +268,8 @@ namespace Lotec.Lighting {
         Bounds CoarseWorldBounds {
             get {
                 Bounds b = _fields.CoarseField.Bounds;
-                b.size *= Grid / (Grid - 2f * CoarsePaddingVoxels);
+                // max(1) guards the pathological tiny-grid case (G <= 2P) from an Inf/negative scale.
+                b.size *= Grid / Mathf.Max(1f, Grid - 2f * CoarsePaddingVoxels);
                 return b;
             }
         }
@@ -267,6 +297,9 @@ namespace Lotec.Lighting {
         static readonly int s_gridSize = Shader.PropertyToID("_BgiGridSize");
         static readonly int s_voxelSize = Shader.PropertyToID("_BgiVoxelSize");
         static readonly int s_fieldOffset = Shader.PropertyToID("_FieldOffset");
+        static readonly int s_bgiGrid = Shader.PropertyToID("_BgiGrid");
+        static readonly int s_bgiGridLog2 = Shader.PropertyToID("_BgiGridLog2");
+        static readonly int s_bgiCount = Shader.PropertyToID("_BgiCount");
         static readonly int s_coarseOrigin = Shader.PropertyToID("_BgiCoarseOrigin");
         static readonly int s_coarseVoxelSize = Shader.PropertyToID("_BgiCoarseVoxelSize");
         static readonly int s_confidence = Shader.PropertyToID("_Confidence");
@@ -303,13 +336,6 @@ namespace Lotec.Lighting {
 
         void OnEnable() {
             Instance = this;
-            // GI methods are mutually exclusive - the enabled component selects the method, so
-            // enabling this one turns the texture GI off.
-            GiFieldUpdater other = FindAnyObjectByType<GiFieldUpdater>();
-            if (other != null && other.enabled) {
-                Debug.LogWarning("Buffer GI enabled - disabling the texture GI (GiFieldUpdater); only one GI method can be active.", this);
-                other.enabled = false;
-            }
 #if UNITY_EDITOR
             // In edit mode the editor only ticks Update sporadically, so the temporal solve never
             // accumulates and the visualizer's per-frame draw is missed. Pumping the player loop
@@ -373,6 +399,41 @@ namespace Lotec.Lighting {
             _prevSunColor = sun != null ? (Vector4)sun.color * sun.intensity : Vector4.zero;
         }
 
+        // BufferGI needs a power-of-two cubic grid (the shift/mask index math + the word-aligned
+        // occupancy bitfield both require it). Snap the requested GI resolution to the nearest power
+        // of two and clamp to a sane range. Grid >= 4 guarantees Grid^3 is a multiple of 32.
+        static int SnapGridResolution(int resolution) {
+            return Mathf.Clamp(Mathf.ClosestPowerOfTwo(Mathf.Max(4, resolution)), 4, 256);
+        }
+
+        // Set the cubic grid resolution and the derived counts/log2. Caller reallocates the buffers.
+        void SetGridResolution(int grid) {
+            _grid = grid;
+            _gridLog2 = 0;
+            while ((1 << _gridLog2) < grid) _gridLog2++;
+            _voxelCount = grid * grid * grid;
+            _totalVoxels = FieldCount * _voxelCount;
+        }
+
+        // Match the grid resolution to this component's own _giResolution (independent of the volume's
+        // bake resolution); on a change, release the buffers so they re-alloc + re-bake at the new size.
+        void SyncGridResolution() {
+            int grid = SnapGridResolution(_giResolution);
+            if (grid == _grid) return;
+            SetGridResolution(grid);
+            ReleaseBuffers();
+        }
+
+        // Publish the grid resolution constants to the compute shader (the shader's BgiIndex/BgiCoord/
+        // occupancy math reads them). They only change when the grid does, but re-setting each frame is
+        // cheap and keeps the shared _computeShader asset in sync regardless of dispatch ordering.
+        void BindGridConstantsToCompute() {
+            if (_computeShader == null) return;
+            _computeShader.SetInt(s_bgiGrid, _grid);
+            _computeShader.SetInt(s_bgiGridLog2, _gridLog2);
+            _computeShader.SetInt(s_bgiCount, _voxelCount);
+        }
+
         void Update() {
             VoxelVolume active = Manager != null ? Manager.Volume : null;
             if (active != _volume) {
@@ -409,8 +470,15 @@ namespace Lotec.Lighting {
             }
             _hasLoggedMissingReferences = false;
 
+            // Resolve the cubic grid resolution from the active volume (snapped to a power of two). A
+            // change (new volume with a different _maxResolution, or an inspector edit) forces a cold
+            // realloc at the new size (overrides any warm switch above), since every buffer and the
+            // shader index math depend on it.
+            SyncGridResolution();
+
             SyncBakeInputs();
             EnsureInitialized();
+            BindGridConstantsToCompute();
             if (!_materialBaked) {
                 Voxelize();
             }
@@ -484,6 +552,10 @@ namespace Lotec.Lighting {
 
         // Publish the buffers + grid mapping + confidence the lit shader's BgiGatherIndirect reads.
         void SetGlobals() {
+            // Grid resolution constants for the fragment index math (shared by both fields).
+            Shader.SetGlobalInt(s_bgiGrid, _grid);
+            Shader.SetGlobalInt(s_bgiGridLog2, _gridLog2);
+            Shader.SetGlobalInt(s_bgiCount, _voxelCount);
             // Fragment solidity = the 8 KB bitfield; _Material is no longer bound to the lit shader.
             Shader.SetGlobalBuffer(s_occupancy, _occupancyBuffer);
             // Surface word for the fragment's static AO (openness in bits 16-23).
@@ -501,8 +573,9 @@ namespace Lotec.Lighting {
             Light sun = RenderSettings.sun;
             Shader.SetGlobalFloat(s_intensity, sun != null ? sun.bounceIntensity : 1f);
             Shader.SetGlobalFloat(s_aoStrength, _aoStrength);
-            // Voxel sun-shadow, per field. Baked reads the sun visibility the solve stashed in the
-            // radiance's w channel; realtime marches the occupancy bitfield per pixel (both bound below).
+            // Sun-shadow, per field. Baked reads the sun visibility the solve stashed in the radiance's
+            // w channel (bound below); Sdf marches the hi-res SDF per pixel (the _SdfHires global the
+            // active volume already publishes - see VoxelVolume.ApplyShaderGlobals).
             Shader.SetGlobalBuffer(s_radiance, _radianceBuffer);
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
@@ -512,7 +585,7 @@ namespace Lotec.Lighting {
             if (_ssboRead) Shader.EnableKeyword(SsboReadKeyword);
             else Shader.DisableKeyword(SsboReadKeyword);
             // The display transform (_Exposure + _Tonemap) is published by _exposureControl.Apply
-            // in Update - explicitly, so a stale value (e.g. left by GiFieldUpdater) can't darken it.
+            // in Update - explicitly, so a stale value can't darken it.
         }
 
         bool IsReady(out string reason) {
@@ -537,7 +610,6 @@ namespace Lotec.Lighting {
             _injectKernel = _computeShader.FindKernel("CSInject");
             _gatherKernel = _computeShader.FindKernel("CSGather");
             _blurKernel = _computeShader.FindKernel("CSBlur");
-            _copyToTextureKernel = _computeShader.FindKernel("CSCopyIrradianceToTexture");
             _initFineKernel = _computeShader.FindKernel("CSInitFineFromCoarse");
             _averageLuminanceKernel = _computeShader.FindKernel("CSAverageLuminance");
             _buildOccupancyKernel = _computeShader.FindKernel("CSBuildOccupancy");
@@ -582,7 +654,7 @@ namespace Lotec.Lighting {
         }
 
         // Groups to cover ONE field's voxels (each field is dispatched separately with its offset).
-        static int Groups => Mathf.CeilToInt(VoxelCount / 64f);
+        int Groups => Mathf.CeilToInt(_voxelCount / 64f);
 
         void ClearDynamicFields() {
             for (int f = 0; f < FieldCount; f++) ClearField(f * VoxelCount);
@@ -730,6 +802,10 @@ namespace Lotec.Lighting {
                 Debug.LogError("Buffer GI can't capture a field bake: the field has no mesh root.", this);
                 return false;
             }
+            // Resolve the grid from the active volume before allocating (the bake button releases the
+            // buffers first and doesn't wait for Update, so _grid could be stale). All fields share the
+            // active volume's snapped resolution.
+            SyncGridResolution();
             // Force valid buffers up front - the editor pump may not have run EnsureInitialized yet
             // (freshly enabled, or just after a domain reload), and RasterizeFieldSlice needs them.
             EnsureInitialized();
@@ -906,6 +982,10 @@ namespace Lotec.Lighting {
             cmd.SetGlobalVector(s_gridSize, size);
             cmd.SetGlobalVector(s_voxelSize, voxelSize);
             cmd.SetGlobalInt(s_fieldOffset, fieldOffset);
+            // Grid resolution for the voxelizer's bounds check + BgiSlot index math.
+            cmd.SetGlobalInt(s_bgiGrid, _grid);
+            cmd.SetGlobalInt(s_bgiGridLog2, _gridLog2);
+            cmd.SetGlobalInt(s_bgiCount, _voxelCount);
 
             for (int axis = 0; axis < 3; axis++) {
                 cmd.SetGlobalInt(s_voxAxis, axis);
@@ -1007,18 +1087,17 @@ namespace Lotec.Lighting {
             LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_computeShader);
 
             // The EMA blend weight (samplesPerFrame/maxSamples) is computed in the compute itself.
-            SolveField(GridOrigin, GridSize, VoxelSize, FineField * VoxelCount);
-            CopyIrradianceToTexture(FineField * VoxelCount, _irradianceTex);
+            // CSBlur mirrors each field's blurred irradiance straight into its Texture3D (the fragment's
+            // 1-tap read source). No coarse write when there's no coarse field: the read-side bounds check
+            // means the coarse texture is never sampled with a valid uvw outside the fine box.
+            SolveField(GridOrigin, GridSize, VoxelSize, FineField * VoxelCount, _irradianceTex);
             if (HasCoarse) {
-                SolveField(CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount);
+                SolveField(CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount, _irradianceTexCoarse);
             }
-            // Mirror the coarse slice too, so the texture read is valid outside the fine box. When there
-            // is no coarse field the slice is zero -> the texture reads 0, matching the SSBO gather.
-            CopyIrradianceToTexture(CoarseField * VoxelCount, _irradianceTexCoarse);
         }
 
-        // Inject -> gather -> (optional) blur for one field's slice.
-        void SolveField(Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset) {
+        // Inject -> gather -> blur for one field's slice; blur also mirrors the result into irradianceTex.
+        void SolveField(Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset, RenderTexture irradianceTex) {
             SetGridUniforms(origin, size, voxelSize);
             _computeShader.SetInt(s_fieldOffset, fieldOffset);
 
@@ -1041,11 +1120,13 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
             _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
 
-            // Blur: occupancy-gated spatial smoothing into the buffer the fragment read samples, and
-            // the confidence ease (CSBlur) that hides the warm-up.
+            // Blur: occupancy-gated spatial smoothing + the confidence ease (CSBlur) that hides the
+            // warm-up, written to _IrradianceBlur AND mirrored into this field's Texture3D (the fragment's
+            // 1-tap read source) in the same pass - no separate SSBO->texture copy dispatch.
             _computeShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _computeShader.SetTexture(_blurKernel, s_bgiIrradianceTexWrite, irradianceTex);
             _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
         }
 
@@ -1093,16 +1174,6 @@ namespace Lotec.Lighting {
             };
             rt.Create();
             return rt;
-        }
-
-        // Mirror one field's blurred irradiance (SSBO slice at fieldOffset) into its Texture3D so the
-        // fragment reads it with one hardware-trilinear tap. Sets _FieldOffset for the copy kernel.
-        void CopyIrradianceToTexture(int fieldOffset, RenderTexture tex) {
-            if (_copyToTextureKernel < 0 || tex == null || _irradianceBlurBuffer == null) return;
-            _computeShader.SetInt(s_fieldOffset, fieldOffset);
-            _computeShader.SetBuffer(_copyToTextureKernel, s_irradianceBlur, _irradianceBlurBuffer);
-            _computeShader.SetTexture(_copyToTextureKernel, s_bgiIrradianceTexWrite, tex);
-            _computeShader.Dispatch(_copyToTextureKernel, Groups, 1, 1);
         }
 
         public void ReleaseBuffers() {

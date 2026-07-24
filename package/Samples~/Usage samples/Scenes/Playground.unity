@@ -2023,8 +2023,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelVolume
   _maxResolution: 128
   _autoRegisterWithManager: 1
-  sdfHiresTexture: {fileID: 11700000, guid: ae780469d95a1ed48ba496ba0dce3966, type: 2}
-  sdfLowresTexture: {fileID: 11700000, guid: 66de412f06a354148a79f985619d526f, type: 2}
   _trimmedMaxResolution: {x: 79, y: 76, z: 128}
   _bounds:
     m_Center: {x: -7.730001, y: 1.7320002, z: -0.26000023}
@@ -2038,10 +2036,10 @@ MonoBehaviour:
   m_GameObject: {fileID: 772833386}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 1134c2de4dbd4b942a474b7f33ce0b1d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelMaterialField
-  materialAlbedoIntensityTexture: {fileID: 11700000, guid: 42dad9bc8bd6aae4c929164069f90695, type: 2}
+  m_Script: {fileID: 11500000, guid: edaa74f877c4bd44dad252dfe0531010, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelSdfField
+  sdfTexture: {fileID: 11700000, guid: ae780469d95a1ed48ba496ba0dce3966, type: 2}
 --- !u!114 &772833390
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2962,8 +2960,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelVolume
   _maxResolution: 128
   _autoRegisterWithManager: 1
-  sdfHiresTexture: {fileID: 11700000, guid: d6dcbc66995615d4893d7bce504d994b, type: 2}
-  sdfLowresTexture: {fileID: 11700000, guid: e5e23bb3192c6b646993f319ba33e653, type: 2}
   _trimmedMaxResolution: {x: 79, y: 76, z: 128}
   _bounds:
     m_Center: {x: 1.99, y: 1.7320002, z: -0.26000023}
@@ -3016,10 +3012,10 @@ MonoBehaviour:
   m_GameObject: {fileID: 1127919668}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 1134c2de4dbd4b942a474b7f33ce0b1d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelMaterialField
-  materialAlbedoIntensityTexture: {fileID: 11700000, guid: 8e71d14e8a43f724b88f99914f6e705d, type: 2}
+  m_Script: {fileID: 11500000, guid: edaa74f877c4bd44dad252dfe0531010, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelSdfField
+  sdfTexture: {fileID: 11700000, guid: d6dcbc66995615d4893d7bce504d994b, type: 2}
 --- !u!114 &1127919675
 MonoBehaviour:
   m_ObjectHideFlags: 0

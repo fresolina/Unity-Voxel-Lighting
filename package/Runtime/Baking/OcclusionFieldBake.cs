@@ -99,8 +99,9 @@ namespace Lotec.Lighting {
                 error = "OcclusionFieldBake: occlusionFieldBakeCompute not assigned";
                 return false;
             }
-            if (sourceVolume.sdfHiresTexture == null) {
-                error = "OcclusionFieldBake: sourceVolume has no sdfHiresTexture";
+            Texture3D sdfHires = sourceVolume.TryGetComponent(out VoxelSdfField sdfField) ? sdfField.sdfTexture : null;
+            if (sdfHires == null) {
+                error = "OcclusionFieldBake: sourceVolume has no VoxelSdfField.sdfTexture (run the SDF baker first)";
                 return false;
             }
 
@@ -147,7 +148,7 @@ namespace Lotec.Lighting {
             int kernelIdx = occlusionFieldBakeCompute.FindKernel("CSMain");
 
             // Set shared uniforms
-            occlusionFieldBakeCompute.SetTexture(kernelIdx, s_sdfHires, sourceVolume.sdfHiresTexture);
+            occlusionFieldBakeCompute.SetTexture(kernelIdx, s_sdfHires, sdfHires);
             occlusionFieldBakeCompute.SetVector(s_boundsMin, bounds.min);
             occlusionFieldBakeCompute.SetVector(s_boundsSize, bounds.size);
             occlusionFieldBakeCompute.SetInts(s_resolution, resolution.x, resolution.y, resolution.z);

@@ -3,9 +3,9 @@ using UnityEngine.Serialization;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Bakes the signed distance field for a volume. This is the foundational bake:
-    /// shadows and AO read the hi-res SDF directly, and the occlusion/material bakers
-    /// read it too, so this baker runs first (BakeOrder 0).
+    /// Bakes the signed distance field for a volume, stored on a sibling <see cref="VoxelSdfField"/>.
+    /// This is the foundational bake: shadows and AO read the hi-res SDF directly, and the occlusion
+    /// bakers read it too, so this baker runs first (BakeOrder 0).
     /// </summary>
     [AddComponentMenu("Lotec/Voxel Lighting/Bakers/Voxel SDF Baker")]
     public class VoxelSdfBaker : VoxelBakerBase {
@@ -18,13 +18,6 @@ namespace Lotec.Lighting {
         [Tooltip("Which SDF bake to use. Exact is the reference; JFA is an approximate alternative kept for evaluation.")]
         [FormerlySerializedAs("sdfBakerMode")]
         public SdfBakeMode sdfBakeMode = SdfBakeMode.Exact;
-
-        [Tooltip("Also bake a low-res SDF used by GI. Disable for direct-lighting-only setups that never run GI.")]
-        public bool bakeLowres = true;
-
-        [Tooltip("Downscale factor to produce the low-res SDF used by GI.")]
-        [Range(1, 6)]
-        public int LowresDownscaleFactor = 2;
 
         [FormerlySerializedAs("_sdfBaker")]
         [SerializeField] ExactSdfBake _exactBake = new ExactSdfBake();
@@ -49,13 +42,12 @@ namespace Lotec.Lighting {
 
             if (!bake.TryBake(volume, volume.TrimmedMaxResolution, volume.BakeRoot.name, out Texture3D bakedSdf, out error))
                 return false;
-            volume.sdfHiresTexture = bakedSdf;
 
-            if (bakeLowres) {
-                if (!bake.TryBake(volume, volume.TrimmedMaxResolution / LowresDownscaleFactor, volume.BakeRoot.name + "_Lowres", out Texture3D bakedLowres, out error))
-                    return false;
-                volume.sdfLowresTexture = bakedLowres;
-            }
+            // Store the baked hi-res SDF on its component (added if missing), mirroring the other
+            // per-volume field binders - the volume no longer holds baked field data itself.
+            if (!volume.TryGetComponent(out VoxelSdfField sdfField))
+                sdfField = volume.gameObject.AddComponent<VoxelSdfField>();
+            sdfField.sdfTexture = bakedSdf;
 
             return true;
         }

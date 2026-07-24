@@ -10,27 +10,32 @@
 
 // Everything here is scoped to the GI_VOXEL_BUFFER variant. VoxelLit includes this header
 // unconditionally but only calls into it under GI_VOXEL_BUFFER, so the other variants
-// (GI_OFF / GI_VOXEL_TEXTURE) must not carry these fragment-stage StructuredBuffers: WebGPU
+// (GI_OFF / GI_UNITY) must not carry these fragment-stage StructuredBuffers: WebGPU
 // validates every declared global against the bound pipeline layout and fails pipeline creation
 // for a variant that declares _Occupancy / _Irradiance while they are unbound (null). D3D11/Vulkan
 // silently strip/tolerate them, which is why this only bites in a WebGPU (browser) build.
 #if defined(GI_VOXEL_BUFFER)
 
 #include "BufferGiField.hlsl"
+// GetShadowFromSdf, for the per-field Sdf shadow mode. Self-contained like the other shadow-source
+// headers; the include guard makes it a no-op after VoxelDirectLighting's earlier include, and it
+// declares no NEW global here - _SdfHires is already declared unconditionally in every variant via
+// that same header (so this adds nothing to the WebGPU pipeline-layout surface).
+#include "VoxelSdfShadows.hlsl"
 
 // Bound as globals by BufferGiUpdater. The buffers are concatenated over all fields (coarse at
 // offset 0, fine at offset BGI_COUNT); the *fine* field's bounds are the shared _BgiGrid* (above).
-// Occupancy is the 1-bit/voxel bitfield (8 KB total - trivially cache-resident for the 9 taps);
-// the material buffer is no longer bound to the lit shader at all.
+// Occupancy is the 1-bit/voxel bitfield (grid^3/8 bytes per field); the material buffer is no
+// longer bound to the lit shader at all.
 StructuredBuffer<uint>  _Occupancy;  // 1 bit/voxel solidity - rejects solid probes
 StructuredBuffer<uint2> _Irradiance; // accumulated incoming light (rgb) + sample count (w)
 StructuredBuffer<uint>  _Surface;    // per-voxel surface word - static openness/AO in bits 16-23
 StructuredBuffer<uint2> _Radiance;   // per-solid-voxel outgoing radiance (rgb) + baked sun visibility (w)
 
-// Each field's blurred irradiance, mirrored from the _IrradianceBlur SSBO into a Texture3D by
-// CSCopyIrradianceToTexture. The DEFAULT read path taps these with ONE hardware-trilinear fetch
-// instead of the 9-tap SSBO B-spline (the Adreno win). Bound whenever BufferGI is active
-// (BufferGiUpdater), so they are never unbound WebGPU globals. One per field (fine + coarse).
+// Each field's blurred irradiance, written straight into a Texture3D by CSBlur (fused - no separate
+// copy pass). The DEFAULT read path taps these with ONE hardware-trilinear fetch instead of the 9-tap
+// SSBO B-spline (the Adreno win). Bound whenever BufferGI is active (BufferGiUpdater), so they are
+// never unbound WebGPU globals. One per field (fine + coarse).
 Texture3D<float4> _BgiIrradianceTex;             // fine field
 SamplerState sampler_BgiIrradianceTex;
 Texture3D<float4> _BgiIrradianceTexCoarse;       // coarse field
@@ -50,9 +55,10 @@ float _BgiIntensity;
 // Strength of the baked static AO (0 = off). Darkens the GI in concave/contact regions using the
 // surface voxel's precomputed openness - restores the contact shadowing the omni gather reads weakly.
 float _BgiAoStrength;
-// Voxel sun-shadow mode PER FIELD: 0 = off, 1 = baked (interpolated pre-marched visibility from
-// _Radiance.w), 2 = realtime (per-pixel occupancy DDA toward the sun, like the SDF shadow). The
-// fragment picks fine vs coarse by whether the shading point is inside the fine volume.
+// Sun-shadow mode PER FIELD: 0 = off (caller falls back to its GetShadow source), 1 = baked
+// (interpolated pre-marched visibility from _Radiance.w), 2 = SDF (crisp per-pixel raymarch of the
+// hi-res SDF, VoxelGI-parity, independent of the shadow-source keyword). The fragment picks fine vs
+// coarse by whether the shading point is inside the fine volume.
 int _BgiShadowModeFine;
 int _BgiShadowModeCoarse;
 
@@ -75,10 +81,12 @@ void BgiSelectField(float3 worldPos, out bool insideFine, out float3 origin, out
 // sun-shadow mode is Off). Non-solid / out-of-bounds taps are SKIPPED and the weights RENORMALISED
 // over the solid taps, so a face edge takes the value of the surface voxels actually present.
 //   ao          : AO multiplier for the GI term (1 = no AO), already faded by _BgiAoStrength.
-//   shadow      : interpolated sun visibility (meaningful only when shadowValid is true).
+//   shadow      : sun visibility (meaningful only when shadowValid is true) - the baked value
+//                 interpolated across the face (mode Baked) or the SDF raymarch result (mode Sdf).
 //   shadowValid : false when this field's sun-shadow mode is Off -> caller falls back to its
 //                 GetShadow source (SDF / bitmask / occlusion) for the main light.
-void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, out half ao, out half shadow, out bool shadowValid)
+// lightDir is the direction TOWARD the main light (used only by the Sdf mode's raymarch).
+void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out half ao, out half shadow, out bool shadowValid)
 {
     ao = 1.0h;
     shadow = 1.0h;
@@ -88,9 +96,16 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, out half ao, out half
     int mode = insideFine ? _BgiShadowModeFine : _BgiShadowModeCoarse;
     shadowValid = (mode != 0);
 
+    // SDF mode (2): resolve the sun shadow with a crisp per-pixel raymarch of the hi-res SDF - the
+    // same march the material's SDF shadow source uses, but selected per BufferGI field and NOT gated
+    // by the shadow-source keyword. It's independent of the face read (which still runs below for AO).
+    bool sdfShadow = (mode == 2);
+    if (sdfShadow)
+        shadow = GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
+
     bool wantAo = _BgiAoStrength > 0.0;
-    bool wantShadow = shadowValid;
-    if (!wantAo && !wantShadow) return; // nothing to gather
+    bool wantShadow = shadowValid && !sdfShadow; // Sdf resolved above; only Baked reads the face plane
+    if (!wantAo && !wantShadow) return; // nothing left to gather from the face plane
 
     // Face plane: the dominant normal axis is fixed; u,v are the two in-plane axes we interpolate over.
     float3 aN = abs(normal);
@@ -145,7 +160,7 @@ float3 BgiSampleField(float3 worldPos, float3 normal, float3 origin, float3 voxe
     // STRIDES: BgiIndex is x | y<<L | z<<2L, so one voxel along an axis is a constant add. That lets
     // the tap loop step a flat index instead of rebuilding an int3 coordinate + shift/or per tap.
     // Scale-invariant, so no normalize needed.
-    const int SX = 1, SY = 1 << BGI_GRID_LOG2, SZ = 1 << (BGI_GRID_LOG2 * 2u);
+    int SX = 1, SY = 1 << BGI_GRID_LOG2, SZ = 1 << (BGI_GRID_LOG2 * 2u);
     float3 g = BgiWorldToGridAt(worldPos, origin, voxelSize);
     float3 aN = abs(normal);
     float gN, gU, gV;

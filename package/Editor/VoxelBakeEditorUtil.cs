@@ -25,13 +25,12 @@ namespace Lotec.Lighting.Editor {
 
             Undo.RecordObject(volume, "Bake voxel lighting assets");
 
-            if (volume.sdfHiresTexture != null) {
-                string path = System.IO.Path.Combine(basePath, $"{volume.sdfHiresTexture.name}.asset");
-                volume.sdfHiresTexture = SaveAsset(volume.sdfHiresTexture, path, "SDF");
-            }
-            if (volume.sdfLowresTexture != null) {
-                string path = System.IO.Path.Combine(basePath, $"{volume.sdfLowresTexture.name}.asset");
-                volume.sdfLowresTexture = SaveAsset(volume.sdfLowresTexture, path, "SDF");
+            // The hi-res SDF lives on the VoxelSdfField binder, not the volume.
+            VoxelSdfField sdf = volume.GetComponent<VoxelSdfField>();
+            if (sdf != null && sdf.sdfTexture != null) {
+                string path = System.IO.Path.Combine(basePath, $"{sdf.sdfTexture.name}.asset");
+                sdf.sdfTexture = SaveAsset(sdf.sdfTexture, path, "SDF");
+                EditorUtility.SetDirty(sdf);
             }
             // Bitmask texture lives on the VoxelOcclusionBitmask binder, not the volume.
             VoxelOcclusionBitmask bitmask = volume.GetComponent<VoxelOcclusionBitmask>();
@@ -50,14 +49,6 @@ namespace Lotec.Lighting.Editor {
                 }
                 EditorUtility.SetDirty(occField);
             }
-            // Material field lives on the VoxelMaterialField component, not the volume.
-            VoxelMaterialField material = volume.GetComponent<VoxelMaterialField>();
-            if (material != null && material.materialAlbedoIntensityTexture != null) {
-                string path = System.IO.Path.Combine(basePath, $"{material.materialAlbedoIntensityTexture.name}.asset");
-                material.materialAlbedoIntensityTexture = SaveAsset(material.materialAlbedoIntensityTexture, path, "Material AlbedoIntensity");
-                EditorUtility.SetDirty(material);
-            }
-
             EditorUtility.SetDirty(volume);
             EditorSceneManager.MarkSceneDirty(volume.gameObject.scene);
             Debug.Log($"Voxel lighting bake assets saved for '{volume.gameObject.name}'.", context);

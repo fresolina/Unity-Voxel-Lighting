@@ -47,6 +47,9 @@ namespace Lotec.Lighting {
         static readonly int s_gridOrigin = Shader.PropertyToID("_BgiGridOrigin");
         static readonly int s_gridSize = Shader.PropertyToID("_BgiGridSize");
         static readonly int s_voxelSize = Shader.PropertyToID("_BgiVoxelSize");
+        static readonly int s_bgiGrid = Shader.PropertyToID("_BgiGrid");
+        static readonly int s_bgiGridLog2 = Shader.PropertyToID("_BgiGridLog2");
+        static readonly int s_bgiCount = Shader.PropertyToID("_BgiCount");
         static readonly int s_gridDims = Shader.PropertyToID("_DbgGridDims");
         static readonly int s_stride = Shader.PropertyToID("_DbgStride");
         static readonly int s_cubeFill = Shader.PropertyToID("_DbgCubeFill");
@@ -89,16 +92,16 @@ namespace Lotec.Lighting {
             }
 
             int s = Mathf.Max(1, stride);
-            int g = Mathf.Max(1, BufferGiUpdater.Grid / s);
+            int g = Mathf.Max(1, gi.Grid / s);
             int instanceCount = g * g * g;
             if (instanceCount <= 0) return;
 
-            // Field-specific grid + slice. Coarse is the same 32^3 grid with larger voxels.
+            // Field-specific grid + slice. Coarse is the same cubic grid with larger voxels.
             bool coarse = field == Field.Coarse;
             Vector3 origin = coarse ? gi.CoarseOrigin : gi.GridOrigin;
             Vector3 size = coarse ? gi.CoarseSize : gi.GridSize;
             Vector3 voxelSize = coarse ? gi.CoarseVoxelSize : gi.VoxelSize;
-            int fieldOffset = (coarse ? BufferGiUpdater.CoarseField : BufferGiUpdater.FineField) * BufferGiUpdater.VoxelCount;
+            int fieldOffset = (coarse ? BufferGiUpdater.CoarseField : BufferGiUpdater.FineField) * gi.VoxelCount;
 
             _material.SetBuffer(s_material, gi.MaterialBuffer);
             _material.SetBuffer(s_radiance, gi.RadianceBuffer);
@@ -106,6 +109,10 @@ namespace Lotec.Lighting {
             _material.SetVector(s_gridOrigin, origin);
             _material.SetVector(s_gridSize, size);
             _material.SetVector(s_voxelSize, voxelSize);
+            // Grid resolution constants for BgiIndex/BgiVoxelCenter in the debug shader (shared header).
+            _material.SetInt(s_bgiGrid, gi.Grid);
+            _material.SetInt(s_bgiGridLog2, gi.GridLog2);
+            _material.SetInt(s_bgiCount, gi.VoxelCount);
             _material.SetVector(s_gridDims, new Vector4(g, g, g, 0f));
             _material.SetFloat(s_stride, s);
             _material.SetFloat(s_cubeFill, cubeFill);

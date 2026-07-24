@@ -9,8 +9,8 @@ This repo is a **Unity Package Manager (UPM) package** (`com.lotecsoftware.voxel
 
 ## Repository layout
 - `package/Runtime/` — split by concern:
-  - `Core/` — the always-on plumbing: `LightingManager` (tracks the active `VoxelVolume` and publishes its shader globals — nothing else), `VoxelVolume` (+ its `VoxelVolume.All` self-registry), `MeshBounds`, the `GiMethodSelector` / `ShadowSourceSelector` mutual-exclusion helpers, SDF shadow + AO features and their configs, local-light publishing.
-  - `Gi/` — GI methods and their data: `GiFieldUpdater` (texture / DDGI) and `BufferGiUpdater` (buffer GI), `BufferGiFields` (per-level provider), `AutoExposure`, bake-asset types.
+  - `Core/` — the always-on plumbing: `LightingManager` (tracks the active `VoxelVolume` and publishes its shader globals — nothing else), `VoxelVolume` (+ its `VoxelVolume.All` self-registry), `VoxelSdfField` (holds the baked hi-res SDF; the volume publishes it as `_SdfHires`), `MeshBounds`, the `GiMethodSelector` / `ShadowSourceSelector` mutual-exclusion helpers, the SDF shadow feature + its config, local-light publishing.
+  - `Gi/` — the buffer GI: `BufferGiUpdater`, `BufferGiFields` (per-level provider), `AutoExposure`, bake-asset types.
   - `Occlusion/` — occlusion bitmask / field structures and queries (shadow sources).
   - `Baking/` — editor/runtime bakers; implementation classes are named `*Bake` / `*Baker` and write baked assets scene-adjacent.
   - `Debug/`, `Shaders/`, `Utils/`, `Assets/`.
