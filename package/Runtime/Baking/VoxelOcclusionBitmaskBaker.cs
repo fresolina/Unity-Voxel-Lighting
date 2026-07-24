@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Bakes the directional occlusion bitmask used by the BITMASK_* shadow modes.
+    /// Bakes the directional occlusion bitmask used by the Bitmask buffer-GI shadow mode.
     /// Reads the hi-res SDF, so it runs after <see cref="VoxelSdfBaker"/>.
     /// </summary>
     [AddComponentMenu("Lotec/Voxel Lighting/Bakers/Voxel Occlusion Bitmask Baker")]

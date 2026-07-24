@@ -9,23 +9,17 @@ namespace Lotec.Lighting {
     ///
     /// Added automatically by the bitmask baker when it bakes. This component does NOT run its own
     /// update loop or claim any keyword: <see cref="BufferGiUpdater"/> is the sole driver - it calls
-    /// <see cref="Bind"/> for the field whose ShadowMode is Bitmask (using this holder's <see cref="Sampling"/>
-    /// mode). So there is no idle Update cost, and it can coexist with the occlusion-field holder.
+    /// <see cref="Bind"/> for the field whose ShadowMode is Bitmask. So there is no idle Update cost,
+    /// and it can coexist with the occlusion-field holder. The shader read is always the trilinear
+    /// 8-tap (the old per-voxel Point variant was a keyword path that buffer GI no longer selects).
     /// </summary>
     [RequireComponent(typeof(VoxelVolume))]
     [AddComponentMenu("Lotec/Voxel Lighting/Binders/Voxel Occlusion Bitmask")]
     public class VoxelOcclusionBitmask : MonoBehaviour {
-        public enum Sampling {
-            Point,             // single nearest-direction bit (BITMASK_POINT)
-            TrilinearEightTap, // smoother 2x2x2 trilinear blend (BITMASK_8TAP)
-        }
-
         [Tooltip("Baked directional occlusion bitmask (which directions are occluded per voxel). Written by VoxelOcclusionBitmaskBaker.")]
         public Texture3D occlusionBitmaskTexture;
         [HideInInspector]
         public Vector3[] occlusionBitmaskDirections;
-        [Tooltip("Point = single nearest-direction bit (cheaper). Trilinear 8-tap = smoother 2x2x2 blend.")]
-        public Sampling sampling = Sampling.Point;
 
         static readonly int s_bitmaskTex = Shader.PropertyToID("_BitmaskTex");
         static readonly int s_voxelResolution = Shader.PropertyToID("_VoxelResolution");

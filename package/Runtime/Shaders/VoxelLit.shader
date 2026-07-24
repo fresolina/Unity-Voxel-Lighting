@@ -48,8 +48,6 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // Display-transform tonemap operators (Reinhard / AgX / ACES), selected by _Tonemap.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/Tonemap.hlsl"
 
-            // Shadow source (default = SDF): directional bitmask (point / 8-tap) or occlusion field.
-            #pragma multi_compile __ BITMASK_POINT BITMASK_8TAP OCC_FIELD
             // GI_OFF (default): direct lighting only. GI_VOXEL_BUFFER: the buffer GI read filter
             // (BufferGiUpdater). GI_UNITY: Unity's built-in indirect (SampleSH) - a component-less A/B
             // baseline for measuring the voxel GI's runtime cost against the engine's baked path.
