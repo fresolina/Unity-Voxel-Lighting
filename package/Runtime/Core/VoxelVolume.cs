@@ -70,6 +70,10 @@ namespace Lotec.Lighting {
 
         public Vector3Int TrimmedMaxResolution => _trimmedMaxResolution;
 
+        /// <summary>Maximum voxel resolution along the largest axis (the serialized bake input). The
+        /// buffer GI derives its cubic field resolution from this (snapped to a power of two).</summary>
+        public int MaxResolution => _maxResolution;
+
         /// <summary>Cubic voxel edge length in world units, derived from Bounds and TrimmedMaxResolution.</summary>
         public float VoxelSize => Bounds.size.x / Mathf.Max(1, TrimmedMaxResolution.x);
 

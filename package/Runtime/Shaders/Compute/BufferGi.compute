@@ -593,7 +593,7 @@ void CSAverageLuminance(uint3 id : SV_DispatchThreadID)
 [numthreads(64, 1, 1)]
 void CSBuildOccupancy(uint3 id : SV_DispatchThreadID)
 {
-    const uint wordsPerField = BGI_COUNT / 32u; // 1024 (= 4 KB per field)
+    const uint wordsPerField = BGI_COUNT / 32u; // grid^3 / 32 (occupancy is word-aligned per field)
     uint w = id.x;
     if (w >= wordsPerField) return;
 

@@ -10,9 +10,10 @@ namespace Lotec.Lighting {
     /// emit/reflect) then gather (air voxels integrate 1 ray/frame with the temporal resolve fused
     /// in) then a blur pass. The lit shader reads it via BgiGatherIndirect (BufferGi.hlsl).
     ///
-    /// All fields are a fixed 32^3 so a voxel index fits in 16 bits and the whole grid stays
-    /// resident in the GPU L2. (Single fine cascade for now; a coarse cascade + scheduler is the
-    /// planned next step.)
+    /// All fields are a cubic grid whose resolution is taken from the active volume's
+    /// VoxelVolume._maxResolution (snapped to a power of two so the shift/mask index math holds);
+    /// the buffers resize when that changes. (Single fine cascade for now; a coarse cascade +
+    /// scheduler is the planned next step.)
     /// </summary>
     [DisallowMultipleComponent]
     [ExecuteAlways]
@@ -20,14 +21,29 @@ namespace Lotec.Lighting {
     // this component's enabled state to switch GI on/off).
     [AddComponentMenu("Lotec/Voxel Lighting/Buffer GI")]
     public class BufferGiUpdater : MonoBehaviour {
-        public const int Grid = 32;
-        public const int VoxelCount = Grid * Grid * Grid; // 32768 per field
         // Concatenated fields: 0 = coarse (the big far volume), 1 = fine (the active volume). Coarse
         // is kept at slot 0 so any future fine fields stay contiguous (1..N-1) and just append.
         public const int FieldCount = 2;
-        public const int TotalVoxels = FieldCount * VoxelCount;
         public const int CoarseField = 0;
         public const int FineField = 1;
+
+        // Cubic grid resolution, derived from the active volume's VoxelVolume._maxResolution and
+        // snapped to a power of two (the index math is shift/mask based). Instance state now: it
+        // changes when the active volume changes, forcing a buffer reallocation. Defaults mirror the
+        // historical fixed 32^3 until a volume is resolved.
+        int _grid = 32;
+        int _gridLog2 = 5;
+        int _voxelCount = 32 * 32 * 32;   // Grid^3 per field
+        int _totalVoxels = FieldCount * 32 * 32 * 32;
+
+        /// <summary>Cubic grid resolution of each field (power of two, from VoxelVolume._maxResolution).</summary>
+        public int Grid => _grid;
+        /// <summary>log2(Grid) - the shift amount for the linear&lt;-&gt;3D index math.</summary>
+        public int GridLog2 => _gridLog2;
+        /// <summary>Voxels per field (Grid^3).</summary>
+        public int VoxelCount => _voxelCount;
+        /// <summary>Voxels across all concatenated fields (FieldCount * VoxelCount).</summary>
+        public int TotalVoxels => _totalVoxels;
 
         // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGi.hlsl). Off = fall
         // through to the material's shadow source (SDF/bitmask/occ); Baked = read the solve's
@@ -236,7 +252,7 @@ namespace Lotec.Lighting {
         /// <summary>Display-transform controller (exposure + tonemap), e.g. to toggle in-shader tonemap from a UI.</summary>
         public AutoExposure ExposureControl => _exposureControl;
 
-        // Coarse field: a scene-covering MeshBounds (32^3 grid, larger voxels). Falls back to the
+        // Coarse field: a scene-covering MeshBounds (same cubic grid, larger voxels). Falls back to the
         // fine bounds when unassigned so the read/visualizer degrade gracefully (empty slice -> 0).
         // MeshBounds is tight, so grow it by a border of coarse grid cells here (geometry exactly
         // on the boundary sits in half-clipped voxels): solving size' = size + 2*P*(size'/G) gives
@@ -245,7 +261,8 @@ namespace Lotec.Lighting {
         Bounds CoarseWorldBounds {
             get {
                 Bounds b = _fields.CoarseField.Bounds;
-                b.size *= Grid / (Grid - 2f * CoarsePaddingVoxels);
+                // max(1) guards the pathological tiny-grid case (G <= 2P) from an Inf/negative scale.
+                b.size *= Grid / Mathf.Max(1f, Grid - 2f * CoarsePaddingVoxels);
                 return b;
             }
         }
@@ -273,6 +290,9 @@ namespace Lotec.Lighting {
         static readonly int s_gridSize = Shader.PropertyToID("_BgiGridSize");
         static readonly int s_voxelSize = Shader.PropertyToID("_BgiVoxelSize");
         static readonly int s_fieldOffset = Shader.PropertyToID("_FieldOffset");
+        static readonly int s_bgiGrid = Shader.PropertyToID("_BgiGrid");
+        static readonly int s_bgiGridLog2 = Shader.PropertyToID("_BgiGridLog2");
+        static readonly int s_bgiCount = Shader.PropertyToID("_BgiCount");
         static readonly int s_coarseOrigin = Shader.PropertyToID("_BgiCoarseOrigin");
         static readonly int s_coarseVoxelSize = Shader.PropertyToID("_BgiCoarseVoxelSize");
         static readonly int s_confidence = Shader.PropertyToID("_Confidence");
@@ -372,6 +392,42 @@ namespace Lotec.Lighting {
             _prevSunColor = sun != null ? (Vector4)sun.color * sun.intensity : Vector4.zero;
         }
 
+        // BufferGI needs a power-of-two cubic grid (the shift/mask index math + the word-aligned
+        // occupancy bitfield both require it). Snap the volume's _maxResolution to the nearest power
+        // of two and clamp to a sane range. Grid >= 4 guarantees Grid^3 is a multiple of 32.
+        static int SnapGridResolution(int maxResolution) {
+            return Mathf.Clamp(Mathf.ClosestPowerOfTwo(Mathf.Max(4, maxResolution)), 4, 256);
+        }
+
+        // Set the cubic grid resolution and the derived counts/log2. Caller reallocates the buffers.
+        void SetGridResolution(int grid) {
+            _grid = grid;
+            _gridLog2 = 0;
+            while ((1 << _gridLog2) < grid) _gridLog2++;
+            _voxelCount = grid * grid * grid;
+            _totalVoxels = FieldCount * _voxelCount;
+        }
+
+        // Match the grid resolution to the active volume's _maxResolution; on a change, release the
+        // buffers so they re-alloc + re-bake at the new size. Safe to call whenever _volume is set.
+        void SyncGridResolution() {
+            if (_volume == null) return;
+            int grid = SnapGridResolution(_volume.MaxResolution);
+            if (grid == _grid) return;
+            SetGridResolution(grid);
+            ReleaseBuffers();
+        }
+
+        // Publish the grid resolution constants to the compute shader (the shader's BgiIndex/BgiCoord/
+        // occupancy math reads them). They only change when the grid does, but re-setting each frame is
+        // cheap and keeps the shared _computeShader asset in sync regardless of dispatch ordering.
+        void BindGridConstantsToCompute() {
+            if (_computeShader == null) return;
+            _computeShader.SetInt(s_bgiGrid, _grid);
+            _computeShader.SetInt(s_bgiGridLog2, _gridLog2);
+            _computeShader.SetInt(s_bgiCount, _voxelCount);
+        }
+
         void Update() {
             VoxelVolume active = Manager != null ? Manager.Volume : null;
             if (active != _volume) {
@@ -408,8 +464,15 @@ namespace Lotec.Lighting {
             }
             _hasLoggedMissingReferences = false;
 
+            // Resolve the cubic grid resolution from the active volume (snapped to a power of two). A
+            // change (new volume with a different _maxResolution, or an inspector edit) forces a cold
+            // realloc at the new size (overrides any warm switch above), since every buffer and the
+            // shader index math depend on it.
+            SyncGridResolution();
+
             SyncBakeInputs();
             EnsureInitialized();
+            BindGridConstantsToCompute();
             if (!_materialBaked) {
                 Voxelize();
             }
@@ -483,6 +546,10 @@ namespace Lotec.Lighting {
 
         // Publish the buffers + grid mapping + confidence the lit shader's BgiGatherIndirect reads.
         void SetGlobals() {
+            // Grid resolution constants for the fragment index math (shared by both fields).
+            Shader.SetGlobalInt(s_bgiGrid, _grid);
+            Shader.SetGlobalInt(s_bgiGridLog2, _gridLog2);
+            Shader.SetGlobalInt(s_bgiCount, _voxelCount);
             // Fragment solidity = the 8 KB bitfield; _Material is no longer bound to the lit shader.
             Shader.SetGlobalBuffer(s_occupancy, _occupancyBuffer);
             // Surface word for the fragment's static AO (openness in bits 16-23).
@@ -581,7 +648,7 @@ namespace Lotec.Lighting {
         }
 
         // Groups to cover ONE field's voxels (each field is dispatched separately with its offset).
-        static int Groups => Mathf.CeilToInt(VoxelCount / 64f);
+        int Groups => Mathf.CeilToInt(_voxelCount / 64f);
 
         void ClearDynamicFields() {
             for (int f = 0; f < FieldCount; f++) ClearField(f * VoxelCount);
@@ -729,6 +796,10 @@ namespace Lotec.Lighting {
                 Debug.LogError("Buffer GI can't capture a field bake: the field has no mesh root.", this);
                 return false;
             }
+            // Resolve the grid from the active volume before allocating (the bake button releases the
+            // buffers first and doesn't wait for Update, so _grid could be stale). All fields share the
+            // active volume's snapped resolution.
+            SyncGridResolution();
             // Force valid buffers up front - the editor pump may not have run EnsureInitialized yet
             // (freshly enabled, or just after a domain reload), and RasterizeFieldSlice needs them.
             EnsureInitialized();
@@ -905,6 +976,10 @@ namespace Lotec.Lighting {
             cmd.SetGlobalVector(s_gridSize, size);
             cmd.SetGlobalVector(s_voxelSize, voxelSize);
             cmd.SetGlobalInt(s_fieldOffset, fieldOffset);
+            // Grid resolution for the voxelizer's bounds check + BgiSlot index math.
+            cmd.SetGlobalInt(s_bgiGrid, _grid);
+            cmd.SetGlobalInt(s_bgiGridLog2, _gridLog2);
+            cmd.SetGlobalInt(s_bgiCount, _voxelCount);
 
             for (int axis = 0; axis < 3; axis++) {
                 cmd.SetGlobalInt(s_voxAxis, axis);

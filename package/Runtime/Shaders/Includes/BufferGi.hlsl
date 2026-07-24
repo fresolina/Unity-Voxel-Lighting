@@ -25,8 +25,8 @@
 
 // Bound as globals by BufferGiUpdater. The buffers are concatenated over all fields (coarse at
 // offset 0, fine at offset BGI_COUNT); the *fine* field's bounds are the shared _BgiGrid* (above).
-// Occupancy is the 1-bit/voxel bitfield (8 KB total - trivially cache-resident for the 9 taps);
-// the material buffer is no longer bound to the lit shader at all.
+// Occupancy is the 1-bit/voxel bitfield (grid^3/8 bytes per field); the material buffer is no
+// longer bound to the lit shader at all.
 StructuredBuffer<uint>  _Occupancy;  // 1 bit/voxel solidity - rejects solid probes
 StructuredBuffer<uint2> _Irradiance; // accumulated incoming light (rgb) + sample count (w)
 StructuredBuffer<uint>  _Surface;    // per-voxel surface word - static openness/AO in bits 16-23
@@ -160,7 +160,7 @@ float3 BgiSampleField(float3 worldPos, float3 normal, float3 origin, float3 voxe
     // STRIDES: BgiIndex is x | y<<L | z<<2L, so one voxel along an axis is a constant add. That lets
     // the tap loop step a flat index instead of rebuilding an int3 coordinate + shift/or per tap.
     // Scale-invariant, so no normalize needed.
-    const int SX = 1, SY = 1 << BGI_GRID_LOG2, SZ = 1 << (BGI_GRID_LOG2 * 2u);
+    int SX = 1, SY = 1 << BGI_GRID_LOG2, SZ = 1 << (BGI_GRID_LOG2 * 2u);
     float3 g = BgiWorldToGridAt(worldPos, origin, voxelSize);
     float3 aN = abs(normal);
     float gN, gU, gV;
