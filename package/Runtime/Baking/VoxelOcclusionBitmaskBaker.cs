@@ -24,6 +24,10 @@ namespace Lotec.Lighting {
                 binder = volume.gameObject.AddComponent<VoxelOcclusionBitmask>();
             binder.occlusionBitmaskTexture = baked;
             binder.occlusionBitmaskDirections = directions;
+
+            // Push the fresh bake to the buffer-GI driver so the Bitmask ShadowMode reflects it in edit
+            // mode right away (the holder is passive now - the updater publishes it).
+            BufferGiUpdater.RefreshOcclusionSourcesFor(volume);
             return true;
         }
 

@@ -34,7 +34,7 @@
                         <ui:DataBinding property="value" data-source-path="SsboRead" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:Toggle>
-                <ui:EnumField label="Shadow Mode" value="Baked" type="Lotec.Lighting.Samples.LightingController+ShadowUiMode, Assembly-CSharp" name="shadow-mode-enum" tooltip="Baked: BufferGI fine-field voxel sun-shadow (pre-marched, soft, cheap). Others: the volume shadow source used by the SDF/texture shadow path." class="setting-field">
+                <ui:EnumField label="Shadow Mode" value="Baked" type="Lotec.Lighting.Samples.LightingController+ShadowUiMode, Assembly-CSharp" name="shadow-mode-enum" tooltip="Buffer-GI fine-field sun shadow. Off: none. Baked: pre-marched voxel visibility (soft, cheap). SDF: per-pixel raymarch (crisp). OcclusionField / Bitmask: the volume's baked occlusion source (needs its bake)." class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="ShadowMode" binding-mode="TwoWay"/>
                     </Bindings>

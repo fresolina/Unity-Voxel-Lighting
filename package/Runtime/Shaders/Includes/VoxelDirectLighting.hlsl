@@ -26,10 +26,10 @@ float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
 float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 
 // Resolve the shadow term for a surface point. Defaults to SDF; the bitmask / occlusion-field modes
-// are selected by their compile-time keywords. Under the buffer GI the per-field baked voxel sun-shadow
-// is resolved in the fragment alongside the baked AO (one shared face read - see BgiSampleFaceAoShadow)
-// and fed to GetMainDirectLightingShadow, so it does NOT route through here; this only serves the main
-// light when the buffer sun-shadow is Off (falls through to SDF/bitmask/occ) plus all local lights.
+// are selected by their compile-time keywords. Under the buffer GI the main-light sun-shadow is
+// resolved entirely by BgiSampleFaceAoShadow (Off = none, Baked, or Sdf) and fed to
+// GetMainDirectLightingShadow, so the main light NEVER routes through here (Off means no shadow, not a
+// fall-through); this serves the non-buffer GI modes' main light plus all local lights.
 inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal) {
     #if defined(OCC_FIELD)
         return GetOccFieldShadow(worldPos, normal);

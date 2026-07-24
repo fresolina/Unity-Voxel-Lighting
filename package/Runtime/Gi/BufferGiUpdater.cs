@@ -45,13 +45,18 @@ namespace Lotec.Lighting {
         /// <summary>Voxels across all concatenated fields (FieldCount * VoxelCount).</summary>
         public int TotalVoxels => _totalVoxels;
 
-        // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGi.hlsl). Off = fall
-        // through to the material's shadow source (SDF/bitmask/occ); Baked = read the solve's
-        // pre-marched sun visibility (radiance.w), interpolated across the face; Sdf = a crisp
-        // per-pixel raymarch of the hi-res SDF (VoxelGI-parity), selected per field and independent
-        // of the shadow-source keyword. Sdf needs an SDF baked on the volume (VoxelSdfBaker); it has
-        // no effect where the SDF doesn't reach (e.g. the coarse field beyond the fine bounds).
-        public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2 }
+        // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGi.hlsl). Each field picks
+        // its main-light sun shadow explicitly - nothing is a hidden fall-through:
+        //   Off (0)            : genuinely NO sun shadow (full direct light).
+        //   Baked (1)          : the solve's pre-marched sun visibility (radiance.w), interpolated - soft, cheap.
+        //   Sdf (2)            : crisp per-pixel raymarch of the hi-res SDF; needs an SDF baked on the volume.
+        //   OcclusionField (3) : the volume's baked per-direction occlusion field.
+        //   Bitmask (4)        : the volume's baked directional occlusion bitmask.
+        // Sdf/OcclusionField/Bitmask each need their matching source present on the volume (a baked SDF,
+        // or the occlusion-field / bitmask binder) so the textures they read are bound - otherwise they
+        // read unbound data. They also have no effect where their source doesn't reach (e.g. the coarse
+        // field beyond the fine SDF bounds).
+        public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2, OcclusionField = 3, Bitmask = 4 }
 
         public static BufferGiUpdater Instance { get; private set; }
 
@@ -94,16 +99,19 @@ namespace Lotec.Lighting {
                  "voxel's precomputed openness - restores contact shadowing the omnidirectional gather " +
                  "reads only weakly. Requires a re-bake to recompute openness after a geometry change.")]
         [Range(0f, 1f)][SerializeField] float _aoStrength;
-        [Tooltip("Sun-shadow for the FINE volume (the active, detailed field).\n Off: fall through to " +
-                 "the material's shadow source.\n Baked: the solve's pre-marched sun visibility, " +
-                 "interpolated across the surface - soft and cheap (no per-pixel ray).\n Sdf: a crisp " +
-                 "per-pixel raymarch of the hi-res SDF (VoxelGI-parity) - needs an SDF baked on the " +
-                 "volume. It replaces the material's shadow source where active.")]
+        [Tooltip("Sun-shadow for the FINE volume (the active, detailed field). None fall through - each " +
+                 "is explicit.\n Off: no sun shadow at all - full direct light.\n Baked: the solve's " +
+                 "pre-marched sun visibility, interpolated across the surface - soft and cheap (no " +
+                 "per-pixel ray).\n Sdf: a crisp per-pixel raymarch of the hi-res SDF - needs an SDF " +
+                 "baked on the volume.\n OcclusionField / Bitmask: the volume's baked occlusion source - " +
+                 "needs the matching occlusion binder active on the volume.")]
         [SerializeField] ShadowMode _fineShadow = ShadowMode.Off;
-        [Tooltip("Sun-shadow for the COARSE volume (the big far field the SDF shadow can't reach).\n " +
-                 "Off: fall through to the material's shadow source.\n Baked: the solve's pre-marched " +
-                 "sun visibility, interpolated - the cheap way to get far shadows.\n Sdf: has no effect " +
-                 "here (the SDF only covers the fine bounds); use Baked for the far field.")]
+        [Tooltip("Sun-shadow for the COARSE volume (the big far field the SDF shadow can't reach). None " +
+                 "fall through - each is explicit.\n Off: no sun shadow at all - full direct light.\n " +
+                 "Baked: the solve's pre-marched sun visibility, interpolated - the cheap way to get far " +
+                 "shadows.\n Sdf: has no effect here (the SDF only covers the fine bounds); use Baked for " +
+                 "the far field.\n OcclusionField / Bitmask: the volume's baked occlusion source, if its " +
+                 "binder covers the far field.")]
         [SerializeField] ShadowMode _coarseShadow = ShadowMode.Off;
         [Tooltip("A/B: read the GI from the original StructuredBuffer gather instead of the mirrored " +
                  "irradiance texture (keyword BGI_SSBO_READ). Off (default) = one hardware-trilinear " +
@@ -167,6 +175,10 @@ namespace Lotec.Lighting {
         // The fine field's volume (the manager's active volume); its Bounds already carry the
         // volume's own border, so the fine grid uses them as-is.
         VoxelVolume _volume;
+        // Baked occlusion sources on the fine volume, resolved on volume switch. The OcclusionField /
+        // Bitmask ShadowModes publish these on demand (SetGlobals); the holders no longer self-drive.
+        VoxelOcclusionField _occField;
+        VoxelOcclusionBitmask _occBitmask;
         Material _voxelizeMaterial;
         uint[] _materialClear;   // TotalVoxels zeros (whole-buffer clear)
         uint[] _fullReadback;    // TotalVoxels scratch for whole-buffer GetData during per-field capture
@@ -443,6 +455,10 @@ namespace Lotec.Lighting {
                 // teardown (null) falls back to a full cold-start (re)init.
                 bool warmSwitch = _volume != null && active != null && _irradianceBuffer != null;
                 _volume = active;
+                // Resolve the fine volume's baked occlusion holders once per switch (SetGlobals binds
+                // whichever the shadow modes ask for). These are per-pixel, fine-volume-bound sources.
+                _occField = active != null ? active.GetComponent<VoxelOcclusionField>() : null;
+                _occBitmask = active != null ? active.GetComponent<VoxelOcclusionBitmask>() : null;
                 // Pull this level's coarse field + disk bakes from its BufferGiFields (the fine field
                 // is the active volume itself). Null for a fine-only, runtime-voxelized level.
                 _fields = BufferGiFields.Find(active);
@@ -579,6 +595,7 @@ namespace Lotec.Lighting {
             Shader.SetGlobalBuffer(s_radiance, _radianceBuffer);
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
+            PublishOcclusionSources();
             // Mirrored irradiance textures (the default fragment read source), one per field.
             Shader.SetGlobalTexture(s_bgiIrradianceTex, _irradianceTex);
             Shader.SetGlobalTexture(s_bgiIrradianceTexCoarse, _irradianceTexCoarse);
@@ -586,6 +603,41 @@ namespace Lotec.Lighting {
             else Shader.DisableKeyword(SsboReadKeyword);
             // The display transform (_Exposure + _Tonemap) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value can't darken it.
+        }
+
+        // Publish the baked occlusion globals for whichever per-pixel occlusion mode a field asks for.
+        // BufferGiUpdater is the sole driver here: the holders no longer self-drive, so nothing is bound
+        // (and no idle Update runs) unless a ShadowMode selects it. OcclusionField / Bitmask are
+        // fine-volume-bound - meaningful for the fine field; the coarse field is a different volume, so
+        // Off / Baked are its only coherent modes (a coarse OcclusionField tap lands outside this
+        // texture -> lit). The two publish disjoint globals, so both can be bound the same frame.
+        void PublishOcclusionSources() {
+            // Lazy-resolve when a mode wants a holder we don't have cached yet: a holder AddComponent'd by
+            // its baker after the last volume switch would otherwise stay unseen until a play-mode reload.
+            // GetComponent only fires while the ref is null, so this stays free once resolved.
+            if (_fineShadow == ShadowMode.OcclusionField || _coarseShadow == ShadowMode.OcclusionField) {
+                if (_occField == null && _volume != null) _occField = _volume.GetComponent<VoxelOcclusionField>();
+                if (_occField != null && _occField.HasData) _occField.Bind();
+            }
+            if (_fineShadow == ShadowMode.Bitmask || _coarseShadow == ShadowMode.Bitmask) {
+                if (_occBitmask == null && _volume != null) _occBitmask = _volume.GetComponent<VoxelOcclusionBitmask>();
+                if (_occBitmask != null && _occBitmask.HasData) _occBitmask.Bind();
+            }
+        }
+
+        /// <summary>Re-resolve + republish the baked occlusion holders for the updater driving
+        /// <paramref name="volume"/>. Called by the occlusion bakers so a fresh bake shows in edit mode
+        /// immediately, without entering play: the holders no longer self-publish, and a just-baked
+        /// (newly added) holder isn't in the switch-time cache yet.</summary>
+        public static void RefreshOcclusionSourcesFor(VoxelVolume volume) {
+            if (volume == null) return;
+            BufferGiUpdater[] updaters = FindObjectsByType<BufferGiUpdater>(FindObjectsSortMode.None);
+            for (int i = 0; i < updaters.Length; i++) {
+                if (updaters[i]._volume != volume) continue;
+                updaters[i]._occField = volume.GetComponent<VoxelOcclusionField>();
+                updaters[i]._occBitmask = volume.GetComponent<VoxelOcclusionBitmask>();
+                updaters[i].PublishOcclusionSources();
+            }
         }
 
         bool IsReady(out string reason) {

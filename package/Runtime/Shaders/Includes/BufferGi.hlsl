@@ -22,6 +22,10 @@
 // declares no NEW global here - _SdfHires is already declared unconditionally in every variant via
 // that same header (so this adds nothing to the WebGPU pipeline-layout surface).
 #include "VoxelSdfShadows.hlsl"
+// GetOccFieldShadow / GetBitmaskShadow, for the per-field OcclusionField / Bitmask shadow modes. Same
+// deal: guarded (no-op after VoxelDirectLighting's earlier unconditional include) and declares no NEW
+// global - _OccFieldTex / _BitmaskTex are already declared unconditionally in every variant via it.
+#include "VoxelOcclusion.hlsl"
 
 // Bound as globals by BufferGiUpdater. The buffers are concatenated over all fields (coarse at
 // offset 0, fine at offset BGI_COUNT); the *fine* field's bounds are the shared _BgiGrid* (above).
@@ -99,27 +103,34 @@ half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
 // sun-shadow mode is Off). Non-solid / out-of-bounds taps are SKIPPED and the weights RENORMALISED
 // over the solid taps, so a face edge takes the value of the surface voxels actually present.
 //   ao          : AO multiplier for the GI term (1 = no AO), already faded by _BgiAoStrength.
-//   shadow      : sun visibility (meaningful only when shadowValid is true) - the baked value
-//                 interpolated across the face (mode Baked) or the SDF raymarch result (mode Sdf).
-//   shadowValid : false when this field's sun-shadow mode is Off -> caller falls back to its
-//                 GetShadow source (SDF / bitmask / occlusion) for the main light.
+//   shadow      : main-light sun visibility. This function is the SOLE authority for the buffer-GI
+//                 main-light shadow: Off (0) leaves it 1.0 = OFF means genuinely no sun shadow (full
+//                 direct light), NOT a fall-through to any other shadow source; Baked (1) is the baked
+//                 value interpolated across the face; Sdf (2) is the per-pixel SDF raymarch result.
 // lightDir is the direction TOWARD the main light (used only by the Sdf mode's raymarch).
-void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out half ao, out half shadow, out bool shadowValid)
+void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out half ao, out half shadow)
 {
     ao = 1.0h;
-    shadow = 1.0h;
+    shadow = 1.0h; // Off (mode 0) keeps this: no sun shadow, full direct light.
 
     bool insideFine; float3 origin, voxelSize; uint baseOffset;
     BgiSelectField(worldPos, insideFine, origin, voxelSize, baseOffset);
     int mode = insideFine ? _BgiShadowModeFine : _BgiShadowModeCoarse;
-    shadowValid = (mode != 0);
 
-    // SDF mode (2): resolve the sun shadow with a crisp per-pixel raymarch of the hi-res SDF - the
-    // same march the material's SDF shadow source uses, but selected per BufferGI field and NOT gated
-    // by the shadow-source keyword. It's independent of the face read (which still runs below for AO).
-    bool sdfShadow = (mode == 2);
-    if (sdfShadow)
-        shadow = GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
+    // External per-pixel shadow sources - resolved directly here, independent of the face read below
+    // (which then runs only for AO, or for the SSBO-read Baked path). Selected per BufferGI field and
+    // NOT gated by the shadow-source keyword:
+    //   Sdf (2)            : crisp per-pixel raymarch of the hi-res SDF (needs a baked SDF on the volume).
+    //   OcclusionField (3) : the volume's baked per-direction occlusion field (needs its occlusion binder).
+    //   Bitmask (4)        : the volume's baked directional occlusion bitmask (needs its occlusion binder).
+    // The occlusion modes read the same _OccFieldTex / _BitmaskTex the material's GetShadow source uses,
+    // so the matching occlusion binder must be active for their textures to be bound (like Sdf/SDF).
+    // saturate() on the occlusion sources: keeps them in [0,1] and, crucially, maps a NaN (e.g. an
+    // occlusion binder that isn't fully publishing its grid uniforms) to 0 rather than letting it
+    // poison the whole fragment to black - a mis-bound source then reads as "fully shadowed", not a crash.
+    if (mode == 2)      shadow = GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
+    else if (mode == 3) shadow = saturate((half)GetOccFieldShadow(worldPos, normal));
+    else if (mode == 4) shadow = saturate((half)GetBitmaskShadow(worldPos, normal));
 
     // BAKED mode (1): on the default texture read path, resolve it as ONE hardware trilinear tap of the
     // mirror texture's alpha (the air-layer sun visibility), NOT a StructuredBuffer face read - that's
@@ -134,8 +145,8 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out 
 #endif
 
     bool wantAo = _BgiAoStrength > 0.0;
-    bool wantShadow = shadowValid && bakedShadow; // SDF resolved above, Baked resolved via texture;
-                                                  // only the SSBO-read path still reads shadow here
+    bool wantShadow = bakedShadow; // Off/Sdf resolved above (or 1.0); only the SSBO-read Baked path
+                                   // still reads the shadow from the face plane here
     if (!wantAo && !wantShadow) return; // nothing left to gather from the face plane
 
     // Face plane: the dominant normal axis is fixed; u,v are the two in-plane axes we interpolate over.

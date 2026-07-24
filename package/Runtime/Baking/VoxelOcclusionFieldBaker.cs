@@ -27,6 +27,9 @@ namespace Lotec.Lighting {
             binder.occlusionFieldTextures = fieldTextures;
             binder.occlusionFieldDirections = fieldDirections;
 
+            // Push the fresh bake to the buffer-GI driver so the OcclusionField ShadowMode reflects it in
+            // edit mode right away (the holder is passive now - the updater publishes it).
+            BufferGiUpdater.RefreshOcclusionSourcesFor(volume);
             return true;
         }
 
