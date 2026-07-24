@@ -66,7 +66,6 @@ namespace Lotec.Lighting.Samples {
         string _frameTimeLastSecondAverageText = UnavailableFrameTimeText;
         string _fpsText = UnavailableFpsText;
         GiMethod _lastGiMethod;
-        GiFieldUpdater.LightingMethod _lastLightingMethod;
         ShadowUiMode _lastShadowMode;
         int _lastSamplesPerFrame;
         float _lastConfidenceCurve;
@@ -162,10 +161,6 @@ namespace Lotec.Lighting.Samples {
                 _uiFolded = !_uiFolded;
                 SetFolded(_uiFolded);
                 BufferGiDebugUi.SetFolded(_uiFolded);
-            }
-
-            if (_keyboard.backquoteKey.wasPressedThisFrame) {
-                GiFieldUpdater.Instance?.ToggleLightingMethod();
             }
         }
 
@@ -295,7 +290,6 @@ namespace Lotec.Lighting.Samples {
 
 
             EnumField giField = root.Q<EnumField>("gi-enum");
-            EnumField giMethodField = root.Q<EnumField>("lighting-method-enum");
             EnumField shadowModeField = root.Q<EnumField>("shadow-mode-enum");
             SliderInt samplesPerFrameSlider = root.Q<SliderInt>("samples-per-frame-slider");
             Slider confidenceCurveSlider = root.Q<Slider>("confidence-curve-slider");
@@ -303,7 +297,7 @@ namespace Lotec.Lighting.Samples {
             Toggle ssboReadToggle = root.Q<Toggle>("ssbo-read-toggle");
             EnumField tonemapField = root.Q<EnumField>("tonemap-enum");
 
-            if (giField == null || giMethodField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || ssboReadToggle == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
+            if (giField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || ssboReadToggle == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
@@ -343,7 +337,6 @@ namespace Lotec.Lighting.Samples {
         void UnbindUi() {
             if (_boundRoot != null) {
                 _boundRoot.Q<EnumField>("gi-enum")?.ClearBindings();
-                _boundRoot.Q<EnumField>("lighting-method-enum")?.ClearBindings();
                 _boundRoot.Q<EnumField>("shadow-mode-enum")?.ClearBindings();
                 _boundRoot.Q<SliderInt>("samples-per-frame-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("confidence-curve-slider")?.ClearBindings();
@@ -375,22 +368,6 @@ namespace Lotec.Lighting.Samples {
             get => GiMethodSelector.Get();
             set {
                 GiMethodSelector.Set(value);
-                RefreshUi(true);
-            }
-        }
-
-        [CreateProperty]
-        GiFieldUpdater.LightingMethod LightingMethod {
-            get {
-                GiFieldUpdater gi = GiFieldUpdater.Instance;
-                return gi != null ? gi.GiLightingMethod : GiFieldUpdater.LightingMethod.PathTracing;
-            }
-            set {
-                GiFieldUpdater gi = GiFieldUpdater.Instance;
-                if (gi == null || !gi.SetLightingMethod(value)) {
-                    return;
-                }
-
                 RefreshUi(true);
             }
         }
@@ -504,27 +481,14 @@ namespace Lotec.Lighting.Samples {
         [CreateProperty]
         AutoExposure.TonemapMode Tonemap {
             get {
-                // Only the ACTIVE GI method exposes an Instance (the other is disabled). Report
-                // whichever is running; prefer the buffer GI if both somehow exist.
                 BufferGiUpdater buffer = BufferGiUpdater.Instance;
-                if (buffer != null) {
-                    return buffer.ExposureControl.Tonemap;
-                }
-
-                GiFieldUpdater texture = GiFieldUpdater.Instance;
-                return texture != null ? texture.ExposureControl.Tonemap : AutoExposure.TonemapMode.Reinhard;
+                return buffer != null ? buffer.ExposureControl.Tonemap : AutoExposure.TonemapMode.Reinhard;
             }
             set {
-                // Drive both updaters' display transforms - whichever is the active GI method owns
-                // the shared _Tonemap global, so the UI must reach the texture GI too, not just buffer.
+                // The buffer GI owns the shared _Tonemap global while it is the active GI method.
                 BufferGiUpdater buffer = BufferGiUpdater.Instance;
                 if (buffer != null) {
                     buffer.ExposureControl.Tonemap = value;
-                }
-
-                GiFieldUpdater texture = GiFieldUpdater.Instance;
-                if (texture != null) {
-                    texture.ExposureControl.Tonemap = value;
                 }
 
                 RefreshUi(true);
@@ -621,7 +585,6 @@ namespace Lotec.Lighting.Samples {
 
         void UpdateBindingSnapshot(bool notifyChanges) {
             GiMethod giMethod = Gi;
-            GiFieldUpdater.LightingMethod lightingMethod = LightingMethod;
             ShadowUiMode shadowMode = ShadowMode;
             int samplesPerFrame = SamplesPerFrame;
             float confidenceCurve = ConfidenceCurve;
@@ -631,7 +594,6 @@ namespace Lotec.Lighting.Samples {
 
             if (!_hasBindingSnapshot) {
                 _lastGiMethod = giMethod;
-                _lastLightingMethod = lightingMethod;
                 _lastShadowMode = shadowMode;
                 _lastSamplesPerFrame = samplesPerFrame;
                 _lastConfidenceCurve = confidenceCurve;
@@ -643,7 +605,6 @@ namespace Lotec.Lighting.Samples {
             }
 
             UpdateEnumSnapshot(ref _lastGiMethod, giMethod, notifyChanges, nameof(Gi));
-            UpdateEnumSnapshot(ref _lastLightingMethod, lightingMethod, notifyChanges, nameof(LightingMethod));
             UpdateEnumSnapshot(ref _lastShadowMode, shadowMode, notifyChanges, nameof(ShadowMode));
             UpdateIntSnapshot(ref _lastSamplesPerFrame, samplesPerFrame, notifyChanges, nameof(SamplesPerFrame));
             UpdateFloatSnapshot(ref _lastConfidenceCurve, confidenceCurve, notifyChanges, nameof(ConfidenceCurve));

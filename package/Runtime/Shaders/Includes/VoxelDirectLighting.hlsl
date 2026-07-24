@@ -1,13 +1,12 @@
 #ifndef LOTECSOFTWARE_VOXEL_DIRECT_LIGHTING_INCLUDED
 #define LOTECSOFTWARE_VOXEL_DIRECT_LIGHTING_INCLUDED
 
-// Surface lighting module: direct lighting (sun + local point/spot lights), the selectable
-// shadow source (SDF / bitmask / occlusion field), and SDF ambient occlusion. Self-contained
-// - it includes every shadow/AO header it dispatches to, so the lit shader only needs this.
+// Surface lighting module: direct lighting (sun + local point/spot lights) and the selectable
+// shadow source (SDF / bitmask / occlusion field). Self-contained - it includes every shadow
+// header it dispatches to, so the lit shader only needs this.
 // Assumes the including shader has already included URP Lighting.hlsl (for the Light type).
 
 #include "VoxelSdfShadows.hlsl" // GetShadowFromSdf (default shadow source)
-#include "VoxelSdfAo.hlsl"      // GetAmbientOcclusionFromSdf
 #include "VoxelOcclusion.hlsl"  // GetBitmaskShadow / GetOccFieldShadow (baked shadow sources)
 
 #ifndef MAX_POINT_LIGHTS

@@ -10,7 +10,7 @@
 
 // Everything here is scoped to the GI_VOXEL_BUFFER variant. VoxelLit includes this header
 // unconditionally but only calls into it under GI_VOXEL_BUFFER, so the other variants
-// (GI_OFF / GI_VOXEL_TEXTURE) must not carry these fragment-stage StructuredBuffers: WebGPU
+// (GI_OFF / GI_UNITY) must not carry these fragment-stage StructuredBuffers: WebGPU
 // validates every declared global against the bound pipeline layout and fails pipeline creation
 // for a variant that declares _Occupancy / _Irradiance while they are unbound (null). D3D11/Vulkan
 // silently strip/tolerate them, which is why this only bites in a WebGPU (browser) build.

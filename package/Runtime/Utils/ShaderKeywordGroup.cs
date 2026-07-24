@@ -34,13 +34,12 @@ namespace Lotec.Lighting {
     /// variants consistently (and so it is discoverable which keywords the package owns).
     /// </summary>
     public static class LightingKeywords {
-        /// <summary>GI method (VoxelLit: multi_compile GI_OFF GI_VOXEL_TEXTURE GI_VOXEL_BUFFER
-        /// GI_UNITY). Owned by whichever GI updater component is enabled; the component-less options
-        /// (GI_OFF / GI_UNITY) are driven by GiMethodSelector. GI_UNITY selects Unity's built-in
-        /// indirect (SampleSH) as an A/B performance baseline against the voxel GI.</summary>
-        public static readonly ShaderKeywordGroup Gi = new ShaderKeywordGroup("GI_OFF", "GI_VOXEL_TEXTURE", "GI_VOXEL_BUFFER", "GI_UNITY");
+        /// <summary>GI method (VoxelLit: multi_compile GI_OFF GI_VOXEL_BUFFER GI_UNITY). Owned by the
+        /// buffer GI updater component when enabled; the component-less options (GI_OFF / GI_UNITY) are
+        /// driven by GiMethodSelector. GI_UNITY selects Unity's built-in indirect (SampleSH) as an A/B
+        /// performance baseline against the voxel GI.</summary>
+        public static readonly ShaderKeywordGroup Gi = new ShaderKeywordGroup("GI_OFF", "GI_VOXEL_BUFFER", "GI_UNITY");
         public const string GiOff = "GI_OFF";
-        public const string GiTexture = "GI_VOXEL_TEXTURE";
         public const string GiBuffer = "GI_VOXEL_BUFFER";
         public const string GiUnity = "GI_UNITY";
 
@@ -97,11 +96,5 @@ namespace Lotec.Lighting {
             s_shadowKeyword = null;
             ShadowSource.Set(null);
         }
-
-        /// <summary>SDF ambient-occlusion quality (VoxelLit: multi_compile __ SDF_AO_LQ SDF_AO_HQ).
-        /// Bare default = off (no keyword). Owned by the SdfAmbientOcclusion component.</summary>
-        public static readonly ShaderKeywordGroup SdfAo = new ShaderKeywordGroup(null, "SDF_AO_LQ", "SDF_AO_HQ");
-        public const string SdfAoLow = "SDF_AO_LQ";
-        public const string SdfAoHigh = "SDF_AO_HQ";
     }
 }

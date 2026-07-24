@@ -4,7 +4,7 @@
 // Universal volume space: the active volume's world-space AABB and the world->[0,1] UVW
 // mapping that every feature (shadows, occlusion, GI) and both stages (fragment + compute)
 // share. Published by the active VoxelVolume. No textures or stage-specific uniforms here -
-// those live in the per-feature headers (e.g. VoxelGiField.hlsl for the GI distance field).
+// those live in the per-feature headers (e.g. VoxelSdfShadows.hlsl for the hi-res SDF).
 float3 _VoxelVolumeBoundsMin;
 float3 _VoxelVolumeBoundsSize;
 

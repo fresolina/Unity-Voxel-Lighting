@@ -14,11 +14,6 @@
                         <ui:DataBinding property="value" data-source-path="Gi" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
-                <ui:EnumField label="Voxel GI Method [§]" value="LPV" type="Lotec.Lighting.GiFieldUpdater+LightingMethod, Lotec.Lighting" name="lighting-method-enum" tooltip="Solve method of the texture Voxel GI (only when GI = VoxelGi)." class="setting-field">
-                    <Bindings>
-                        <ui:DataBinding property="value" data-source-path="LightingMethod" binding-mode="TwoWay"/>
-                    </Bindings>
-                </ui:EnumField>
                 <ui:SliderInt name="samples-per-frame-slider" label="GI Samples/Frame" low-value="1" high-value="8" show-input-field="true" tooltip="Buffer GI samples (rays) gathered per voxel per frame. Higher converges faster but costs more (1 for Quest)." class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="SamplesPerFrame" binding-mode="TwoWay"/>

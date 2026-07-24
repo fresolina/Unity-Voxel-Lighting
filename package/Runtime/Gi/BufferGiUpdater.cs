@@ -16,8 +16,8 @@ namespace Lotec.Lighting {
     /// </summary>
     [DisallowMultipleComponent]
     [ExecuteAlways]
-    // GI methods are mutually exclusive: enabling this component disables GiFieldUpdater (and vice
-    // versa), and the enabled updater owns the GI keyword group + the _Exposure global.
+    // The enabled updater owns the GI keyword group + the _Exposure global (GiMethodSelector toggles
+    // this component's enabled state to switch GI on/off).
     [AddComponentMenu("Lotec/Voxel Lighting/Buffer GI")]
     public class BufferGiUpdater : MonoBehaviour {
         public const int Grid = 32;
@@ -309,13 +309,6 @@ namespace Lotec.Lighting {
 
         void OnEnable() {
             Instance = this;
-            // GI methods are mutually exclusive - the enabled component selects the method, so
-            // enabling this one turns the texture GI off.
-            GiFieldUpdater other = FindAnyObjectByType<GiFieldUpdater>();
-            if (other != null && other.enabled) {
-                Debug.LogWarning("Buffer GI enabled - disabling the texture GI (GiFieldUpdater); only one GI method can be active.", this);
-                other.enabled = false;
-            }
 #if UNITY_EDITOR
             // In edit mode the editor only ticks Update sporadically, so the temporal solve never
             // accumulates and the visualizer's per-frame draw is missed. Pumping the player loop
@@ -519,7 +512,7 @@ namespace Lotec.Lighting {
             if (_ssboRead) Shader.EnableKeyword(SsboReadKeyword);
             else Shader.DisableKeyword(SsboReadKeyword);
             // The display transform (_Exposure + _Tonemap) is published by _exposureControl.Apply
-            // in Update - explicitly, so a stale value (e.g. left by GiFieldUpdater) can't darken it.
+            // in Update - explicitly, so a stale value can't darken it.
         }
 
         bool IsReady(out string reason) {

@@ -5,10 +5,12 @@ namespace Lotec.Lighting {
     /// <summary>
     /// SDF-baked lighting volume. Reads the tight mesh bounds off the <see cref="MeshBounds"/>
     /// on the same GameObject and derives its own grid from them: bake resolution, a voxel
-    /// border and cubic-voxel alignment (stored in <see cref="Bounds"/>), plus the baked SDF
-    /// textures. Owns the volume-derived shader globals (bounds, SDF texture) and how to publish
-    /// them via <see cref="ApplyShaderGlobals"/> - but LightingManager decides *when* and for
-    /// *which* volume to call it, so the singular globals reflect the active volume only.
+    /// border and cubic-voxel alignment (stored in <see cref="Bounds"/>). The baked SDF texture
+    /// itself lives on a sibling <see cref="VoxelSdfField"/> (a data holder), not on the volume.
+    /// This component owns the volume-derived shader globals (bounds, and - read off that sibling -
+    /// the SDF texture) and how to publish them via <see cref="ApplyShaderGlobals"/>; LightingManager
+    /// decides *when* and for *which* volume to call it, so the singular globals reflect the active
+    /// volume only.
     /// </summary>
     [DisallowMultipleComponent]
     [RequireComponent(typeof(MeshBounds))]
@@ -35,10 +37,6 @@ namespace Lotec.Lighting {
         [SerializeField] int _maxResolution = 128;
 
         [SerializeField] bool _autoRegisterWithManager = true;
-
-        [Header("Baked static fields")]
-        public Texture3D sdfHiresTexture;
-        public Texture3D sdfLowresTexture;
 
         [HideInInspector]
         [SerializeField] Vector3Int _trimmedMaxResolution;
@@ -82,15 +80,16 @@ namespace Lotec.Lighting {
             TrimmedMaxResolution.z / Mathf.Max(1e-9f, Bounds.size.z));
 
         /// <summary>Publish the universal volume-derived globals: world-space bounds and the
-        /// hi-res SDF texture (needed by shadows + GI regardless of occlusion). Call from
-        /// LightingManager for the active volume - these are singular globals, so a non-active
+        /// hi-res SDF texture (needed by shadows + AO regardless of occlusion). The SDF texture is
+        /// read off the sibling <see cref="VoxelSdfField"/> (the volume no longer stores it). Call
+        /// from LightingManager for the active volume - these are singular globals, so a non-active
         /// volume must not publish them. Occlusion-grid globals are published by the occlusion
         /// binders (they read this volume's VoxelSizeInverse / TrimmedMaxResolution).</summary>
         public void ApplyShaderGlobals() {
             Shader.SetGlobalVector(s_boundsMin, Bounds.min);
             Shader.SetGlobalVector(s_boundsSize, Bounds.size);
-            if (sdfHiresTexture != null)
-                Shader.SetGlobalTexture(s_sdfHires, sdfHiresTexture);
+            if (TryGetComponent(out VoxelSdfField sdf) && sdf.sdfTexture != null)
+                Shader.SetGlobalTexture(s_sdfHires, sdf.sdfTexture);
         }
 
         void OnValidate() {

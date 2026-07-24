@@ -41,26 +41,21 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
             // Surface lighting: direct + selectable shadow source + SDF AO (pulls its own
-            // shadow/AO/volume headers). Runtime GI (irradiance field) pulls the volume header.
+            // shadow/AO/volume headers). BufferGi is the runtime GI read (guarded to its variant).
             // Each is self-contained, so these two are all the lit pass needs.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelDirectLighting.hlsl"
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelGi.hlsl"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/BufferGi.hlsl"
             // Display-transform tonemap operators (Reinhard / AgX / ACES), selected by _Tonemap.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/Tonemap.hlsl"
 
             // Shadow source (default = SDF): directional bitmask (point / 8-tap) or occlusion field.
             #pragma multi_compile __ BITMASK_POINT BITMASK_8TAP OCC_FIELD
-            // Ambient occlusion quality: bare default = off (no keyword), low, or high; modulates
-            // the GI term.
-            #pragma multi_compile __ SDF_AO_LQ SDF_AO_HQ
-            // GI_OFF (default): direct lighting only. GI_VOXEL_TEXTURE: texture irradiance field +
-            // AO (GiFieldUpdater). GI_VOXEL_BUFFER: the buffer GI read filter (BufferGiUpdater).
-            // GI_UNITY: Unity's built-in indirect (SampleSH) - a component-less A/B baseline for
-            // measuring the voxel GI's runtime cost against the engine's baked path.
-            // Mutually exclusive - the active updater enables its keyword; GiMethodSelector drives the
-            // component-less GI_UNITY / GI_OFF.
-            #pragma multi_compile GI_OFF GI_VOXEL_TEXTURE GI_VOXEL_BUFFER GI_UNITY
+            // GI_OFF (default): direct lighting only. GI_VOXEL_BUFFER: the buffer GI read filter
+            // (BufferGiUpdater). GI_UNITY: Unity's built-in indirect (SampleSH) - a component-less A/B
+            // baseline for measuring the voxel GI's runtime cost against the engine's baked path.
+            // Mutually exclusive - the buffer GI updater enables its keyword; GiMethodSelector drives
+            // the component-less GI_UNITY / GI_OFF.
+            #pragma multi_compile GI_OFF GI_VOXEL_BUFFER GI_UNITY
             // Buffer-GI fragment read source. DEFAULT (no keyword): one hardware-trilinear tap of the
             // mirrored irradiance Texture3D - the fast path on Adreno/Quest (the GPU does the
             // interpolation the SSBO gather recomputes in software). BGI_SSBO_READ flips back to the
@@ -162,12 +157,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 lit += GetPointLightDirect(IN.positionWS, N, albedo);
                 lit += GetSpotLightDirect(IN.positionWS, N, albedo);
 
-                #if defined(GI_VOXEL_TEXTURE)
-                    // Indirect lit (texture Voxel GI field) modulated by SDF ambient occlusion.
-                    float3 gi = SampleVoxelGI(IN.positionWS, N);
-                    float ao = GetAmbientOcclusionFromSdf(IN.positionWS, N);
-                    lit += albedo * gi * ao;
-                #elif defined(GI_VOXEL_BUFFER)
+                #if defined(GI_VOXEL_BUFFER)
                     // Indirect lit (buffer GI) modulated by the buffer's OWN baked AO (bgiAo, resolved
                     // above together with the sun shadow). No SDF AO here - the buffer GI carries its
                     // own openness, so this path no longer samples the SDF texture at all.
@@ -190,7 +180,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 // (Off) outputs linear HDR for a post-processing stack instead. The branch is on a
                 // global, so it's uniform across the frame - no warp divergence, effectively free.
                 if (_Tonemap != 0) {
-                    #if defined(GI_VOXEL_TEXTURE) || defined(GI_VOXEL_BUFFER)
+                    #if defined(GI_VOXEL_BUFFER)
                         lit *= exp2(_Exposure);   // exposure only meaningful when GI drives it
                     #endif
                     if (_Tonemap == 2) lit = AgxTonemap(lit);

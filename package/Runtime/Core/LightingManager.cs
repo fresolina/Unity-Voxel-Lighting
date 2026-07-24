@@ -4,10 +4,9 @@ namespace Lotec.Lighting {
     /// <summary>
     /// Tracks WHICH <see cref="VoxelVolume"/> is active and publishes that volume's globals each
     /// frame - nothing else. Every other feature is its own component whose enabled state turns it
-    /// on/off: GI method (<see cref="GiFieldUpdater"/> / <see cref="BufferGiUpdater"/>), local
-    /// lights (<see cref="LocalLightsPublisher"/>), shadow source (the occlusion binder components
-    /// on the volume), SDF shadow tuning (<see cref="SdfShadow"/>) and ambient occlusion
-    /// (<see cref="SdfAmbientOcclusion"/>).
+    /// on/off: GI method (<see cref="BufferGiUpdater"/>), local lights
+    /// (<see cref="LocalLightsPublisher"/>), shadow source (the occlusion binder components on the
+    /// volume) and SDF shadow tuning (<see cref="SdfShadow"/>).
     /// </summary>
     [DisallowMultipleComponent]
     // Run before the feature components (default order 0) so they see this frame's active volume.
