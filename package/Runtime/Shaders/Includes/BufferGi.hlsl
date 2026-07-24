@@ -73,6 +73,24 @@ void BgiSelectField(float3 worldPos, out bool insideFine, out float3 origin, out
     baseOffset = insideFine ? BGI_FINE_OFFSET    : BGI_COARSE_OFFSET;
 }
 
+// Baked sun visibility from the displayed field's mirror texture ALPHA (the air-layer sun-vis CSBlur
+// wrote): ONE hardware trilinear tap, replacing the 4-8 StructuredBuffer face taps the SSBO Baked read
+// used. Offset ~1 voxel along the normal into the air layer in front (same as the GI texture read), so
+// the tap sits in the air voxels that actually carry sun-vis rather than the solid cell. Fine field
+// inside its box, coarse outside (its grid size = coarse voxel size * grid, as in BgiSampleFieldTexture).
+// Returns 1 (lit) outside the sampled field, matching the "no info -> lit" face-read fallback.
+half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
+{
+    float3 origin   = insideFine ? _BgiGridOrigin   : _BgiCoarseOrigin;
+    float3 vox      = insideFine ? _BgiVoxelSize     : _BgiCoarseVoxelSize;
+    float3 gridSize = insideFine ? _BgiGridSize      : _BgiCoarseVoxelSize * (float)BGI_GRID;
+    float3 uvw = (worldPos + normal * vox - origin) / max(gridSize, 1e-6);
+    if (any(uvw < 0.0) || any(uvw > 1.0)) return 1.0h; // outside the field -> lit (no baked info)
+    return insideFine
+        ? (half)_BgiIrradianceTex.SampleLevel(sampler_BgiIrradianceTex, uvw, 0).a
+        : (half)_BgiIrradianceTexCoarse.SampleLevel(sampler_BgiIrradianceTexCoarse, uvw, 0).a;
+}
+
 // One face-plane read that yields BOTH the baked static AO (openness, _Surface bits 16-23) and the
 // baked sun visibility (_Radiance.w) for a surface point. These used to run as two independent 4-tap
 // loops (BgiSurfaceAO + BgiTrySunShadow) over the IDENTICAL 4 face voxels, each re-reading _Occupancy;
@@ -103,8 +121,21 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out 
     if (sdfShadow)
         shadow = GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
 
+    // BAKED mode (1): on the default texture read path, resolve it as ONE hardware trilinear tap of the
+    // mirror texture's alpha (the air-layer sun visibility), NOT a StructuredBuffer face read - that's
+    // the whole point, since on Adreno the SSBO face taps dominate while a sampler tap is ~free. Under
+    // BGI_SSBO_READ (the A/B keyword, no mirror texture) it stays on the face-plane loop below.
+    bool bakedShadow = (mode == 1);
+#if !defined(BGI_SSBO_READ)
+    if (bakedShadow) {
+        shadow = BgiSampleShadowTexture(worldPos, normal, insideFine);
+        bakedShadow = false; // resolved via texture; the face loop below is now AO-only
+    }
+#endif
+
     bool wantAo = _BgiAoStrength > 0.0;
-    bool wantShadow = shadowValid && !sdfShadow; // Sdf resolved above; only Baked reads the face plane
+    bool wantShadow = shadowValid && bakedShadow; // SDF resolved above, Baked resolved via texture;
+                                                  // only the SSBO-read path still reads shadow here
     if (!wantAo && !wantShadow) return; // nothing left to gather from the face plane
 
     // Face plane: the dominant normal axis is fixed; u,v are the two in-plane axes we interpolate over.

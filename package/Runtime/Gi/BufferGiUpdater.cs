@@ -1126,6 +1126,9 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            // Solid voxels' texture alpha = their baked sun visibility (radiance.w), so the fragment's
+            // shadow tap isn't washed to lit by a constant near surfaces (see CSBlur).
+            _computeShader.SetBuffer(_blurKernel, s_radiance, _radianceBuffer);
             _computeShader.SetTexture(_blurKernel, s_bgiIrradianceTexWrite, irradianceTex);
             _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
         }
