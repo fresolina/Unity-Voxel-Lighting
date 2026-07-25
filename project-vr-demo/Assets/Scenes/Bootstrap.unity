@@ -846,6 +846,11 @@ Transform:
   m_Children: []
   m_Father: {fileID: 39292454}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1732436148 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 915883473583736438, guid: 89dbb459ca5b1f64885d57f864fff67c, type: 3}
+  m_PrefabInstance: {fileID: 8868503267357291997}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1001 &1899375096
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -982,6 +987,29 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 5434610026340032427, guid: 89dbb459ca5b1f64885d57f864fff67c, type: 3}
   m_PrefabInstance: {fileID: 8868503267357291997}
   m_PrefabAsset: {fileID: 0}
+--- !u!114 &8469839547770126886
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1732436148}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 19102, guid: 0000000000000000e000000000000000, type: 0}
+  m_Name: 
+  m_EditorClassIdentifier: UnityEngine.dll::UnityEngine.UIElements.UIDocument
+  m_PanelSettings: {fileID: 0}
+  m_ParentUI: {fileID: 0}
+  sourceAsset: {fileID: 0}
+  m_SortingOrder: 0
+  m_Position: 0
+  m_WorldSpaceSizeMode: 1
+  m_WorldSpaceWidth: 1920
+  m_WorldSpaceHeight: 1080
+  m_PivotReferenceSize: 0
+  m_Pivot: 0
+  m_WorldSpaceCollider: {fileID: 0}
 --- !u!1001 &8868503267357291997
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -1017,7 +1045,10 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 915883473583736438, guid: 89dbb459ca5b1f64885d57f864fff67c, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 8469839547770126886}
   m_SourcePrefab: {fileID: 100100000, guid: 89dbb459ca5b1f64885d57f864fff67c, type: 3}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
