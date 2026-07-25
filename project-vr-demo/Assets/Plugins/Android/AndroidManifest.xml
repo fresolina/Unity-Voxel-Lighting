@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Custom MAIN Android manifest (Player Settings > Publishing Settings > Custom Main Manifest).
+
+  Copied from Unity's own template, <Editor>/Data/PlaybackEngines/AndroidPlayer/Apk/UnityManifest.xml,
+  with two deliberate changes:
+    1. The UnityPlayerActivity block is removed - this project's Application Entry is GameActivity
+       (the template ships both and tells you to delete the one you don't use).
+    2. The GPU layer-injection meta-data below is added.
+
+  Unity still merges plug-in / library manifests into this file and applies Player Settings on top at
+  build time, so the Meta VR intent category, the unity.* meta-data, orientation, configChanges and
+  the rest are NOT listed here - they are injected during the build. Keep this file minimal; anything
+  duplicated here would override what those stages generate.
+-->
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <!--
+          Lets Vulkan layer-based GPU profilers (Android GPU Inspector, Snapdragon Profiler) inject
+          their capture layer into the process. Required on API 30+ in ADDITION to a debuggable build
+          (Development Build already sets debuggable + profileable).
+
+          This does nothing for Unity's own in-app GPU timers - Recorder.gpuElapsedNanoseconds has no
+          Vulkan backend at all, and FrameTimingManager reports no GPU time on XR platforms. It exists
+          purely so external tools can read the Adreno counters.
+        -->
+        <meta-data android:name="com.android.graphics.injectLayers.enable" android:value="true" />
+
+        <!--
+          excludeFromRecents is listed as REQUIRED for the launcher activity by Meta's manifest
+          requirements for Quest, and Unity does not emit it. Added here because this is the only place
+          the entry activity's attributes can be set.
+        -->
+        <activity android:name="com.unity3d.player.UnityPlayerGameActivity"
+                  android:theme="@style/BaseUnityGameActivityTheme"
+                  android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <meta-data android:name="unityplayer.UnityActivity" android:value="true" />
+            <meta-data android:name="android.app.lib_name" android:value="game" />
+        </activity>
+    </application>
+</manifest>

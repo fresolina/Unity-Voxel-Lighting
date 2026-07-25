@@ -15,7 +15,9 @@ namespace Lotec.Lighting {
     /// you want: the total is the solve's whole per-frame GPU cost.
     ///
     /// GPU timings need a development build (or the editor) on a backend that reports GPU timestamps;
-    /// the readout says so when the platform doesn't provide them. The solve is also gated (it idles
+    /// the readout says so when the platform doesn't provide them - except on Vulkan, which reports no
+    /// timings at all (neither per-dispatch nor frame timing), so there the logs are simply switched off
+    /// rather than repeating that nothing can be measured. The solve is also gated (it idles
     /// once the ray budget is spent unless Continuous GI is on), so "idle" and "running but untimed"
     /// are separate verdicts: whether the solve DISPATCHED is tracked CPU-side (see s_dispatchedFrame),
     /// never inferred from the GPU block count - on Quest no blocks land at all, which used to report a
@@ -28,7 +30,8 @@ namespace Lotec.Lighting {
         static readonly string[] s_stageNames = { "BGI.Inject", "BGI.Gather", "BGI.Blur" };
 
         [Tooltip("Seconds between Debug.Log lines (0 = don't log). Logging is how you read this on " +
-                 "device - the overlay isn't visible in the headset.")]
+                 "device - the overlay isn't visible in the headset. Ignored on Vulkan, which reports no " +
+                 "GPU timings at all.")]
         [Min(0f)][SerializeField] float _logInterval = 2f;
         [Tooltip("Draw the readout as a screen overlay (bottom-left). Useful in the editor / desktop " +
                  "player; invisible in VR, so leave the log interval on for Quest runs.")]
@@ -57,6 +60,10 @@ namespace Lotec.Lighting {
         // Frames slower than this are hitches (scene load, compile, editor stall), not rendering cost, and
         // are excluded from the solving/idle frame-time averages.
         const float OutlierFrameMs = 200f;
+        // Solving-vs-idle frame-time deltas below this fraction of the frame time are indistinguishable
+        // from jitter on a vsync/compositor-paced platform (the app has headroom and both averages sit on
+        // the pacing floor). 5% of a 72Hz frame is ~0.7ms.
+        const float FramePacedDeltaFraction = 0.05f;
 
         readonly float[] _gpuMs = new float[StageCount];
         readonly bool[] _ran = new bool[StageCount];
@@ -69,6 +76,9 @@ namespace Lotec.Lighting {
         bool _anyGpuTimingSeen;
         bool _solveDispatched;
         bool _gpuUnavailable;
+        // Vulkan delivers neither per-dispatch GPU recorder timings nor FrameTimingManager gpuFrameTime, so
+        // there is nothing to report there: skip the timing queries and stay quiet.
+        bool _timingUnsupported;
 
         /// <summary>Smoothed GPU milliseconds for one solve stage (both fields summed).</summary>
         public float GpuMs(Stage stage) => _gpuMs[(int)stage];
@@ -91,6 +101,8 @@ namespace Lotec.Lighting {
         }
 
         void OnEnable() {
+            _timingUnsupported =
+                SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Vulkan;
             EnsureSamplers();
             s_active = this;
             _nextLog = 0f;
@@ -162,6 +174,14 @@ namespace Lotec.Lighting {
                 }
             }
 
+            // Vulkan hands back nothing from either timer, so there is no point querying them - and no
+            // point logging either, since every line would just repeat that it can't measure here. The
+            // frame-time split above still runs; the overlay can show it if anyone wants it.
+            if (_timingUnsupported) {
+                _gpuUnavailable = true;
+                return;
+            }
+
             // Whole-frame GPU time (~4 frame delay). Documented as unavailable on XR platforms (both GLES
             // and Vulkan), so expect 0 on Quest; kept because it's free and real on desktop/editor.
             FrameTimingManager.CaptureFrameTimings();
@@ -209,16 +229,33 @@ namespace Lotec.Lighting {
             // is documented unavailable on XR too. So on Quest the measurement is the FRAME TIME DELTA
             // between solving and idle frames, which needs no GPU timer at all.
             if (_gpuUnavailable) {
-                string delta = _frameMsSolving > 0f && _frameMsIdle > 0f
-                    ? string.Format("solve ~{0:0.00}ms", _frameMsSolving - _frameMsIdle)
-                    : "waiting for both states (let the ray budget finish, or toggle Continuous GI)";
+                string platform = SystemInfo.graphicsDeviceType
+                    + (SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Vulkan
+                        ? ", which Unity's GPU recorder doesn't support" : "");
+                if (_frameMsSolving <= 0f || _frameMsIdle <= 0f) {
+                    return string.Format(
+                        "BufferGI solve: {0}, no per-stage GPU timer on this platform ({1}). frame-time delta " +
+                        "needs both states - let the ray budget finish, or toggle Continuous GI.{2}",
+                        state, platform, gpuFrame);
+                }
+                float delta = _frameMsSolving - _frameMsIdle;
+                // A compositor-paced frame time (Quest) is QUANTIZED to the refresh interval: with headroom
+                // to spare both averages sit on that floor and the difference is jitter, not the solve's
+                // cost. Report that honestly instead of a number that looks like a measurement.
+                if (delta < FramePacedDeltaFraction * _frameMsIdle) {
+                    return string.Format(
+                        "BufferGI solve: {0}, no per-stage GPU timer on this platform ({1}). frame paced at " +
+                        "{2:0.00}ms (~{3:0}Hz) whether solving or idle, so the solve FITS IN HEADROOM and its " +
+                        "cost cannot be read from frame time (delta {4:0.00}ms is jitter). To measure: raise " +
+                        "Samples/Frame until frames start dropping, or read app GPU time from OVR Metrics " +
+                        "Tool / Snapdragon Profiler.{5}",
+                        state, platform, _frameMsIdle, 1000f / _frameMsIdle, delta, gpuFrame);
+                }
                 return string.Format(
-                    "BufferGI solve: {0}, no per-stage GPU timer on this platform ({1}{2}). frame: solving " +
-                    "{3:0.00}ms vs idle {4:0.00}ms => {5}{6}",
-                    state, SystemInfo.graphicsDeviceType,
-                    SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Vulkan
-                        ? ", which Unity's GPU recorder doesn't support" : "",
-                    _frameMsSolving, _frameMsIdle, delta, gpuFrame);
+                    "BufferGI solve: {0}, no per-stage GPU timer on this platform ({1}). frame: solving " +
+                    "{2:0.00}ms vs idle {3:0.00}ms => solve ~{4:0.00}ms (frame-time delta; quantized by the " +
+                    "compositor, so treat it as a floor){5}",
+                    state, platform, _frameMsSolving, _frameMsIdle, delta, gpuFrame);
             }
             if (!SolveRan())
                 return "BufferGI solve: idle - no dispatch this frame (ray budget spent; enable Continuous " +
