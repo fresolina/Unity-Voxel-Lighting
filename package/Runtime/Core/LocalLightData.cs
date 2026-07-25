@@ -42,7 +42,9 @@ namespace Lotec.Lighting {
                 if (IsSupportedPointLight(light) && PointLightCount < MaxPointLights) {
                     Vector3 position = light.transform.position;
                     PointLightPositionRanges[PointLightCount] = new Vector4(position.x, position.y, position.z, light.range);
-                    PointLightColors[PointLightCount] = (Vector4)light.color * light.intensity;
+                    // FinalColor, not color * intensity: see LightExtensions - the raw colour is sRGB and
+                    // would light the scene in the wrong hue next to URP's own (already converted) lights.
+                    PointLightColors[PointLightCount] = light.FinalColor();
                     PointLightCount++;
                 } else if (IsSupportedSpotLight(light) && SpotLightCount < MaxSpotLights) {
                     Vector3 position = light.transform.position;
@@ -53,9 +55,10 @@ namespace Lotec.Lighting {
                     float angleScale = 1f / angleRange;
                     float angleOffset = -outerCos * angleScale;
 
+                    Vector4 color = light.FinalColor();
                     SpotLightPositionRanges[SpotLightCount] = new Vector4(position.x, position.y, position.z, light.range);
                     SpotLightDirectionAngleScales[SpotLightCount] = new Vector4(direction.x, direction.y, direction.z, angleScale);
-                    SpotLightColorAngleOffsets[SpotLightCount] = new Vector4(light.color.r * light.intensity, light.color.g * light.intensity, light.color.b * light.intensity, angleOffset);
+                    SpotLightColorAngleOffsets[SpotLightCount] = new Vector4(color.x, color.y, color.z, angleOffset);
                     SpotLightCount++;
                 }
 
