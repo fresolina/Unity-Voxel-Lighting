@@ -4,15 +4,14 @@ using UnityEngine.XR.Interaction.Toolkit.Inputs;
 
 namespace Lotec.Demo {
     /// <summary>
-    /// The bootstrap scene's spot and point lights, driven from the controllers: <b>tap A/X</b> toggles the
-    /// spot light, <b>tap B/Y</b> the point light, and <b>holding</b> either while pushing that hand's
-    /// stick up or down sets that light's intensity (1-9, the same range the desktop LightController's
-    /// digit shortcuts use). The VR counterpart of its F / G / 1-9 keys.
+    /// The bootstrap scene's spot and point lights, driven from the controllers: <b>A/X</b> toggles the
+    /// spot light, <b>B/Y</b> the point light, and <b>trigger + stick up/down</b> sets the intensity of
+    /// whichever light is lit (1-9, the same range the desktop LightController's digit shortcuts use).
+    /// The VR counterpart of its F / G / 1-9 keys.
     ///
-    /// Tap versus hold is what keeps the two gestures out of each other's way: the toggle fires on
-    /// RELEASE and only if the stick was never pushed during the hold, so dimming a lit light doesn't
-    /// switch it off on the way out. Pushing the stick also turns the light on if it was off - otherwise
-    /// the gesture would silently adjust something invisible.
+    /// Intensity lives on the trigger rather than on the toggle buttons so the two never fight: a press
+    /// is only ever a toggle, and the dimmer only ever runs on a light you can already see. With both
+    /// lights on, the trigger adjusts the one switched on last.
     ///
     /// Turning a light on re-parents the container they share ("Player relative") onto the controller that
     /// did it, so both lights ride that hand like a held torch. Last press wins: the two lights share one
@@ -21,8 +20,8 @@ namespace Lotec.Demo {
     /// deactivates a controller it stops tracking, which takes the lights with it until it comes back;
     /// the press itself proves the hand was live, so in practice that's a controller going to sleep.)
     ///
-    /// The buttons are bound without a hand qualifier, so A/X and B/Y both work and the pressing device
-    /// decides which hand gets the lights and whose stick is read.
+    /// Nothing is bound to a specific hand: A/X, B/Y and either trigger all work, and the device that
+    /// fired decides which hand gets the lights and whose stick is read.
     /// </summary>
     [AddComponentMenu("Lotec/Demo/VR Hand Lights")]
     public class VrHandLights : MonoBehaviour {
@@ -39,9 +38,11 @@ namespace Lotec.Demo {
         [SerializeField] string _spotBinding = "<XRController>/{PrimaryButton}";
         [Tooltip("Toggles the point light. Default: B/Y (either controller's secondary button).")]
         [SerializeField] string _pointBinding = "<XRController>/{SecondaryButton}";
-        [Tooltip("Stick read while a LEFT-hand button is held.")]
+        [Tooltip("Held to turn the stick into an intensity dimmer. Default: either trigger.")]
+        [SerializeField] string _triggerBinding = "<XRController>/{TriggerButton}";
+        [Tooltip("Stick read while a LEFT-hand button or trigger is held.")]
         [SerializeField] string _leftStickBinding = "<XRController>{LeftHand}/{Primary2DAxis}";
-        [Tooltip("Stick read while a RIGHT-hand button is held.")]
+        [Tooltip("Stick read while a RIGHT-hand button or trigger is held.")]
         [SerializeField] string _rightStickBinding = "<XRController>{RightHand}/{Primary2DAxis}";
 
         [Header("Intensity")]
@@ -49,11 +50,11 @@ namespace Lotec.Demo {
         [SerializeField] Vector2 _intensityRange = new Vector2(1f, 9f);
         [Tooltip("Intensity units per second at full stick deflection: the whole 1-9 range in ~2s.")]
         [SerializeField] float _intensitySpeed = 4f;
-        [Tooltip("Stick deflection below this doesn't count as an intensity push, so a tap stays a tap " +
-                 "even with a thumb resting on the stick.")]
+        [Tooltip("Stick deflection below this doesn't count, so a trigger pull with a thumb resting on " +
+                 "the stick doesn't drift the intensity.")]
         [Range(0f, 0.9f)][SerializeField] float _deadzone = 0.3f;
-        [Tooltip("Stop the rig's stick locomotion while a light button is held, so the intensity push " +
-                 "doesn't also walk or spin the player. Restored on release.")]
+        [Tooltip("Stop the rig's stick locomotion while the dimmer is actually running, so the intensity " +
+                 "push doesn't also walk or spin the player. Restored when the trigger is released.")]
         [SerializeField] bool _suppressLocomotion = true;
 
         [Header("Hands")]
@@ -62,24 +63,20 @@ namespace Lotec.Demo {
         [Tooltip("Right controller transform. Empty = the rig's XRInputModalityManager tells us.")]
         [SerializeField] Transform _rightHand;
 
-        // One button's worth of gesture state. Two instances, so the tap/hold logic is written once.
-        class Gesture {
-            public string name;
-            public InputAction toggle;
-            public Light light;
-            public InputDevice hand;      // controller that started the press
-            public bool pushedStick;      // stick used during this hold -> release must not toggle
-            public bool holdsLocomotion;
-        }
-
-        readonly Gesture _spot = new Gesture { name = "Spot Light Toggle" };
-        readonly Gesture _point = new Gesture { name = "Point Light Toggle" };
+        InputAction _spotToggle;
+        InputAction _pointToggle;
+        InputAction _trigger;
         InputAction _leftStick;
         InputAction _rightStick;
+        // The light the dimmer aims at: the one switched on most recently. Cleared when it goes off, so
+        // the trigger never adjusts something invisible.
+        Light _target;
+        bool _dimming;
 
         void Awake() {
-            _spot.toggle = new InputAction(_spot.name, InputActionType.Button, _spotBinding);
-            _point.toggle = new InputAction(_point.name, InputActionType.Button, _pointBinding);
+            _spotToggle = new InputAction("Spot Light Toggle", InputActionType.Button, _spotBinding);
+            _pointToggle = new InputAction("Point Light Toggle", InputActionType.Button, _pointBinding);
+            _trigger = new InputAction("Light Intensity Hold", InputActionType.Button, _triggerBinding);
             _leftStick = new InputAction("Left Stick", InputActionType.Value, _leftStickBinding,
                 expectedControlType: "Vector2");
             _rightStick = new InputAction("Right Stick", InputActionType.Value, _rightStickBinding,
@@ -88,25 +85,27 @@ namespace Lotec.Demo {
         }
 
         void OnEnable() {
-            _spot.toggle.Enable();
-            _point.toggle.Enable();
+            _spotToggle.Enable();
+            _pointToggle.Enable();
+            _trigger.Enable();
             _leftStick.Enable();
             _rightStick.Enable();
         }
 
         void OnDisable() {
-            _spot.toggle.Disable();
-            _point.toggle.Disable();
+            _spotToggle.Disable();
+            _pointToggle.Disable();
+            _trigger.Disable();
             _leftStick.Disable();
             _rightStick.Disable();
-            // Don't leave locomotion switched off because the component was disabled mid-hold.
-            EndHold(_spot);
-            EndHold(_point);
+            // Don't leave locomotion switched off because the component was disabled mid-gesture.
+            StopDimming();
         }
 
         void OnDestroy() {
-            _spot.toggle?.Dispose();
-            _point.toggle?.Dispose();
+            _spotToggle?.Dispose();
+            _pointToggle?.Dispose();
+            _trigger?.Dispose();
             _leftStick?.Dispose();
             _rightStick?.Dispose();
         }
@@ -116,64 +115,67 @@ namespace Lotec.Demo {
         }
 
         void Update() {
-            UpdateGesture(_spot);
-            UpdateGesture(_point);
+            // activeControl is the control that actually fired, so this is the hand that pressed even
+            // though the bindings cover both.
+            if (_spotToggle.WasPressedThisFrame()) Toggle(_spotLight, _spotToggle.activeControl?.device);
+            if (_pointToggle.WasPressedThisFrame()) Toggle(_pointLight, _pointToggle.activeControl?.device);
+
+            UpdateDimmer();
         }
 
-        void UpdateGesture(Gesture gesture) {
-            if (gesture.light == null) return;
-
-            if (gesture.toggle.WasPressedThisFrame()) {
-                // activeControl is the control that actually fired, so this is the hand that pressed even
-                // though the binding covers both.
-                gesture.hand = gesture.toggle.activeControl?.device;
-                gesture.pushedStick = false;
-                if (_suppressLocomotion) {
-                    gesture.holdsLocomotion = true;
-                    LocomotionSuppressor.Acquire();
-                }
+        void UpdateDimmer() {
+            if (!_trigger.IsPressed()) {
+                StopDimming();
+                return;
             }
 
-            if (gesture.toggle.IsPressed()) {
-                float push = ReadStickY(gesture.hand);
-                if (Mathf.Abs(push) >= _deadzone) {
-                    if (!gesture.pushedStick) {
-                        gesture.pushedStick = true;
-                        // A dimmer for an unlit light is no feedback at all, so the push implies "on".
-                        if (!gesture.light.enabled) SwitchOn(gesture);
-                    }
+            Light target = ResolveTarget();
+            if (target == null) return; // nothing lit - the trigger is just a trigger
 
-                    gesture.light.intensity = Mathf.Clamp(
-                        gesture.light.intensity + push * _intensitySpeed * Time.deltaTime,
-                        _intensityRange.x, _intensityRange.y);
-                }
+            float push = ReadStickY(_trigger.activeControl?.device);
+            if (Mathf.Abs(push) < _deadzone) return;
+
+            // Claimed only once the stick is actually pushed: a plain trigger pull (grabbing, UI) must
+            // not cost the player their locomotion.
+            if (!_dimming && _suppressLocomotion) {
+                _dimming = true;
+                LocomotionSuppressor.Acquire();
             }
 
-            if (gesture.toggle.WasReleasedThisFrame()) {
-                if (!gesture.pushedStick) {
-                    if (gesture.light.enabled) gesture.light.enabled = false;
-                    else SwitchOn(gesture);
-                }
-
-                EndHold(gesture);
-            }
+            target.intensity = Mathf.Clamp(target.intensity + push * _intensitySpeed * Time.deltaTime,
+                _intensityRange.x, _intensityRange.y);
         }
 
-        void SwitchOn(Gesture gesture) {
-            gesture.light.enabled = true;
-            // Clamped on the way in so the first stick push continues from a value inside the range
-            // instead of jumping (the scene ships the spot light at 9 and the point light at 2).
-            gesture.light.intensity =
-                Mathf.Clamp(gesture.light.intensity, _intensityRange.x, _intensityRange.y);
-            AttachContainer(gesture.hand);
-        }
-
-        void EndHold(Gesture gesture) {
-            gesture.hand = null;
-            gesture.pushedStick = false;
-            if (!gesture.holdsLocomotion) return;
-            gesture.holdsLocomotion = false;
+        void StopDimming() {
+            if (!_dimming) return;
+            _dimming = false;
             LocomotionSuppressor.Release();
+        }
+
+        void Toggle(Light light, InputDevice hand) {
+            if (light == null) return;
+
+            if (light.enabled) {
+                light.enabled = false;
+                if (_target == light) _target = null;
+                return;
+            }
+
+            light.enabled = true;
+            // Clamped on the way in so the first stick push continues from a value inside the range
+            // instead of jumping.
+            light.intensity = Mathf.Clamp(light.intensity, _intensityRange.x, _intensityRange.y);
+            _target = light;
+            AttachContainer(hand);
+        }
+
+        // The dimmer's target: the light switched on last, or - for a light that was already on when the
+        // scene loaded - whichever is lit.
+        Light ResolveTarget() {
+            if (_target != null && _target.enabled) return _target;
+            if (_spotLight != null && _spotLight.enabled) return _spotLight;
+            if (_pointLight != null && _pointLight.enabled) return _pointLight;
+            return null;
         }
 
         // Move the lights onto the hand that switched them on, zeroing the local pose so the spot light
@@ -223,8 +225,6 @@ namespace Lotec.Demo {
             if (_lightContainer == null) return;
             if (_spotLight == null) _spotLight = FindLight(LightType.Spot);
             if (_pointLight == null) _pointLight = FindLight(LightType.Point);
-            _spot.light = _spotLight;
-            _point.light = _pointLight;
         }
 
         Light FindLight(LightType type) {
