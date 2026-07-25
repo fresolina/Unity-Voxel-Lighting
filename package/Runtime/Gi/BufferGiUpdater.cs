@@ -1161,7 +1161,9 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
             _computeShader.SetBuffer(_injectKernel, s_surface, _surfaceBuffer);
+            BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Inject);
             _computeShader.Dispatch(_injectKernel, Groups, 1, 1);
+            BufferGiSolveProfiler.End(BufferGiSolveProfiler.Stage.Inject);
 
             // Gather: off the fresh _Radiance, fold into _Irradiance - AIR voxels omnidirectionally
             // (the read field), SOLID voxels over their front hemisphere (next frame's inject bounce).
@@ -1170,7 +1172,9 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
+            BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Gather);
             _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
+            BufferGiSolveProfiler.End(BufferGiSolveProfiler.Stage.Gather);
 
             // Blur: occupancy-gated spatial smoothing + the confidence ease (CSBlur) that hides the
             // warm-up, written to _IrradianceBlur AND mirrored into this field's Texture3D (the fragment's
@@ -1182,7 +1186,9 @@ namespace Lotec.Lighting {
             // shadow tap isn't washed to lit by a constant near surfaces (see CSBlur).
             _computeShader.SetBuffer(_blurKernel, s_radiance, _radianceBuffer);
             _computeShader.SetTexture(_blurKernel, s_bgiIrradianceTexWrite, irradianceTex);
+            BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Blur);
             _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
+            BufferGiSolveProfiler.End(BufferGiSolveProfiler.Stage.Blur);
         }
 
         void SetDirectionalLightUniforms() {

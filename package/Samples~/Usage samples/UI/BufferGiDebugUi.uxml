@@ -3,10 +3,10 @@
     <ui:VisualElement name="screen" class="screen" picking-mode="Ignore" style="align-items: flex-end; justify-content: flex-start; padding-right: 18px;">
         <ui:VisualElement name="panel" class="panel">
             <ui:VisualElement name="panel-header" class="panel-header">
-                <ui:Label name="fold-arrow" text="▾" class="fold-arrow"/>
+                <ui:Label name="fold-arrow" text="▸" class="fold-arrow"/>
                 <ui:Label name="panel-title" text="Buffer GI Debug" class="panel-title"/>
             </ui:VisualElement>
-            <ui:VisualElement name="panel-body">
+            <ui:VisualElement name="panel-body" style="display: none;">
                 <ui:VisualElement class="panel-accent"/>
                 <ui:VisualElement name="settings-container" class="section-body">
                     <ui:Toggle name="debug-enabled-toggle" label="Enabled" tooltip="Master on/off for the debug voxel rendering (enables/disables the BufferGiDebug component)." class="setting-field">
@@ -54,6 +54,11 @@
                             <ui:DataBinding property="value" data-source-path="MinLuminance" binding-mode="TwoWay"/>
                         </Bindings>
                     </ui:FloatField>
+                    <ui:Toggle name="solve-profiler-toggle" label="Solve Profiler" tooltip="Show the buffer-GI solve GPU timings as a bottom-left screen overlay (enables the BufferGiSolveProfiler component)." class="setting-field">
+                        <Bindings>
+                            <ui:DataBinding property="value" data-source-path="SolveProfilerOverlay" binding-mode="TwoWay"/>
+                        </Bindings>
+                    </ui:Toggle>
                 </ui:VisualElement>
             </ui:VisualElement>
         </ui:VisualElement>
