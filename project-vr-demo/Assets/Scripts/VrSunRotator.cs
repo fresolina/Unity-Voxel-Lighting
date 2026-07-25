@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.XR.Interaction.Toolkit.Locomotion.Movement;
 
 namespace Lotec.Demo {
     /// <summary>
@@ -33,8 +32,8 @@ namespace Lotec.Demo {
         [Tooltip("Elevation limits in degrees: 0 puts the sun on the horizon, 90 straight overhead, " +
                  "negative below the horizon (night).")]
         [SerializeField] Vector2 _pitchRange = new Vector2(-15f, 89f);
-        [Tooltip("Stop the rig's continuous move provider while the sun is being steered, so the same " +
-                 "stick doesn't also walk the player. Restored on release.")]
+        [Tooltip("Stop the rig's stick locomotion while the sun is being steered, so the same stick " +
+                 "doesn't also walk or spin the player. Restored on release.")]
         [SerializeField] bool _suppressLocomotion = true;
         [Tooltip("Light to rotate. Empty = the loaded level's sun (RenderSettings.sun), which is also the " +
                  "light the GI reads - leave it empty unless you know the level's sun isn't assigned.")]
@@ -59,8 +58,7 @@ namespace Lotec.Demo {
         float _yaw;
         float _pitch;
         bool _steering;
-        ContinuousMoveProvider _moveProvider;
-        bool _moveProviderWasEnabled;
+        bool _holdingLocomotion;
 
         void Awake() {
             _holdAction = new InputAction("Sun Rotate Hold", InputActionType.Button, _holdBinding);
@@ -139,30 +137,22 @@ namespace Lotec.Demo {
             Vector3 euler = sun.transform.rotation.eulerAngles;
             _pitch = Mathf.Clamp(NormalizeAngle(euler.x), _pitchRange.x, _pitchRange.y);
             _yaw = NormalizeAngle(euler.y);
-            SetLocomotionSuppressed(true);
+            // Tracked per hold, not read back from the flag: toggling the flag mid-gesture must not leave
+            // the suppressor's count unbalanced.
+            if (_suppressLocomotion) {
+                _holdingLocomotion = true;
+                LocomotionSuppressor.Acquire();
+            }
         }
 
         void StopSteering() {
             if (!_steering) return;
             _steering = false;
-            SetLocomotionSuppressed(false);
-            if (_indicator != null) _indicator.Hide();
-        }
-
-        void SetLocomotionSuppressed(bool suppressed) {
-            if (!_suppressLocomotion) return;
-
-            if (suppressed) {
-                // Found lazily: the rig is a prefab instance in this scene, and a rig-less desktop run
-                // should just skip this rather than log.
-                if (_moveProvider == null) _moveProvider = FindAnyObjectByType<ContinuousMoveProvider>();
-                if (_moveProvider == null) return;
-                _moveProviderWasEnabled = _moveProvider.enabled;
-                _moveProvider.enabled = false;
-                return;
+            if (_holdingLocomotion) {
+                _holdingLocomotion = false;
+                LocomotionSuppressor.Release();
             }
-
-            if (_moveProvider != null) _moveProvider.enabled = _moveProviderWasEnabled;
+            if (_indicator != null) _indicator.Hide();
         }
 
         static float NormalizeAngle(float angle) => angle > 180f ? angle - 360f : angle;

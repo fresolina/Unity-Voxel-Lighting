@@ -193,8 +193,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 39292453}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.016479343, y: -0.95950335, z: 0.27528447, w: 0.057447612}
-  m_LocalPosition: {x: 3.1181283, y: 5.061265, z: 5.214939}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -0.009, y: 1.513, z: 11.314}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -271,7 +271,7 @@ Light:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 333063934}
-  m_Enabled: 0
+  m_Enabled: 1
   serializedVersion: 13
   m_Type: 0
   m_Color: {r: 0.89622635, g: 1, b: 0.995467, a: 1}
@@ -341,6 +341,7 @@ GameObject:
   - component: {fileID: 526675356}
   - component: {fileID: 526675352}
   - component: {fileID: 526675357}
+  - component: {fileID: 526675358}
   m_Layer: 0
   m_Name: Player input
   m_TagString: Untagged
@@ -406,16 +407,43 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 4b1f7c2ae9d5a4e4b93f6c81d2a70f35, type: 3}
-  m_Name:
+  m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Lotec.Demo.VrSunRotator
-  _holdBinding: '<XRController>{LeftHand}/{GripButton}'
-  _stickBinding: '<XRController>{LeftHand}/{Primary2DAxis}'
+  _holdBinding: <XRController>{LeftHand}/{GripButton}
+  _stickBinding: <XRController>{LeftHand}/{Primary2DAxis}
   _yawSpeed: 90
   _pitchSpeed: 45
   _deadzone: 0.2
   _pitchRange: {x: -15, y: 89}
   _suppressLocomotion: 1
   _sunOverride: {fileID: 0}
+  _showIndicator: 1
+  _indicator: {fileID: 0}
+--- !u!114 &526675358
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 526675349}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3ad7a58a0409bac40899857b33a43adc, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Lotec.Demo.VrHandLights
+  _lightContainer: {fileID: 39292454}
+  _spotLight: {fileID: 333063937}
+  _pointLight: {fileID: 1697248655}
+  _spotBinding: <XRController>/{PrimaryButton}
+  _pointBinding: <XRController>/{SecondaryButton}
+  _leftStickBinding: <XRController>{LeftHand}/{Primary2DAxis}
+  _rightStickBinding: <XRController>{RightHand}/{Primary2DAxis}
+  _intensityRange: {x: 1, y: 9}
+  _intensitySpeed: 4
+  _deadzone: 0.3
+  _suppressLocomotion: 1
+  _leftHand: {fileID: 0}
+  _rightHand: {fileID: 0}
 --- !u!1 &1437948840
 GameObject:
   m_ObjectHideFlags: 0
@@ -646,34 +674,6 @@ PrefabInstance:
     m_TransformParent: {fileID: 0}
     m_Modifications:
     - target: {fileID: 7627849395439079444, guid: 6fb9121b1b112fc4bac08e36a15f229f, type: 3}
-      propertyPath: m_LocalPosition.x
-      value: -0.01032
-      objectReference: {fileID: 0}
-    - target: {fileID: 7627849395439079444, guid: 6fb9121b1b112fc4bac08e36a15f229f, type: 3}
-      propertyPath: m_LocalPosition.y
-      value: 1.07054
-      objectReference: {fileID: 0}
-    - target: {fileID: 7627849395439079444, guid: 6fb9121b1b112fc4bac08e36a15f229f, type: 3}
-      propertyPath: m_LocalPosition.z
-      value: 0.07933
-      objectReference: {fileID: 0}
-    - target: {fileID: 7627849395439079444, guid: 6fb9121b1b112fc4bac08e36a15f229f, type: 3}
-      propertyPath: m_LocalRotation.w
-      value: 1
-      objectReference: {fileID: 0}
-    - target: {fileID: 7627849395439079444, guid: 6fb9121b1b112fc4bac08e36a15f229f, type: 3}
-      propertyPath: m_LocalRotation.x
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7627849395439079444, guid: 6fb9121b1b112fc4bac08e36a15f229f, type: 3}
-      propertyPath: m_LocalRotation.y
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7627849395439079444, guid: 6fb9121b1b112fc4bac08e36a15f229f, type: 3}
-      propertyPath: m_LocalRotation.z
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 7627849395439079444, guid: 6fb9121b1b112fc4bac08e36a15f229f, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
       value: 0
       objectReference: {fileID: 0}
@@ -689,8 +689,7 @@ PrefabInstance:
       propertyPath: m_Name
       value: EventSystem
       objectReference: {fileID: 0}
-    m_RemovedComponents:
-    - {fileID: 2180409137848799242, guid: 6fb9121b1b112fc4bac08e36a15f229f, type: 3}
+    m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
     m_AddedComponents: []
@@ -724,7 +723,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3f8a21b7c9d04e5fa6b7c8d9e0f10203, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.LocalLightsPublisher
-  _additionalLights: []
+  _additionalLights:
+  - {fileID: 1697248655}
+  - {fileID: 333063937}
 --- !u!4 &1689317578
 Transform:
   m_ObjectHideFlags: 0
