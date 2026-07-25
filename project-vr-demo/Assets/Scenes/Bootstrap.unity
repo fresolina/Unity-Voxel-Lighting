@@ -340,6 +340,7 @@ GameObject:
   - component: {fileID: 526675351}
   - component: {fileID: 526675356}
   - component: {fileID: 526675352}
+  - component: {fileID: 526675357}
   m_Layer: 0
   m_Name: Player input
   m_TagString: Untagged
@@ -395,6 +396,26 @@ MonoBehaviour:
   _lookSensitivity: 2
   _pitchLimit: 85
   _lookWhileRightMouseHeld: 1
+--- !u!114 &526675357
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 526675349}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4b1f7c2ae9d5a4e4b93f6c81d2a70f35, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Assembly-CSharp::Lotec.Demo.VrSunRotator
+  _holdBinding: '<XRController>{LeftHand}/{GripButton}'
+  _stickBinding: '<XRController>{LeftHand}/{Primary2DAxis}'
+  _yawSpeed: 90
+  _pitchSpeed: 45
+  _deadzone: 0.2
+  _pitchRange: {x: -15, y: 89}
+  _suppressLocomotion: 1
+  _sunOverride: {fileID: 0}
 --- !u!1 &1437948840
 GameObject:
   m_ObjectHideFlags: 0
