@@ -442,14 +442,14 @@ namespace Lotec.Lighting {
         bool HasSunChanged() {
             Light sun = RenderSettings.sun;
             Vector3 dir = sun != null ? -sun.transform.forward : Vector3.down;
-            Vector4 col = sun != null ? (Vector4)sun.color * sun.intensity : Vector4.zero;
+            Vector4 col = sun != null ? sun.FinalColor() : Vector4.zero;
             return dir != _prevSunDir || col != _prevSunColor;
         }
 
         void StoreSunState() {
             Light sun = RenderSettings.sun;
             _prevSunDir = sun != null ? -sun.transform.forward : Vector3.down;
-            _prevSunColor = sun != null ? (Vector4)sun.color * sun.intensity : Vector4.zero;
+            _prevSunColor = sun != null ? sun.FinalColor() : Vector4.zero;
         }
 
         // BufferGI needs a power-of-two cubic grid (the shift/mask index math + the word-aligned
@@ -1246,7 +1246,9 @@ namespace Lotec.Lighting {
             Light sun = RenderSettings.sun;
             if (sun != null) {
                 _computeShader.SetVector(s_directLightDir, -sun.transform.forward);
-                _computeShader.SetVector(s_directLightColor, (Vector4)sun.color * sun.intensity);
+                // FinalColor: the solve must bounce the SAME colour the fragment shades with, which for
+                // the main light is URP's already colour-space-converted value.
+                _computeShader.SetVector(s_directLightColor, sun.FinalColor());
             } else {
                 _computeShader.SetVector(s_directLightDir, Vector3.down);
                 _computeShader.SetVector(s_directLightColor, Vector4.zero);
