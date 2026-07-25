@@ -22,6 +22,7 @@ namespace Lotec.Lighting.Samples {
         static BufferGiDebugUi s_instance;
 
         [SerializeField] BufferGiDebug _debug;
+        [SerializeField] BufferGiSolveProfiler _solveProfiler;
         [SerializeField] PanelRenderer _panel;
         [SerializeField] PanelSettings _panelSettings;
         [SerializeField] VisualTreeAsset _visualTreeAsset;
@@ -41,6 +42,7 @@ namespace Lotec.Lighting.Samples {
         float _lastNormalLineLength;
         float _lastIntensity;
         float _lastMinLuminance;
+        bool _lastSolveProfilerOverlay;
 
         public event EventHandler<BindablePropertyChangedEventArgs> propertyChanged;
 
@@ -114,6 +116,10 @@ namespace Lotec.Lighting.Samples {
         void EnsureDebug() {
             if (_debug == null)
                 _debug = FindAnyObjectByType<BufferGiDebug>();
+            // Include inactive: the profiler ships disabled in most scenes, and the toggle is how it
+            // gets turned on.
+            if (_solveProfiler == null)
+                _solveProfiler = FindAnyObjectByType<BufferGiSolveProfiler>(FindObjectsInactive.Include);
         }
 
         void EnsurePanel() {
@@ -215,6 +221,7 @@ namespace Lotec.Lighting.Samples {
                 _boundRoot.Q<Slider>("normal-line-length-slider")?.ClearBindings();
                 _boundRoot.Q<FloatField>("intensity-field")?.ClearBindings();
                 _boundRoot.Q<FloatField>("min-luminance-field")?.ClearBindings();
+                _boundRoot.Q<Toggle>("solve-profiler-toggle")?.ClearBindings();
                 _boundRoot.dataSource = null;
             }
             _boundRoot = null;
@@ -283,6 +290,20 @@ namespace Lotec.Lighting.Samples {
             set { if (_debug != null) { _debug.minLuminance = Mathf.Max(0f, value); RefreshUi(true); } }
         }
 
+        // The overlay is drawn from the profiler's OnGUI, so it only shows while the component runs -
+        // the toggle drives both the component and its overlay flag rather than half of the pair.
+        [CreateProperty]
+        bool SolveProfilerOverlay {
+            get => _solveProfiler != null && _solveProfiler.enabled && _solveProfiler.ScreenOverlay;
+            set {
+                if (_solveProfiler == null)
+                    return;
+                _solveProfiler.ScreenOverlay = value;
+                _solveProfiler.enabled = value;
+                RefreshUi(true);
+            }
+        }
+
         // ---- Snapshot / change notification --------------------------------------------------------
 
         void RefreshUi(bool notifyChanges) {
@@ -295,6 +316,7 @@ namespace Lotec.Lighting.Samples {
             float normalLineLength = NormalLineLength;
             float intensity = Intensity;
             float minLuminance = MinLuminance;
+            bool solveProfilerOverlay = SolveProfilerOverlay;
 
             if (!_hasBindingSnapshot) {
                 _lastDebugEnabled = debugEnabled;
@@ -306,6 +328,7 @@ namespace Lotec.Lighting.Samples {
                 _lastNormalLineLength = normalLineLength;
                 _lastIntensity = intensity;
                 _lastMinLuminance = minLuminance;
+                _lastSolveProfilerOverlay = solveProfilerOverlay;
                 _hasBindingSnapshot = true;
                 return;
             }
@@ -319,6 +342,7 @@ namespace Lotec.Lighting.Samples {
             UpdateFloatSnapshot(ref _lastNormalLineLength, normalLineLength, notifyChanges, nameof(NormalLineLength));
             UpdateFloatSnapshot(ref _lastIntensity, intensity, notifyChanges, nameof(Intensity));
             UpdateFloatSnapshot(ref _lastMinLuminance, minLuminance, notifyChanges, nameof(MinLuminance));
+            UpdateBoolSnapshot(ref _lastSolveProfilerOverlay, solveProfilerOverlay, notifyChanges, nameof(SolveProfilerOverlay));
         }
 
         void UpdateEnumSnapshot<T>(ref T current, T next, bool notify, string propertyName) where T : struct, Enum {

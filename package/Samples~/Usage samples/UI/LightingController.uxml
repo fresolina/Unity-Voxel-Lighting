@@ -3,10 +3,10 @@
     <ui:VisualElement name="screen" class="screen">
         <ui:VisualElement name="panel" class="panel">
             <ui:VisualElement name="panel-header" class="panel-header">
-                <ui:Label name="fold-arrow" text="▾" class="fold-arrow"/>
+                <ui:Label name="fold-arrow" text="▸" class="fold-arrow"/>
                 <ui:Label name="panel-title" text="Lighting Controls" class="panel-title"/>
             </ui:VisualElement>
-            <ui:VisualElement name="panel-body">
+            <ui:VisualElement name="panel-body" style="display: none;">
             <ui:VisualElement class="panel-accent"/>
             <ui:VisualElement name="settings-container" class="section-body">
                 <ui:EnumField label="GI" value="BufferGi" type="Lotec.Lighting.GiMethod, Lotec.Lighting" name="gi-enum" tooltip="Which GI system runs (toggles the GI updater components)." class="setting-field">

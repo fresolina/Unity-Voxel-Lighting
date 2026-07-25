@@ -75,7 +75,8 @@ namespace Lotec.Lighting.Samples {
         bool _lastSsboRead;
         AutoExposure.TonemapMode _lastTonemap;
         Keyboard _keyboard;
-        bool _uiFolded;
+        // Both panels ship folded (see the UXML `panel-body` display), so the first toggle unfolds.
+        bool _uiFolded = true;
 #if LOTEC_XR
         bool _menuHeldLastFrame;
 #endif
