@@ -199,6 +199,13 @@ namespace Lotec.Lighting {
         // BGI_MAX_AIR_DIST in BufferGiField.hlsl so the whole capped field converges.
         const int AirDistancePasses = 5;
         bool _resetFineField;
+        // Zero EVERY field's dynamic slices before the next solve (fresh/re-enabled buffers). Deferred
+        // to Update rather than done at allocation time so the grid constants are bound first - CSClear's
+        // bounds test reads _BgiCount, so a stale/unset one would silently skip the clear.
+        bool _resetAllFields;
+#if UNITY_EDITOR
+        bool _reloadHookInstalled; // domain-reload release hook (see InstallReloadHook)
+#endif
         bool _hasLoggedMissingReferences;
         bool _warnedBakeAssetMismatch; // warn once per change, not per voxelize attempt
         // Progressive accumulation in SAMPLES (rays): _collectedSamples = total rays gathered since the last
@@ -348,6 +355,14 @@ namespace Lotec.Lighting {
 
         void OnEnable() {
             Instance = this;
+            // Switching the GI method flips this component's enabled state (GiMethodSelector). Only the
+            // DYNAMIC light fields restart: clear them and gather the ray budget from scratch, so the
+            // solver visibly begins again instead of idling on the field it held when GI was switched
+            // off (a spent sample budget would otherwise never wake). The voxelization is untouched -
+            // it's static baked data the buffers keep across a disable (see OnDisable).
+            _resetAllFields = true;
+            _collectedSamples = 0;
+            InstallReloadHook();
 #if UNITY_EDITOR
             // In edit mode the editor only ticks Update sporadically, so the temporal solve never
             // accumulates and the visualizer's per-frame draw is missed. Pumping the player loop
@@ -364,11 +379,37 @@ namespace Lotec.Lighting {
             SetGiBufferKeyword(false);
             _exposureControl.ResetToDefault();
             _exposureControl.Release();
-            ReleaseBuffers();
+            // The buffers deliberately SURVIVE a disable. Most of their content (material, surface,
+            // occupancy) is the static voxelization: rebuilding it on every GI-method toggle would
+            // re-rasterize the whole scene (or re-upload the disk bakes) for data that hasn't changed.
+            // Only the dynamic light fields are restarted, by OnEnable. Freed in OnDestroy instead
+            // (plus before an editor domain reload, which drops the managed references).
             if (_voxelizeMaterial != null) {
                 if (Application.isPlaying) Destroy(_voxelizeMaterial); else DestroyImmediate(_voxelizeMaterial);
                 _voxelizeMaterial = null;
             }
+        }
+
+        void OnDestroy() {
+#if UNITY_EDITOR
+            if (_reloadHookInstalled) {
+                UnityEditor.AssemblyReloadEvents.beforeAssemblyReload -= ReleaseBuffers;
+                _reloadHookInstalled = false;
+            }
+#endif
+            ReleaseBuffers();
+        }
+
+        // Release the buffers before an editor domain reload: they outlive a disable now, but the
+        // managed references never survive a reload, so without this the native buffers are left to the
+        // GC finalizer (and Unity's "not disposed" warning). Hooked from OnEnable and unhooked in
+        // OnDestroy - NOT in OnDisable, since a disabled updater still owns live buffers.
+        void InstallReloadHook() {
+#if UNITY_EDITOR
+            if (_reloadHookInstalled) return;
+            UnityEditor.AssemblyReloadEvents.beforeAssemblyReload += ReleaseBuffers;
+            _reloadHookInstalled = true;
+#endif
         }
 
 #if UNITY_EDITOR
@@ -497,6 +538,15 @@ namespace Lotec.Lighting {
             BindGridConstantsToCompute();
             if (!_materialBaked) {
                 Voxelize();
+            }
+            if (_resetAllFields) {
+                // Cold start (fresh buffers, or this component was just re-enabled by a GI-method
+                // toggle): zero every field so the solve refills from black instead of stale/undefined
+                // data. Subsumes the fine-only reset below - a just-cleared coarse field has nothing
+                // to seed from.
+                ClearDynamicFields();
+                _resetAllFields = false;
+                _resetFineField = false;
             }
             if (_resetFineField) {
                 // The fine bounds changed: reset the stale fine slice for the new volume (coarse is
@@ -631,7 +681,7 @@ namespace Lotec.Lighting {
         /// (newly added) holder isn't in the switch-time cache yet.</summary>
         public static void RefreshOcclusionSourcesFor(VoxelVolume volume) {
             if (volume == null) return;
-            BufferGiUpdater[] updaters = FindObjectsByType<BufferGiUpdater>(FindObjectsSortMode.None);
+            BufferGiUpdater[] updaters = FindObjectsByType<BufferGiUpdater>();
             for (int i = 0; i < updaters.Length; i++) {
                 if (updaters[i]._volume != volume) continue;
                 updaters[i]._occField = volume.GetComponent<VoxelOcclusionField>();
@@ -679,8 +729,9 @@ namespace Lotec.Lighting {
             _irradianceTex = CreateIrradianceTexture("BgiIrradianceTex");
             _irradianceTexCoarse = CreateIrradianceTexture("BgiIrradianceTexCoarse");
             _materialBaked = false;
-
-            ClearDynamicFields();
+            // A freshly allocated ComputeBuffer holds undefined data: request the whole-field clear.
+            // Update runs it once the grid constants are bound (CSClear's bounds test needs them).
+            _resetAllFields = true;
         }
 
         // Invalidate the voxelization when one of its actual inputs changed since the last bake:
