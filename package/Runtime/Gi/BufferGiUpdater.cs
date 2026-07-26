@@ -17,7 +17,7 @@ namespace Lotec.Lighting {
     /// </summary>
     [DisallowMultipleComponent]
     [ExecuteAlways]
-    // The enabled updater owns the GI keyword group + the _Exposure global (GiMethodSelector toggles
+    // The enabled updater owns the GI + tonemap keyword groups and the _ExposureLinear global (GiMethodSelector toggles
     // this component's enabled state to switch GI on/off).
     [AddComponentMenu("Lotec/Voxel Lighting/Buffer GI")]
     public class BufferGiUpdater : MonoBehaviour {
@@ -120,8 +120,9 @@ namespace Lotec.Lighting {
 
         [Header("Lighting")]
         [Tooltip("Display transform (exposure + tonemap operator), with optional auto-exposure. " +
-                 "Published as the _Exposure + _Tonemap globals; the lit shader applies " +
-                 "exp2(_Exposure) whenever GI is on. Set explicitly so a stale value can't darken the image.")]
+                 "Published as the _ExposureLinear global (exp2 of the EV, precomputed) plus the " +
+                 "TONEMAP_* keyword; the lit shader applies it whenever GI is on. Set explicitly so a " +
+                 "stale value can't darken the image.")]
         [SerializeField] AutoExposure _exposureControl = new AutoExposure();
 
         [Header("Setup")]
@@ -651,7 +652,7 @@ namespace Lotec.Lighting {
             Shader.SetGlobalTexture(s_bgiIrradianceTexCoarse, _irradianceTexCoarse);
             if (_ssboRead) Shader.EnableKeyword(SsboReadKeyword);
             else Shader.DisableKeyword(SsboReadKeyword);
-            // The display transform (_Exposure + _Tonemap) is published by _exposureControl.Apply
+            // The display transform (_ExposureLinear + the TONEMAP_* keyword) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value can't darken it.
         }
 

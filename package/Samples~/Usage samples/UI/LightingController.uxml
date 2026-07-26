@@ -44,6 +44,11 @@
                         <ui:DataBinding property="value" data-source-path="Tonemap" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:EnumField>
+                <ui:Toggle name="auto-exposure-toggle" label="Auto Exposure" tooltip="Adapt exposure to the measured GI luminance. Off holds the manual exposure and skips the per-measurement luminance dispatch + readback - the part of &quot;tonemapping on&quot; that costs frame time, so this is the A/B for that cost." class="setting-field">
+                    <Bindings>
+                        <ui:DataBinding property="value" data-source-path="AutoExposureEnabled" binding-mode="TwoWay"/>
+                    </Bindings>
+                </ui:Toggle>
             </ui:VisualElement>
             <ui:VisualElement style="flex-direction: row; align-items: flex-start;">
                 <ui:VisualElement class="section-body debug-info-section">
