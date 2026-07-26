@@ -456,6 +456,7 @@ GameObject:
   - component: {fileID: 1437948842}
   - component: {fileID: 1437948843}
   - component: {fileID: 1437948845}
+  - component: {fileID: 1437948846}
   m_Layer: 0
   m_Name: Lighting manager
   m_TagString: Untagged
@@ -527,6 +528,23 @@ MonoBehaviour:
   _giResolution: 32
   _computeShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
   _voxelizeShader: {fileID: 4800000, guid: fb19bf6e7b7d7e24bb740879f668a9bd, type: 3}
+--- !u!114 &1437948846
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1437948840}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4a9b32c8dae15f60b7c8d9e0f1020314, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.SdfShadow
+  _config:
+    <MaxSteps>k__BackingField: 64
+    <Softness>k__BackingField: 13
+    <StartOffset>k__BackingField: 0.5
+    <MinStep>k__BackingField: 0.1
 --- !u!1 &1500960146
 GameObject:
   m_ObjectHideFlags: 0
