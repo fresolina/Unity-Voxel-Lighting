@@ -206,10 +206,13 @@ float3 SanitizeColor(float3 c)
     return (c < 1e8) ? clamp(c, 0.0, 60000.0) : float3(0.0, 0.0, 0.0);
 }
 
+// Must stay identical to the fragment's GetLocalLightRangeAttenuation (VoxelDirectLighting.hlsl):
+// URP's window, saturate(1 - (d^2/r^2)^2)^2, so a light's bounce matches the direct lighting it casts.
 float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
 {
     float distanceAtten = rcp(max(distSq, 0.01));
-    float rangeFade = saturate(1.0 - (distSq / max(rangeSq, 1e-6)));
+    float factor = distSq / max(rangeSq, 1e-6);
+    float rangeFade = saturate(1.0 - factor * factor);
     return distanceAtten * rangeFade * rangeFade;
 }
 
