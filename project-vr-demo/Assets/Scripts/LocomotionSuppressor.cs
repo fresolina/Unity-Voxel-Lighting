@@ -61,7 +61,7 @@ namespace Lotec.Demo {
         }
 
         static void Collect<T>() where T : LocomotionProvider {
-            T[] found = Object.FindObjectsByType<T>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+            T[] found = Object.FindObjectsByType<T>(FindObjectsInactive.Exclude);
             for (int i = 0; i < found.Length; i++) s_providers.Add(found[i]);
         }
     }
