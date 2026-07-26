@@ -3,8 +3,12 @@
 
 #include "Math.hlsl"
 
+// `lit` is a 0..1 visibility factor - fp16 is ample for it and it is what every consumer
+// (shadow terms, occlusion bakes) wants. Positions/distances stay fp32: `t` accumulates over
+// hundreds of steps and `hitPos`/`uvw` are world/volume coordinates, where fp16's ~3 decimal
+// digits would quantize the march into visible stair-stepping.
 struct RayMarchResult {
-    float lit;
+    half lit;
     float3 hitPos;
 };
 
@@ -25,7 +29,7 @@ RayMarchResult RayMarchTex3DSdf(
     half softness
 ) {
     RayMarchResult result = (RayMarchResult)0;
-    result.lit = 1.0;
+    result.lit = 1.0h;
 
     float3 size = max(boundsSize, 1e-6);
     float3 invSize = rcp(size);
@@ -46,27 +50,31 @@ RayMarchResult RayMarchTex3DSdf(
 
         if (d <= epsilon) {
             result.hitPos = worldPos + dir * t;
-            result.lit = 0.0;
+            result.lit = 0.0h;
             break;
         }
 
-        result.lit = min(result.lit, softness * d * rcp(max(t, 1e-6)));
-        if (result.lit < 0.01) {
+        // Penumbra estimate. The ratio is formed in fp32 (d and t are world distances) and
+        // saturated before narrowing: with a large `softness` the product can exceed fp16's
+        // 65504 and become Inf, and saturate() is a no-op on the result either way - `lit`
+        // starts at 1, so min() with anything >= 1 never changes it.
+        result.lit = min(result.lit, (half)saturate(softness * d * rcp(max(t, 1e-6))));
+        if (result.lit < 0.01h) {
             result.hitPos = worldPos + dir * t;
-            result.lit = 0.0;
+            result.lit = 0.0h;
             break;
         }
 
         t += max(d, minStep);
     }
 
-    if (result.lit > 0.0) {
+    if (result.lit > 0.0h) {
         if (t <= maxDistance) {
             // Ran out of steps before the ray reached maxDistance. The path
             // has not been verified clear, so conservatively treat it as
             // occluded to avoid light leaking through complex geometry.
             result.hitPos = worldPos + dir * t;
-            result.lit = 0.0;
+            result.lit = 0.0h;
         } else {
             result.hitPos = worldPos + dir * min(t, maxDistance);
             result.lit = saturate(result.lit);
@@ -76,7 +84,7 @@ RayMarchResult RayMarchTex3DSdf(
 }
 
 // Convenience overloads matching the old signatures.
-float RayMarchTex3D(
+half RayMarchTex3D(
     Texture3D<float> sdfTex,
     SamplerState sampler_SdfTex,
     float3 worldPos,
@@ -96,7 +104,7 @@ float RayMarchTex3D(
     return r.lit;
 }
 
-float RayMarchTex3D(
+half RayMarchTex3D(
     Texture3D<float> sdfTex,
     SamplerState sampler_SdfTex,
     float3 worldPos,

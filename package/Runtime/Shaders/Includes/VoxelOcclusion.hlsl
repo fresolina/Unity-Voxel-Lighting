@@ -32,6 +32,8 @@ int _BitmaskSunFibIndex;
 // Number of baked directions (8, 32, or 64). Determines texture decode path.
 int _BitmaskDirCount;
 
+// Stays fp32: 65535 is past fp16's 65504 max, and the product has to land on an exact
+// integer for the bit decode to be right.
 inline uint U16FromUNorm(float v) {
     return (uint)floor(v * 65535.0 + 0.5);
 }
@@ -59,38 +61,40 @@ inline uint2 GetBitmaskAtVoxel(int3 voxelIdx) {
 }
 
 // Trilinear interpolation of a single occlusion bit across 8 neighboring voxels.
-// Returns 0.0 (shadow) to 1.0 (lit).
-inline float GetShadowBitTrilinear8Tap(float3 localPos, uint chosenIndex) {
+// Returns 0.0 (shadow) to 1.0 (lit). The taps are single bits and the weights are
+// fractions in [0,1), so the whole blend runs in fp16; only `localPos` (a voxel-space
+// coordinate that reaches the grid resolution) has to be fp32 for frac() to be exact.
+inline half GetShadowBitTrilinear8Tap(float3 localPos, uint chosenIndex) {
     int3 baseIdx = int3(floor(localPos));
-    float3 f = frac(localPos);
+    half3 f = (half3)frac(localPos);
 
-    float o000 = (float)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 0, 0)), chosenIndex);
-    float o100 = (float)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 0, 0)), chosenIndex);
-    float o010 = (float)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 1, 0)), chosenIndex);
-    float o110 = (float)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 1, 0)), chosenIndex);
-    float o001 = (float)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 0, 1)), chosenIndex);
-    float o101 = (float)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 0, 1)), chosenIndex);
-    float o011 = (float)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 1, 1)), chosenIndex);
-    float o111 = (float)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 1, 1)), chosenIndex);
+    half o000 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 0, 0)), chosenIndex);
+    half o100 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 0, 0)), chosenIndex);
+    half o010 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 1, 0)), chosenIndex);
+    half o110 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 1, 0)), chosenIndex);
+    half o001 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 0, 1)), chosenIndex);
+    half o101 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 0, 1)), chosenIndex);
+    half o011 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 1, 1)), chosenIndex);
+    half o111 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 1, 1)), chosenIndex);
 
-    float oX00 = lerp(o000, o100, f.x);
-    float oX10 = lerp(o010, o110, f.x);
-    float oX01 = lerp(o001, o101, f.x);
-    float oX11 = lerp(o011, o111, f.x);
-    float oXY0 = lerp(oX00, oX10, f.y);
-    float oXY1 = lerp(oX01, oX11, f.y);
+    half oX00 = lerp(o000, o100, f.x);
+    half oX10 = lerp(o010, o110, f.x);
+    half oX01 = lerp(o001, o101, f.x);
+    half oX11 = lerp(o011, o111, f.x);
+    half oXY0 = lerp(oX00, oX10, f.y);
+    half oXY1 = lerp(oX01, oX11, f.y);
 
-    return saturate(1.0 - lerp(oXY0, oXY1, f.z));
+    return saturate(1.0h - lerp(oXY0, oXY1, f.z));
 }
 
 // Shadow query using the precomputed sun Fibonacci index. Returns 0.0 (shadow) to 1.0 (lit).
-float GetBitmaskShadow(float3 worldPos) {
+half GetBitmaskShadow(float3 worldPos) {
     float3 localPos = (worldPos - _VoxelVolumeBoundsMin) * _VoxelSizeInverse;
     return GetShadowBitTrilinear8Tap(localPos, (uint)_BitmaskSunFibIndex);
 }
 
 // Variant with normal-based offset to reduce self-occlusion.
-float GetBitmaskShadow(float3 worldPos, float3 normal) {
+half GetBitmaskShadow(float3 worldPos, float3 normal) {
     float3 offsetPos = worldPos + normal * _VoxelSize * 1.2;
     return GetBitmaskShadow(offsetPos);
 }
@@ -108,10 +112,11 @@ TEXTURE3D(_OccFieldTex);
 SAMPLER(sampler_OccFieldTex);
 
 // Sample the occlusion field shadow using the precomputed sun direction.
-// Returns 0.0 (shadow) to 1.0 (lit).
-float GetOccFieldShadow(float3 worldPos) {
+// Returns 0.0 (shadow) to 1.0 (lit). The texture holds 0..1 lit values, so the fetch
+// narrows to fp16 immediately; only the uvw lookup stays fp32.
+half GetOccFieldShadow(float3 worldPos) {
     float3 uvw = WorldToVoxelUV(worldPos);
-    float4 raw = _OccFieldTex.SampleLevel(sampler_OccFieldTex, uvw, 0);
+    half4 raw = (half4)_OccFieldTex.SampleLevel(sampler_OccFieldTex, uvw, 0);
     if (_OccFieldSunChannel == 0) return raw.r;
     if (_OccFieldSunChannel == 1) return raw.g;
     if (_OccFieldSunChannel == 2) return raw.b;
@@ -119,7 +124,7 @@ float GetOccFieldShadow(float3 worldPos) {
 }
 
 // Variant with normal-based offset to reduce self-occlusion.
-float GetOccFieldShadow(float3 worldPos, float3 normal) {
+half GetOccFieldShadow(float3 worldPos, float3 normal) {
     float3 offsetPos = worldPos + normal * _VoxelSize * 1.2;
     return GetOccFieldShadow(offsetPos);
 }

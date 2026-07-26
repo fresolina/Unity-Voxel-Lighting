@@ -21,14 +21,16 @@ float _RaymarchSoftness;
 // Returns 0..1: fully shadowed to fully lit. The start offset skips the ray forward
 // along the light direction past the near-surface band before sampling begins, which
 // is what prevents the surface from self-shadowing.
-inline float GetShadowFromSdf(float3 dir, float3 worldPos, float maxDistance)
+// `dir` must already be normalized - every caller has a unit direction in hand (URP's
+// light.direction, or toLight * rsqrt(distSq)), so re-normalizing here was pure waste.
+inline half GetShadowFromSdf(float3 dir, float3 worldPos, float maxDistance)
 {
     // No step budget means nobody published the tuning (the SdfShadow component owns it, scaled by the
     // active volume's voxel size). Fail OPEN - unlit is not a safe default here: the march's
     // out-of-steps fallback is a hard 0, so a scene without that component silently lost every local
     // light instead of just their shadows.
     if (_RaymarchMaxSteps <= 0)
-        return 1.0;
+        return 1.0h;
 
     float startOffset = min(_RaymarchStartOffset, maxDistance * 0.5);
     return RayMarchTex3D(_SdfHires, sampler_SdfHires, worldPos, dir, _VoxelVolumeBoundsMin, _VoxelVolumeBoundsSize, startOffset, maxDistance, _RaymarchEpsilon, _RaymarchMinStep, _RaymarchMaxSteps, _RaymarchSoftness);
