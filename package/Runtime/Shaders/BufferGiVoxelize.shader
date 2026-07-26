@@ -64,15 +64,17 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                 // Base-map sample OUTSIDE the branch (keeps the uv derivatives well-defined). The
                 // grid-sized raster target makes those derivatives span the texels one voxel covers,
                 // so the mip chain hands back roughly the voxel's AVERAGE texture color for free.
-                float4 tex = SAMPLE_TEXTURE2D(_VoxBaseMap, sampler_VoxBaseMap, i.uv);
+                // Colour/alpha are fp16 (they end up as 8-bit channels anyway); the world position
+                // and the grid coordinate derived from it stay fp32.
+                half4 tex = (half4)SAMPLE_TEXTURE2D(_VoxBaseMap, sampler_VoxBaseMap, i.uv);
                 int3 c = (int3)floor(BgiWorldToGrid(i.ws));
                 if (all(c >= 0) && all(c < (int)BGI_GRID)) {
                     // Transparency: a mostly-transparent (or alpha-clipped) fragment leaves its voxel
                     // EMPTY - windows/cutouts neither occupy nor block GI rays. _VoxCutoff is 0 for
                     // opaque materials so an opaque base map's (often repurposed) alpha can't punch holes.
-                    if (_VoxAlbedo.a * tex.a < _VoxCutoff) return 0;
+                    if ((half)_VoxAlbedo.a * tex.a < (half)_VoxCutoff) return 0;
                     // Floor AFTER the texture multiply so black texels stay occupied (rgb 0 = empty).
-                    float3 albedo = max(_VoxAlbedo.rgb * tex.rgb, 1.0 / 255.0);
+                    half3 albedo = max((half3)_VoxAlbedo.rgb * tex.rgb, 1.0h / 255.0h);
                     uint packed = BgiPackMaterial(albedo, _VoxEmission8);
                     _MaterialWrite[BgiSlot((uint3)c)] = packed;
 

@@ -80,8 +80,9 @@ uint BgiPackMaterial(float3 albedo, float emission8) {
     return a.x | (a.y << 8) | (a.z << 16) | (e << 24);
 }
 
-float3 BgiAlbedo(uint m) {
-    return float3(m & 0xffu, (m >> 8) & 0xffu, (m >> 16) & 0xffu) * (1.0 / 255.0);
+// 8-bit channels -> fp16 is lossless (11-bit mantissa), and albedo is a colour: half.
+half3 BgiAlbedo(uint m) {
+    return (half3)(float3(m & 0xffu, (m >> 8) & 0xffu, (m >> 16) & 0xffu) * (1.0 / 255.0));
 }
 
 // Raw 8-bit log-encoded emission; decode with DecodeEmissionIntensityFrom8Bit (Math.hlsl).
@@ -104,6 +105,14 @@ uint2 BgiPackRgb(float3 c, float w) {
 void BgiUnpackRgb(uint2 p, out float3 c, out float w) {
     c = float3(f16tof32(p.x & 0xffffu), f16tof32(p.x >> 16), f16tof32(p.y & 0xffffu));
     w = f16tof32(p.y >> 16);
+}
+
+// fp16 flavour of the unpack. The stored values ARE fp16 by construction, so narrowing back is
+// exact - this just keeps the result in fp16 registers instead of round-tripping through fp32.
+// Separate name (not an overload) so a call can never resolve ambiguously on its out params.
+void BgiUnpackRgbH(uint2 p, out half3 c, out half w) {
+    c = half3(f16tof32(p.x & 0xffffu), f16tof32(p.x >> 16), f16tof32(p.y & 0xffffu));
+    w = (half)f16tof32(p.y >> 16);
 }
 
 // --- Per-voxel SURFACE word (32 bits/voxel), baked at voxelize/build time, read once per hit ---
@@ -150,8 +159,8 @@ uint BgiPackOpenness(float openness) {
     return (uint)(saturate(openness) * 255.0 + 0.5) << 16;
 }
 
-float BgiSurfaceOpenness(uint word) {
-    return ((word >> 16) & 0xffu) * (1.0 / 255.0);
+half BgiSurfaceOpenness(uint word) {
+    return (half)(((word >> 16) & 0xffu) * (1.0 / 255.0));
 }
 
 // Air-distance in bits 16-23 (AIR voxels): integer city-block distance to the nearest solid, capped

@@ -67,15 +67,18 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // TONEMAP_OFF (the default) compiles the whole block out: linear HDR for a post stack.
             #pragma multi_compile TONEMAP_OFF TONEMAP_REINHARD TONEMAP_AGX TONEMAP_ACES
 
+            // Colours and factors are declared `half` (matching URP's own UnityPerMaterial layout in
+            // LitInput.hlsl) so the constants arrive in fp16 registers and the shading chain never
+            // gets promoted back to fp32 by a stray float operand.
             CBUFFER_START(UnityPerMaterial)
                 TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
                 TEXTURE2D(_BumpMap); SAMPLER(sampler_BumpMap);
-                float4 _BaseColor;
-                float _Roughness;
-                float _Emission;
+                half4 _BaseColor;
+                half _Roughness;
+                half _Emission;
                 TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
-                float4 _EmissionColor;
-                float _ReceiveLocalShadows;
+                half4 _EmissionColor;
+                half _ReceiveLocalShadows;
             CBUFFER_END
 
             // Scene-wide exposure as a LINEAR multiplier - exp2(EV) precomputed on the CPU by
@@ -108,12 +111,14 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 v2f OUT;
                 OUT.positionWS = TransformObjectToWorld(IN.positionOS.xyz);
                 #ifdef _NORMALMAP
-                    OUT.normal = TransformObjectToWorldNormal(IN.normalOS);
-                    OUT.tangent = normalize(TransformObjectToWorldDir(IN.tangent.xyz));
-                    float tangentSign = IN.tangent.w * GetOddNegativeScale();
+                    // No normalize here: interpolation denormalizes anyway, and GetNormal
+                    // re-normalizes all three basis vectors in the fragment.
+                    OUT.normal = (half3)TransformObjectToWorldNormal(IN.normalOS);
+                    OUT.tangent = (half3)TransformObjectToWorldDir(IN.tangent.xyz);
+                    half tangentSign = (half)(IN.tangent.w * GetOddNegativeScale());
                     OUT.bitangent = cross(OUT.normal, OUT.tangent) * tangentSign;
                 #else
-                    OUT.normalWS = TransformObjectToWorldNormal(IN.normalOS);
+                    OUT.normalWS = (half3)TransformObjectToWorldNormal(IN.normalOS);
                 #endif
                 OUT.uv = IN.uv;
                 OUT.positionHCS = TransformWorldToHClip(OUT.positionWS);
@@ -164,11 +169,12 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     // own openness, so this path no longer samples the SDF texture at all.
                     lit += albedo * BgiGatherIndirect(IN.positionWS, N) * bgiAo;
                 #elif defined(GI_UNITY)
+                    // (SampleSH is fp32 in URP; narrowed once so the add stays in fp16.)
                     // A/B baseline: Unity's built-in indirect diffuse (ambient / light probes via
                     // SampleSH). No voxel fields are read or bound in this variant (honest perf +
                     // WebGPU-safe), and no voxel-GI exposure is applied below - so this measures the
                     // engine's baked indirect against the voxel GI with direct lighting held constant.
-                    lit += albedo * SampleSH(N);
+                    lit += albedo * (half3)SampleSH(N);
                 #endif
 
                 // Self-emission, added before the display transform so it is exposed/tonemapped
@@ -183,7 +189,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 // (and therefore occupancy) proportional to the operator actually in use.
                 #if !defined(TONEMAP_OFF)
                     #if defined(GI_VOXEL_BUFFER)
-                        lit *= _ExposureLinear;   // exposure only meaningful when GI drives it
+                        lit *= (half)_ExposureLinear;   // exposure only meaningful when GI drives it
                     #endif
                     #if defined(TONEMAP_AGX)
                         lit = AgxTonemap(lit);
@@ -194,8 +200,13 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     #endif
                     // Interleaved-gradient-noise dither (~1/255) so the smooth GI gradients don't
                     // band when written to an 8-bit target. Skipped when Off (HDR output).
-                    half ign = frac(52.9829189h * frac(dot(IN.positionHCS.xy, half2(0.06711056h, 0.00583715h))));
-                    lit += (ign - 0.5h) * (1.0h / 255.0h);
+                    // This is the one chain that has to stay fp32 (three scalar ops, no register
+                    // pressure): the frac() cascade needs the low bits of a screen-pixel-scale
+                    // product. At a 1080p x coordinate the intermediate is ~140, where fp16's ulp is
+                    // 0.125 - which collapses the noise to ~32 levels and reintroduces the very
+                    // banding this exists to hide. Only the final +-1/255 offset is fp16.
+                    float ign = frac(52.9829189 * frac(dot(IN.positionHCS.xy, float2(0.06711056, 0.00583715))));
+                    lit += (half)((ign - 0.5) * (1.0 / 255.0));
                 #endif
 
                 return half4(lit, _BaseColor.a);

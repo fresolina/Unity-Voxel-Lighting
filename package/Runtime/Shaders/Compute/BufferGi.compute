@@ -178,48 +178,65 @@ float3 SurfaceNormal(int3 c)
     return BgiSurfaceNormal(_Surface[BgiSlot((uint3)c)]);
 }
 
-// Evaluate the environment ambient-probe SH in a direction (matches Unity's ShadeSH9).
-float3 EvalEnvSH(float3 n)
+// Evaluate the environment ambient-probe SH in a direction (matches Unity's ShadeSH9). The SH
+// coefficients are fp32 uniforms so the dot products stay fp32; the resulting radiance is narrowed
+// once, since it is only ever fp16-packed into the fields anyway.
+half3 EvalEnvSH(float3 n)
 {
     float4 vA = float4(n, 1.0);
     float3 l = float3(dot(_EnvShAr, vA), dot(_EnvShAg, vA), dot(_EnvShAb, vA)); // L0 + L1
     float4 vB = n.xyzz * n.yzzx;
     l += float3(dot(_EnvShBr, vB), dot(_EnvShBg, vB), dot(_EnvShBb, vB));       // L2 (4 of 5)
     l += _EnvShC.rgb * (n.x * n.x - n.y * n.y);                                 // L2 (5th)
-    return max(0.0, l);
+    return (half3)max(0.0, l);
 }
 
-float3 ClampFirefly(float3 color, float maxLuminance)
+// Like SanitizeColor, this is a NARROWING POINT: it takes fp32 and returns fp16. The input is the
+// reach-boosted radiance, which is a stored field value times a user multiplier and so can exceed
+// fp16's 65504 in an extreme scene - doing the luminance test and the rescale in fp32 and clamping
+// to the field ceiling means the narrowing can never produce an Inf.
+half3 ClampFirefly(float3 color, half maxLuminance)
 {
     // Single return point (an early return lowers to a return-slot variable that the WebGPU
     // validator flags as possibly uninitialized).
     float luma = GetRec709Luminance(color);
-    float scale = (maxLuminance > 0.0 && luma > maxLuminance) ? (maxLuminance / max(luma, 1e-6)) : 1.0;
-    return color * scale;
+    float maxLum = (float)maxLuminance;
+    float scale = (maxLum > 0.0 && luma > maxLum) ? (maxLum / max(luma, 1e-6)) : 1.0;
+    return (half3)min(color * scale, 60000.0);
 }
 
 // Keep the fields finite and non-negative. (c < 1e8) is false for both +Inf and NaN, so they map
 // to 0 without isnan() - which fast-math / d3d11 /Gis may strip, defeating the guard. This stops a
 // poisoned voxel from spreading through the bounce + blur and rendering black; it recovers next frame.
-float3 SanitizeColor(float3 c)
+//
+// This is also the NARROWING POINT into the fp16 fields, and the order matters: the test and the
+// clamp run in fp32, so a value between 65504 and 1e8 is clamped to 60000 rather than becoming an
+// fp16 Inf (which the guard would then map to black - a voxel flashing off instead of saturating).
+// The clamped result is representable in half by construction, so the return is lossless.
+half3 SanitizeColor(float3 c)
 {
-    return (c < 1e8) ? clamp(c, 0.0, 60000.0) : float3(0.0, 0.0, 0.0);
+    return (c < 1e8) ? (half3)clamp(c, 0.0, 60000.0) : half3(0.0h, 0.0h, 0.0h);
 }
 
 // Must stay identical to the fragment's GetLocalLightRangeAttenuation (VoxelDirectLighting.hlsl):
 // URP's window, saturate(1 - (d^2/r^2)^2)^2, so a light's bounce matches the direct lighting it casts.
-float GetLocalLightRangeAttenuation(float distSq, float rangeSq)
+// Same precision split as the fragment copy: fp32 divides (squared world distances), fp16 window.
+half GetLocalLightRangeAttenuation(float distSq, float rangeSq)
 {
-    float distanceAtten = rcp(max(distSq, 0.01));
-    float factor = distSq / max(rangeSq, 1e-6);
-    float rangeFade = saturate(1.0 - factor * factor);
+    half distanceAtten = (half)rcp(max(distSq, 0.01));
+    half factor = (half)(distSq / max(rangeSq, 1e-6));
+    half rangeFade = saturate(1.0h - factor * factor);
     return distanceAtten * rangeFade * rangeFade;
 }
 
 // Direct lighting at a surface voxel, with DDA shadow rays and an N.L cosine term. `sunVis` returns
 // the main directional light's raw visibility (1 lit, 0 shadowed) so the fragment can read a cheap
 // baked voxel sun-shadow straight from the radiance field's spare w channel (see BgiSampleFaceAoShadow).
-float3 GetDirectLight(int3 cell, float3 normal, out float sunVis)
+// The visibility / N.L / cone / attenuation terms are all bounded unitless values and run in fp16.
+// `total` stays fp32 on purpose: it is the one accumulation fed by raw light-colour uniforms rather
+// than by the fp16-packed fields, so a bright light at close range could exceed 65504 here - and
+// SanitizeColor maps an Inf to BLACK, which would flash a voxel off instead of clamping it.
+float3 GetDirectLight(int3 cell, float3 normal, out half sunVis)
 {
     float3 voxelCenter = BgiVoxelCenter((uint3)cell);
     int3 hit;
@@ -241,10 +258,10 @@ float3 GetDirectLight(int3 cell, float3 normal, out float sunVis)
     // face pointing away self-occludes - its own geometry blocks the ray - so it marches to ~0, the
     // physically correct "in shadow from the sun" (rather than a defaulted 1 = lit).
     float3 total = 0;
-    sunVis = MarchOccupancy(shadowStart, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0 : 1.0;
-    float ndlSun = saturate(dot(normal, _DirectLightDir));
-    if (ndlSun > 0.0)
-        total += _DirectLightColor.rgb * (ndlSun * sunVis);
+    sunVis = MarchOccupancy(shadowStart, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0h : 1.0h;
+    half ndlSun = saturate((half)dot(normal, _DirectLightDir));
+    if (ndlSun > 0.0h)
+        total += _DirectLightColor.rgb * (float)(ndlSun * sunVis);
 
     // Point lights
     uint pc = min(_PointLightCount, (uint)MAX_POINT_LIGHTS);
@@ -257,11 +274,11 @@ float3 GetDirectLight(int3 cell, float3 normal, out float sunVis)
         if (distSq <= 1e-6 || distSq >= rangeSq) continue;
         float invD = rsqrt(distSq);
         float3 L = toLight * invD;
-        float ndl = saturate(dot(normal, L));
-        if (ndl <= 0.0) continue;
+        half ndl = saturate((half)dot(normal, L));
+        if (ndl <= 0.0h) continue;
         float worldDist = distSq * invD; // = sqrt(distSq), distance to the light
-        float vis = MarchOccupancy(shadowStart, L, worldDist, hit) ? 0.0 : 1.0;
-        total += _PointLightColor[p].rgb * (ndl * vis * GetLocalLightRangeAttenuation(distSq, rangeSq));
+        half vis = MarchOccupancy(shadowStart, L, worldDist, hit) ? 0.0h : 1.0h;
+        total += _PointLightColor[p].rgb * (float)(ndl * vis * GetLocalLightRangeAttenuation(distSq, rangeSq));
     }
 
     // Spot lights
@@ -275,15 +292,16 @@ float3 GetDirectLight(int3 cell, float3 normal, out float sunVis)
         if (distSq <= 1e-6 || distSq >= rangeSq) continue;
         float invD = rsqrt(distSq);
         float3 L = toLight * invD;
-        float ndl = saturate(dot(normal, L));
-        if (ndl <= 0.0) continue;
+        half ndl = saturate((half)dot(normal, L));
+        if (ndl <= 0.0h) continue;
         float4 dirAngleScale = _SpotLightDirectionAngleScale[sIdx];
         float4 colAngleOffset = _SpotLightColorAngleOffset[sIdx];
-        float cone = saturate(dot(-L, dirAngleScale.xyz) * dirAngleScale.w + colAngleOffset.a);
-        if (cone <= 0.0) continue;
+        // Formed in fp32 (the angle scale is large for a narrow cone), narrowed once.
+        half cone = (half)saturate(dot(-L, dirAngleScale.xyz) * dirAngleScale.w + colAngleOffset.a);
+        if (cone <= 0.0h) continue;
         float worldDist = distSq * invD; // = sqrt(distSq), distance to the light
-        float vis = MarchOccupancy(shadowStart, L, worldDist, hit) ? 0.0 : 1.0;
-        total += colAngleOffset.rgb * (ndl * vis * (cone * cone) * GetLocalLightRangeAttenuation(distSq, rangeSq));
+        half vis = MarchOccupancy(shadowStart, L, worldDist, hit) ? 0.0h : 1.0h;
+        total += colAngleOffset.rgb * (float)(ndl * vis * (cone * cone) * GetLocalLightRangeAttenuation(distSq, rangeSq));
     }
 
     return total;
@@ -309,22 +327,26 @@ float3 GetDirectLight(int3 cell, float3 normal, out float sunVis)
 // A ray that ESCAPES the grid returns the environment SH in its direction: the sky acts as an AREA
 // light, so it belongs in the averaged estimate (unbiased at any sample count). The SUN is handled
 // separately (deterministic visibility ray in CSGather), so no sun lobe here.
-float3 GatherRayRadiance(int3 fromCell, float3 dir, float reachBoost)
+// Everything this returns comes out of (or goes straight back into) the fp16-packed fields, so the
+// whole radiance path is half; only the ray geometry (positions, hit distance) stays fp32.
+half3 GatherRayRadiance(int3 fromCell, float3 dir, half reachBoost)
 {
     int3 hit;
-    float3 result;
+    half3 result;
     if (MarchOccupancy(fromCell, dir, BGI_MAX_RAY_DIST, hit)) {
         float3 hitNormal = SurfaceNormal(hit);
         float3 faceN = (dot(hitNormal, hitNormal) > 1e-6) ? hitNormal : float3(0, 1, 0); // ambiguous -> up (matches inject)
         if (dot(dir, faceN) < 0.0) {
-            float3 rad; float w;
-            BgiUnpackRgb(_Radiance[BgiSlot((uint3)hit)], rad, w);
+            half3 rad; half w;
+            BgiUnpackRgbH(_Radiance[BgiSlot((uint3)hit)], rad, w);
             // Distance-weighted reach fill (t = hit distance / grid diagonal, clamped 0..1). Applied
             // BEFORE the firefly clamp so a boosted-then-bright sample still can't spike.
-            float t = saturate(length(BgiVoxelCenter((uint3)hit) - BgiVoxelCenter((uint3)fromCell)) / BGI_MAX_RAY_DIST);
-            result = ClampFirefly(rad * lerp(1.0, reachBoost, t), _GiFireflyClamp);
+            half t = (half)saturate(length(BgiVoxelCenter((uint3)hit) - BgiVoxelCenter((uint3)fromCell)) / BGI_MAX_RAY_DIST);
+            // The boost itself is fp32 (see ClampFirefly): a near-ceiling stored radiance times the
+            // multiplier is the one product here that could leave fp16 range.
+            result = ClampFirefly((float3)rad * (float)lerp(1.0h, reachBoost, t), (half)_GiFireflyClamp);
         } else {
-            result = _AmbientFloor;
+            result = (half3)_AmbientFloor;
         }
     } else {
         result = EvalEnvSH(dir); // escaped -> sky (area light, averaged like any other sample)
@@ -359,9 +381,11 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     int3 cell = (int3)BgiCoord(i);
     float3 normal = SurfaceNormal(cell);
     if (dot(normal, normal) < 1e-6) normal = float3(0, 1, 0); // ambiguous -> harmless up for direct/bounce
-    float3 albedo = BgiAlbedo(mat);
+    half3 albedo = BgiAlbedo(mat);
+    // Emission decode stays fp32: the log curve spans up to EMISSION_INTENSITY_MAX (1024) and
+    // exp2/log2 are fp32 ops on every backend anyway.
     float emissionIntensity = DecodeEmissionIntensityFrom8Bit(BgiEmission8(mat));
-    float3 emissive = albedo * emissionIntensity;
+    float3 emissive = (float3)albedo * emissionIntensity;
 
     // Bounce arriving at this surface = its incident irradiance, gathered over the FRONT hemisphere
     // by CSGather (previous frame) and stored in this solid voxel's own _Irradiance slot. Reading
@@ -370,16 +394,16 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     // F_ii self-illumination loop: energy the wall emits came back as "incident" and re-lit it. It
     // also restores directionality, so light from an opening propagates inward instead of averaging
     // flat against dark neighbours (helps cavern/indirect fill).
-    float3 bounce; float bw;
-    BgiUnpackRgb(_Irradiance[_FieldOffset + i], bounce, bw);
+    half3 bounce; half bw;
+    BgiUnpackRgbH(_Irradiance[_FieldOffset + i], bounce, bw);
 
     // Clamp reflectance below 1: with albedo == 1 the bounce feedback is a lossless cavity that
     // diverges to Inf/NaN ("black plague"). Still cheap insurance for concave corners even though the
     // front-hemisphere gather removed the dominant self-term. Emission is unaffected (added separately).
-    float3 safeAlbedo = min(albedo, 0.95);
-    float sunVis;
+    half3 safeAlbedo = min(albedo, 0.95h);
+    half sunVis;
     float3 direct = GetDirectLight(cell, normal, sunVis);
-    float3 outgoing = SanitizeColor(emissive + safeAlbedo * (direct + bounce));
+    half3 outgoing = SanitizeColor(emissive + (float3)safeAlbedo * (direct + (float3)bounce));
     // Stash the sun visibility in the radiance's spare w half - the fragment reads it as a cheap,
     // pre-marched voxel sun-shadow (interpolated across the surface face), no per-pixel ray needed.
     _Radiance[_FieldOffset + i] = BgiPackRgb(outgoing, sunVis);
@@ -421,6 +445,9 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     // BOUNCE radiance (surfaces, ambient floor, and the sky-as-area-light on escape) is a plain
     // AVERAGE: unbiased at any sample count, so samplesPerFrame only affects noise, never brightness.
     // Reach fill only on the AIR probe (display field); the surface bounce stays physical (1).
+    // The accumulator stays fp32 even though each sample is fp16: a sample can legitimately be near
+    // the 60000 field ceiling, and summing several of those would overflow half before the divide.
+    // The mean is back in fp16 range and SanitizeColor narrows it below.
     float3 incoming = 0;
     uint sampleCount = max(_SamplesPerFrame, 1u);
     [loop]
@@ -428,7 +455,7 @@ void CSGather(uint3 id : SV_DispatchThreadID)
         float2 noise = GiSampleNoise(c, _FrameCount, r);
         float3 dir = solid ? CosineSampleHemisphere(normal, noise) // surface: front hemisphere
                            : GetRandomDirectionFromNoise2(noise);  // air: omnidirectional probe
-        incoming += GatherRayRadiance(cell, dir, solid ? 1.0 : _ReachBoost);
+        incoming += GatherRayRadiance(cell, dir, solid ? 1.0h : (half)_ReachBoost);
     }
     incoming *= rcp((float)sampleCount); // this frame's estimate = mean of sampleCount samples
 
@@ -438,10 +465,10 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     // hardware-interpolated texture tap instead of 4-8 StructuredBuffer face taps (the Adreno cost).
     // Deterministic (no noise), so it's stable frame-to-frame and needs no temporal accumulation. Only
     // AIR voxels (the read samples the air layer in front of surfaces); solid voxels store 1 (unused).
-    float sunVis = 1.0;
+    half sunVis = 1.0h;
     if (!solid) {
         int3 sunHit;
-        sunVis = MarchOccupancy(cell, _DirectLightDir, BGI_MAX_RAY_DIST, sunHit) ? 0.0 : 1.0;
+        sunVis = MarchOccupancy(cell, _DirectLightDir, BGI_MAX_RAY_DIST, sunHit) ? 0.0h : 1.0h;
     }
 
     // Temporal PROGRESSIVE average: fold this frame's sampleCount-ray estimate into the running mean of
@@ -449,10 +476,10 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     // ACCUMULATES so variance ~1/totalSamples -> it keeps getting cleaner and converges (not a fixed
     // window that shimmers forever). The first frame is ~weight 1 (noisy), but CSBlur's Confidence≈0
     // hides that warm-up. The w channel carries the baked sun visibility (above), not a sample count.
-    float3 oldC; float oldN;
-    BgiUnpackRgb(_Irradiance[_FieldOffset + i], oldC, oldN); // oldN unused
+    half3 oldC; half oldN;
+    BgiUnpackRgbH(_Irradiance[_FieldOffset + i], oldC, oldN); // oldN unused
     float weight = min(1.0, _EmaWeight);
-    float3 newC = SanitizeColor(lerp(oldC, incoming, weight));
+    half3 newC = SanitizeColor(lerp((float3)oldC, incoming, weight));
     _Irradiance[_FieldOffset + i] = BgiPackRgb(newC, sunVis);
 }
 
@@ -476,15 +503,18 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
         // the air but its trilinear footprint still catches these solid cells; a constant 1.0 here washes
         // the shadow toward lit (the bug). Writing radiance.w keeps solid + air consistent so the tap
         // interpolates a correct sun visibility across the surface.
-        float3 rgbIgnore; float solidSun;
-        BgiUnpackRgb(_Radiance[_FieldOffset + i], rgbIgnore, solidSun);
+        half3 rgbIgnore; half solidSun;
+        BgiUnpackRgbH(_Radiance[_FieldOffset + i], rgbIgnore, solidSun);
         _BgiIrradianceTexWrite[BgiCoord(i)] = float4(0.0, 0.0, 0.0, solidSun);
         return;
     }
 
+    // The blur sums at most 7 fp16 taps and divides by the count - the running sum can reach 7x a
+    // field value, so it is accumulated in fp32 for the same headroom reason as the gather.
     int3 c = (int3)BgiCoord(i);
-    float3 sum; float centerSun;
-    BgiUnpackRgb(_Irradiance[_FieldOffset + i], sum, centerSun); // center rgb + baked sun vis (w)
+    half3 centerC; half centerSun;
+    BgiUnpackRgbH(_Irradiance[_FieldOffset + i], centerC, centerSun); // center rgb + baked sun vis (w)
+    float3 sum = (float3)centerC;
     float wsum = 1.0;
     float sunSum = centerSun; // baked sun visibility, gated-blurred alongside the irradiance
 
@@ -496,19 +526,19 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
         int3 nb = c + axes[k];
         if (!BgiInBounds(nb)) continue;
         if (BgiSolidBit(BgiSlot((uint3)nb))) continue; // gate: don't blur across surfaces
-        float3 nc; float nsun;
-        BgiUnpackRgb(_Irradiance[BgiSlot((uint3)nb)], nc, nsun);
-        sum += nc;
+        half3 nc; half nsun;
+        BgiUnpackRgbH(_Irradiance[BgiSlot((uint3)nb)], nc, nsun);
+        sum += (float3)nc;
         sunSum += nsun;
         wsum += 1.0;
     }
 
     // Ease the displayed value from its previous state toward the freshly-blurred one by confidence,
     // so a light change fades in and completes exactly when the field has converged (confidence == 1).
-    float3 blurred = sum / wsum;
-    float3 prevBlur; float pw;
-    BgiUnpackRgb(_IrradianceBlur[_FieldOffset + i], prevBlur, pw);
-    float3 result = lerp(prevBlur, blurred, _Confidence);
+    half3 blurred = (half3)(sum / wsum);
+    half3 prevBlur; half pw;
+    BgiUnpackRgbH(_IrradianceBlur[_FieldOffset + i], prevBlur, pw);
+    half3 result = lerp(prevBlur, blurred, (half)_Confidence);
     _IrradianceBlur[_FieldOffset + i] = BgiPackRgb(result, 0.0);
     // Fused mirror: write the displayed irradiance into the field's Texture3D rgb (the fragment's 1-tap
     // GI read) and the gated-blurred sun visibility into its ALPHA (the fragment's 1-tap baked shadow).
@@ -547,8 +577,9 @@ void CSInitFineFromCoarse(uint3 id : SV_DispatchThreadID)
     if (BgiInBounds(cc)) {
         uint coarseSlot = BGI_COARSE_OFFSET + BgiIndex((uint3)cc);
         if (!BgiSolidBit(coarseSlot)) {
-            float w;
-            BgiUnpackRgb(_IrradianceBlur[coarseSlot], seed, w);
+            half3 c; half w;
+            BgiUnpackRgbH(_IrradianceBlur[coarseSlot], c, w);
+            seed = (float3)c;
         } else {
             const int3 axes[6] = {
                 int3(1,0,0), int3(-1,0,0), int3(0,1,0), int3(0,-1,0), int3(0,0,1), int3(0,0,-1)
@@ -560,9 +591,9 @@ void CSInitFineFromCoarse(uint3 id : SV_DispatchThreadID)
                 if (!BgiInBounds(nb)) continue;
                 uint nbSlot = BGI_COARSE_OFFSET + BgiIndex((uint3)nb);
                 if (BgiSolidBit(nbSlot)) continue;
-                float3 c; float w;
-                BgiUnpackRgb(_IrradianceBlur[nbSlot], c, w);
-                seed += c;
+                half3 c; half w;
+                BgiUnpackRgbH(_IrradianceBlur[nbSlot], c, w);
+                seed += (float3)c; // fp32 sum for the same headroom reason as CSBlur
                 wsum += 1.0;
             }
             seed = (wsum > 0.0) ? seed / wsum : 0.0;
@@ -601,9 +632,11 @@ void CSAverageLuminance(uint3 id : SV_DispatchThreadID)
     float cosAngle = dot(offset * invDist, _CameraForward);
     if (cosAngle < 0.0) return; // behind the camera
 
-    float3 irr; float w;
-    BgiUnpackRgb(_IrradianceBlur[slot], irr, w);
-    float lum = GetRec709Luminance(irr) * cosAngle; // cosine-weight: off-axis voxels count less
+    half3 irr; half w;
+    BgiUnpackRgbH(_IrradianceBlur[slot], irr, w);
+    float lum = (float)GetRec709LuminanceH(irr) * cosAngle; // cosine-weight: off-axis voxels count less
+    // The log encode stays fp32 and must: (logLum + 16) * 1024 reaches ~32768, where fp16's ulp is 16
+    // - it would quantize the accumulated exposure estimate into visible steps.
     float logLum = log2(max(lum, 1e-4));
     uint encoded = (uint)((logLum + 16.0) * 1024.0);
     InterlockedAdd(_LuminanceResult[0], encoded);
@@ -640,10 +673,12 @@ void CSBuildOccupancy(uint3 id : SV_DispatchThreadID)
 // to a slightly-tilted gradient normal: its own coplanar neighbours weigh ~0 instead of counting as
 // occluders, so a voxelized diagonal/curved wall no longer self-shadows into a grid of false AO.
 #define BGI_AO_RADIUS 2
-#define BGI_AO_MIN_COS 0.15 // ignore near-coplanar dirs (a flat wall must not occlude itself)
-float BgiComputeOpenness(int3 cell, float3 n)
+#define BGI_AO_MIN_COS 0.15h // ignore near-coplanar dirs (a flat wall must not occlude itself)
+// Weights are cosines and the accumulators top out around the neighbourhood size (~125), so fp16
+// carries this comfortably - the result is stored as 8 bits anyway.
+half BgiComputeOpenness(int3 cell, float3 n)
 {
-    float total = 0.0, blocked = 0.0;
+    half total = 0.0h, blocked = 0.0h;
     [loop]
     for (int z = -BGI_AO_RADIUS; z <= BGI_AO_RADIUS; z++)
     for (int y = -BGI_AO_RADIUS; y <= BGI_AO_RADIUS; y++)
@@ -651,13 +686,13 @@ float BgiComputeOpenness(int3 cell, float3 n)
         int3 d = int3(x, y, z);
         if (all(d == 0)) continue;
         float3 dir = (float3)d;
-        float w = dot(dir, n) * rsqrt(dot(dir, dir)); // cosine of dir to the surface normal
-        if (w <= BGI_AO_MIN_COS) continue;            // back hemisphere + near-coplanar self-neighbours
+        half w = (half)(dot(dir, n) * rsqrt(dot(dir, dir))); // cosine of dir to the surface normal
+        if (w <= BGI_AO_MIN_COS) continue;                   // back hemisphere + near-coplanar self-neighbours
         total += w;
         int3 nb = cell + d;
         if (BgiInBounds(nb) && BgiSolidBit(BgiSlot((uint3)nb))) blocked += w;
     }
-    return (total > 0.0) ? 1.0 - blocked / total : 1.0;
+    return (total > 0.0h) ? 1.0h - blocked / total : 1.0h;
 }
 
 // ----------------------------------------------------------
@@ -689,7 +724,7 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
     } else {
         n = BgiSurfaceNormal(_Surface[slot]);        // mesh mode: normal already written by the voxelizer
     }
-    float openness = BgiComputeOpenness(cell, n);
+    half openness = BgiComputeOpenness(cell, n);
     _Surface[slot] = BgiPackSurfaceNormal(n) | BgiPackOpenness(openness); // normal (0-15) + AO (16-23)
 }
 

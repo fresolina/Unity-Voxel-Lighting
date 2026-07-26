@@ -31,8 +31,9 @@ float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 // here.) Under the buffer GI the main-light sun-shadow is resolved entirely by BgiSampleFaceAoShadow
 // (Off = none, Baked, Sdf, OcclusionField, Bitmask) and fed to GetMainDirectLightingShadow, so the main
 // light NEVER routes through here; this serves the non-buffer GI modes' main light plus all local lights.
+// `lightDir` must be unit length (it always is at every call site), so no normalize here.
 inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal) {
-    return GetShadowFromSdf(normalize(lightDir), worldPos, 1.0e+10f);
+    return GetShadowFromSdf(lightDir, worldPos, 1.0e+10f);
 }
 
 // Finite-distance shadow for local (point/spot) lights: always SDF, so a blocker behind
@@ -42,52 +43,55 @@ inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal, float max
     #if defined(_RECEIVE_LOCAL_SHADOWS_OFF)
         return 1.0h;
     #else
-        return GetShadowFromSdf(normalize(lightDir), worldPos, maxDistance);
+        return GetShadowFromSdf(lightDir, worldPos, maxDistance);
     #endif
 }
 
-inline float GetLocalLightRangeAttenuation(float distSq, float rangeSq) {
+// Returns an fp16 attenuation. The two divides stay fp32 because their inputs are squared world
+// distances (rangeSq for a long-range light overflows fp16), but the resulting ratio, the window
+// and the final product are all small unitless values that belong in fp16.
+inline half GetLocalLightRangeAttenuation(float distSq, float rangeSq) {
     // Inverse-square distance falloff (physical light intensity) with URP's range window:
     // saturate(1 - (d^2/r^2)^2)^2, the same smoothing Unity's lightmapper uses. Squaring the FACTOR
     // is what keeps the light at full strength through most of its range and does the fade near the
     // edge; without it (a plain 1 - d^2/r^2 window) the same light reads 36% dimmer at half range
     // than it would on a URP/Lit surface. The extra multiply is free next to the shadow march.
-    float distanceAtten = rcp(max(distSq, 0.01));
-    float factor = distSq / max(rangeSq, 1e-6);
-    float rangeFade = saturate(1.0 - factor * factor);
+    half distanceAtten = (half)rcp(max(distSq, 0.01));
+    half factor = (half)(distSq / max(rangeSq, 1e-6));
+    half rangeFade = saturate(1.0h - factor * factor);
     return distanceAtten * rangeFade * rangeFade;
 }
 
-inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, float3 lightDir, half3 lightColor, float attenuation) {
-    half3 normalizedLightDir = normalize(lightDir);
-    half ndotl = saturate(dot(normal, normalizedLightDir));
+// `lightDir` is unit length in every caller; kept float3 because it is also what the SDF march
+// steps along, where a half direction's ~1e-3 relative error would drift the ray by centimetres
+// over a room-scale distance. The N.L term itself runs in fp16.
+inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, float3 lightDir, half3 lightColor, half attenuation) {
+    half ndotl = saturate(dot(normal, (half3)lightDir));
     if (ndotl <= 0.0h)
         return 0.0h;
 
-    half shadow = GetShadow(worldPos, normalizedLightDir, normal);
+    half shadow = GetShadow(worldPos, lightDir, normal);
     return albedo * lightColor * (ndotl * shadow * attenuation);
 }
 
-inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, float3 lightDir, half3 lightColor, float attenuation, float shadowDistance) {
-    half3 normalizedLightDir = normalize(lightDir);
-    half ndotl = saturate(dot(normal, normalizedLightDir));
+inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, float3 lightDir, half3 lightColor, half attenuation, float shadowDistance) {
+    half ndotl = saturate(dot(normal, (half3)lightDir));
     if (ndotl <= 0.0h)
         return 0.0h;
 
-    half shadow = GetShadow(worldPos, normalizedLightDir, normal, shadowDistance);
+    half shadow = GetShadow(worldPos, lightDir, normal, shadowDistance);
     return albedo * lightColor * (ndotl * shadow * attenuation);
 }
 
 inline half3 GetMainDirectLighting(Light light, float3 worldPos, half3 normal, half3 albedo) {
-    return GetDirectLighting(worldPos, normal, albedo, light.direction, light.color, 1.0);
+    return GetDirectLighting(worldPos, normal, albedo, light.direction, light.color, 1.0h);
 }
 
 // Main directional light with an externally-resolved shadow term - used by the buffer-GI path, which
 // computes the baked sun visibility together with the baked AO in a single face read
 // (BgiSampleFaceAoShadow) and passes it in here, so the shadow is not resolved again via GetShadow.
 inline half3 GetMainDirectLightingShadow(Light light, float3 worldPos, half3 normal, half3 albedo, half shadow) {
-    half3 normalizedLightDir = normalize(light.direction);
-    half ndotl = saturate(dot(normal, normalizedLightDir));
+    half ndotl = saturate(dot(normal, (half3)light.direction)); // URP hands back a unit direction
     if (ndotl <= 0.0h)
         return 0.0h;
     return albedo * light.color * (ndotl * shadow);
@@ -111,9 +115,9 @@ inline half3 GetPointLightDirect(float3 worldPos, half3 normal, half3 albedo) {
 
         float invDistance = rsqrt(surfaceDistSq);
         float distanceToLight = surfaceDistSq * invDistance;
-        float3 lightDir = toLight * invDistance;
-        float attenuation = GetLocalLightRangeAttenuation(surfaceDistSq, rangeSq);
-        totalLight += GetDirectLighting(worldPos, normal, albedo, lightDir, _PointLightColor[lightIndex].rgb, attenuation, distanceToLight);
+        float3 lightDir = toLight * invDistance; // already unit - GetDirectLighting does not re-normalize
+        half attenuation = GetLocalLightRangeAttenuation(surfaceDistSq, rangeSq);
+        totalLight += GetDirectLighting(worldPos, normal, albedo, lightDir, (half3)_PointLightColor[lightIndex].rgb, attenuation, distanceToLight);
     }
 
     return totalLight;
@@ -137,15 +141,17 @@ inline half3 GetSpotLightDirect(float3 worldPos, half3 normal, half3 albedo) {
 
         float invDistance = rsqrt(surfaceDistSq);
         float distanceToLight = surfaceDistSq * invDistance;
-        float3 lightDir = toLight * invDistance;
+        float3 lightDir = toLight * invDistance; // already unit - GetDirectLighting does not re-normalize
         float4 directionAngleScale = _SpotLightDirectionAngleScale[lightIndex];
         float4 colorAngleOffset = _SpotLightColorAngleOffset[lightIndex];
-        float coneAttenuation = saturate(dot(-lightDir, directionAngleScale.xyz) * directionAngleScale.w + colorAngleOffset.a);
-        if (coneAttenuation <= 0.0)
+        // Cone falloff is a unitless 0..1 term: fp16 throughout. The angle scale can be large for a
+        // narrow cone, so the dot/scale/offset chain is formed in fp32 and narrowed once.
+        half coneAttenuation = (half)saturate(dot(-lightDir, directionAngleScale.xyz) * directionAngleScale.w + colorAngleOffset.a);
+        if (coneAttenuation <= 0.0h)
             continue;
 
-        float attenuation = GetLocalLightRangeAttenuation(surfaceDistSq, rangeSq) * (coneAttenuation * coneAttenuation);
-        totalLight += GetDirectLighting(worldPos, normal, albedo, lightDir, colorAngleOffset.rgb, attenuation, distanceToLight);
+        half attenuation = GetLocalLightRangeAttenuation(surfaceDistSq, rangeSq) * (coneAttenuation * coneAttenuation);
+        totalLight += GetDirectLighting(worldPos, normal, albedo, lightDir, (half3)colorAngleOffset.rgb, attenuation, distanceToLight);
     }
 
     return totalLight;

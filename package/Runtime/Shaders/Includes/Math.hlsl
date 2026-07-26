@@ -154,6 +154,13 @@ float GetRec709Luminance(float3 color) {
     return dot(color, float3(0.2126, 0.7152, 0.0722));
 }
 
+/// fp16 flavour, for colours that already live in half registers (the fp16-packed GI fields).
+/// Deliberately a DIFFERENT NAME rather than an overload: on backends where `half` lowers to
+/// `float` (FXC / D3D), two functions differing only in half3 vs float3 are a redefinition.
+half GetRec709LuminanceH(half3 color) {
+    return dot(color, half3(0.2126h, 0.7152h, 0.0722h));
+}
+
 float DecodeEmissionIntensityFrom8Bit(float encodedIntensity) {
     float t = saturate(encodedIntensity);
     return exp2(t * log2(1.0 + EMISSION_INTENSITY_MAX)) - 1.0;
