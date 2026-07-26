@@ -47,10 +47,14 @@ inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal, float max
 }
 
 inline float GetLocalLightRangeAttenuation(float distSq, float rangeSq) {
-    // Inverse-square distance falloff (physical light intensity) combined with a smooth
-    // range window that fades to zero at max range.
+    // Inverse-square distance falloff (physical light intensity) with URP's range window:
+    // saturate(1 - (d^2/r^2)^2)^2, the same smoothing Unity's lightmapper uses. Squaring the FACTOR
+    // is what keeps the light at full strength through most of its range and does the fade near the
+    // edge; without it (a plain 1 - d^2/r^2 window) the same light reads 36% dimmer at half range
+    // than it would on a URP/Lit surface. The extra multiply is free next to the shadow march.
     float distanceAtten = rcp(max(distSq, 0.01));
-    float rangeFade = saturate(1.0 - (distSq / max(rangeSq, 1e-6)));
+    float factor = distSq / max(rangeSq, 1e-6);
+    float rangeFade = saturate(1.0 - factor * factor);
     return distanceAtten * rangeFade * rangeFade;
 }
 

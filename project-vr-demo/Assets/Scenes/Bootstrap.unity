@@ -436,6 +436,7 @@ MonoBehaviour:
   _pointLight: {fileID: 1697248655}
   _spotBinding: <XRController>/{PrimaryButton}
   _pointBinding: <XRController>/{SecondaryButton}
+  _triggerBinding: <XRController>/{TriggerButton}
   _leftStickBinding: <XRController>{LeftHand}/{Primary2DAxis}
   _rightStickBinding: <XRController>{RightHand}/{Primary2DAxis}
   _intensityRange: {x: 1, y: 9}
@@ -518,7 +519,7 @@ MonoBehaviour:
   _exposureControl:
     _tonemap: 2
     _exposure: 0
-    _auto: 1
+    _auto: 0
     _min: -2
     _max: 2
     _adaptationSpeed: 2

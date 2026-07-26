@@ -43,6 +43,18 @@ namespace Lotec.Lighting {
         public const string GiBuffer = "GI_VOXEL_BUFFER";
         public const string GiUnity = "GI_UNITY";
 
+        /// <summary>Display-transform operator (VoxelLit: multi_compile TONEMAP_OFF TONEMAP_REINHARD
+        /// TONEMAP_AGX TONEMAP_ACES), driven by <see cref="AutoExposure"/>. Compile-time rather than a
+        /// uniform branch because a fragment kernel's register allocation spans EVERY path it contains:
+        /// with all operators in one kernel it was sized for AgX's worst case, which capped occupancy on
+        /// this latency-bound shader and cost ~1ms/frame even while the cheapest operator ran.</summary>
+        public static readonly ShaderKeywordGroup Tonemap = new ShaderKeywordGroup(
+            "TONEMAP_OFF", "TONEMAP_REINHARD", "TONEMAP_AGX", "TONEMAP_ACES");
+        public const string TonemapOff = "TONEMAP_OFF";
+        public const string TonemapReinhard = "TONEMAP_REINHARD";
+        public const string TonemapAgx = "TONEMAP_AGX";
+        public const string TonemapAces = "TONEMAP_ACES";
+
         static object s_giOwner;
         static string s_giKeyword = GiOff;
 

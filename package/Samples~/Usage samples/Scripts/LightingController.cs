@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Unity.Properties;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -28,6 +29,12 @@ namespace Lotec.Lighting.Samples {
         const float OneSecondWindowDuration = 1f;
         const string UnavailableFrameTimeText = "--.-- ms";
         const string UnavailableFpsText = "-- fps";
+        // Seconds between readout re-formats. The numbers are already averaged over a 1s window, so
+        // rebuilding their text every frame produced ~300 string allocations/second for no extra
+        // information - a steady drip that fed periodic GC spikes on device.
+        const float ReadoutRefreshInterval = 0.25f;
+        // Highest FPS with a pre-built string. Above this the label formats fresh (never in practice).
+        const int MaxCachedFps = 300;
 
         struct FrameTimeSample {
             public readonly float Timestamp;
@@ -62,11 +69,18 @@ namespace Lotec.Lighting.Samples {
         Label _frameTimeLastSecondHighLabel;
         Label _frameTimeLastSecondAverageLabel;
         Label _fpsLabel;
+        VisualElement _panelBody;
         bool _hasBindingSnapshot;
         string _frameTimeLastSecondLowText = UnavailableFrameTimeText;
         string _frameTimeLastSecondHighText = UnavailableFrameTimeText;
         string _frameTimeLastSecondAverageText = UnavailableFrameTimeText;
         string _fpsText = UnavailableFpsText;
+        float _nextReadoutTime;
+        // Reusable formatting buffer + memo tables, so a repeated value costs no allocation at all
+        // (frame times hover over the same handful of hundredths, and an FPS number even more so).
+        static readonly StringBuilder s_textBuilder = new StringBuilder(16);
+        static readonly Dictionary<int, string> s_frameTimeTextCache = new Dictionary<int, string>(256);
+        static readonly string[] s_fpsTextCache = new string[MaxCachedFps + 1];
         GiMethod _lastGiMethod;
         ShadowUiMode _lastShadowMode;
         int _lastSamplesPerFrame;
@@ -74,9 +88,8 @@ namespace Lotec.Lighting.Samples {
         float _lastAoStrength;
         bool _lastSsboRead;
         AutoExposure.TonemapMode _lastTonemap;
+        bool _lastAutoExposure;
         Keyboard _keyboard;
-        // Both panels ship folded (see the UXML `panel-body` display), so the first toggle unfolds.
-        bool _uiFolded = true;
 #if LOTEC_XR
         bool _menuHeldLastFrame;
 #endif
@@ -150,6 +163,14 @@ namespace Lotec.Lighting.Samples {
 
         // GI-panel hotkeys: H folds both runtime panels, backquote cycles the GI lighting method.
         // Guarded so typing in a field (this panel or the debug panel) doesn't trigger them.
+        // Both panels follow THIS panel's current fold state, so the key/button always does the visible
+        // thing even after the header was clicked directly (which is what a stored flag got wrong).
+        void ToggleBothPanels() {
+            bool folded = !IsFolded;
+            SetFolded(folded);
+            BufferGiDebugUi.SetFolded(folded);
+        }
+
         void HandleHotkeys() {
             _keyboard = Keyboard.current;
             if (_keyboard == null) {
@@ -161,9 +182,7 @@ namespace Lotec.Lighting.Samples {
             }
 
             if (_keyboard.hKey.wasPressedThisFrame) {
-                _uiFolded = !_uiFolded;
-                SetFolded(_uiFolded);
-                BufferGiDebugUi.SetFolded(_uiFolded);
+                ToggleBothPanels();
             }
         }
 
@@ -186,9 +205,7 @@ namespace Lotec.Lighting.Samples {
 
             // Rising-edge only, so holding the button doesn't flip the panels every frame.
             if (pressed && !_menuHeldLastFrame) {
-                _uiFolded = !_uiFolded;
-                SetFolded(_uiFolded);
-                BufferGiDebugUi.SetFolded(_uiFolded);
+                ToggleBothPanels();
             }
             _menuHeldLastFrame = pressed;
         }
@@ -299,8 +316,9 @@ namespace Lotec.Lighting.Samples {
             Slider aoStrengthSlider = root.Q<Slider>("ao-strength-slider");
             Toggle ssboReadToggle = root.Q<Toggle>("ssbo-read-toggle");
             EnumField tonemapField = root.Q<EnumField>("tonemap-enum");
+            Toggle autoExposureToggle = root.Q<Toggle>("auto-exposure-toggle");
 
-            if (giField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || ssboReadToggle == null || tonemapField == null || !TryCacheFrameTimeLabels(root)) {
+            if (giField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || ssboReadToggle == null || tonemapField == null || autoExposureToggle == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
@@ -330,6 +348,10 @@ namespace Lotec.Lighting.Samples {
             _frameTimeLastSecondHighLabel = root.Q<Label>("frame-time-last-second-high-value");
             _frameTimeLastSecondAverageLabel = root.Q<Label>("frame-time-last-second-average-value");
             _fpsLabel = root.Q<Label>("fps-value");
+            // The foldable body, cached so the readout can ask whether it is actually on screen. Its
+            // display style is the SINGLE source of truth for the fold - clicking the header goes
+            // through FoldoutHeader and never touches this component's state.
+            _panelBody = root.Q<VisualElement>("panel-body");
 
             return _frameTimeLastSecondLowLabel != null
                 && _frameTimeLastSecondHighLabel != null
@@ -346,6 +368,7 @@ namespace Lotec.Lighting.Samples {
                 _boundRoot.Q<Slider>("ao-strength-slider")?.ClearBindings();
                 _boundRoot.Q<Toggle>("ssbo-read-toggle")?.ClearBindings();
                 _boundRoot.Q<EnumField>("tonemap-enum")?.ClearBindings();
+                _boundRoot.Q<Toggle>("auto-exposure-toggle")?.ClearBindings();
                 _boundRoot.dataSource = null;
             }
 
@@ -353,6 +376,7 @@ namespace Lotec.Lighting.Samples {
             _frameTimeLastSecondHighLabel = null;
             _frameTimeLastSecondAverageLabel = null;
             _fpsLabel = null;
+            _panelBody = null;
             _boundRoot = null;
         }
 
@@ -486,10 +510,28 @@ namespace Lotec.Lighting.Samples {
                 return buffer != null ? buffer.ExposureControl.Tonemap : AutoExposure.TonemapMode.Reinhard;
             }
             set {
-                // The buffer GI owns the shared _Tonemap global while it is the active GI method.
+                // The buffer GI owns the shared tonemap keyword group while it is the active GI method.
                 BufferGiUpdater buffer = BufferGiUpdater.Instance;
                 if (buffer != null) {
                     buffer.ExposureControl.Tonemap = value;
+                }
+
+                RefreshUi(true);
+            }
+        }
+
+        // Named ...Enabled, not AutoExposure: a member called AutoExposure would shadow the package
+        // type of that name and break `AutoExposure.TonemapMode` above.
+        [CreateProperty]
+        bool AutoExposureEnabled {
+            get {
+                BufferGiUpdater buffer = BufferGiUpdater.Instance;
+                return buffer != null && buffer.ExposureControl.Auto;
+            }
+            set {
+                BufferGiUpdater buffer = BufferGiUpdater.Instance;
+                if (buffer != null) {
+                    buffer.ExposureControl.Auto = value;
                 }
 
                 RefreshUi(true);
@@ -519,9 +561,28 @@ namespace Lotec.Lighting.Samples {
                 _frameTimeSamples.Enqueue(new FrameTimeSample(now, frameTimeMilliseconds));
             }
 
+            // Sampling stays per-frame (that's what the min/max are for); only the TEXT is throttled,
+            // and skipped outright when nothing is on screen to read it - Update runs even while the
+            // panel is hidden or folded, so this was burning CPU invisibly.
             TrimFrameTimeSamples(now);
+            if (now < _nextReadoutTime || !IsReadoutVisible()) {
+                return;
+            }
+
+            _nextReadoutTime = now + ReadoutRefreshInterval;
             UpdateFrameTimeWindowTexts(now - OneSecondWindowDuration, out _frameTimeLastSecondLowText, out _frameTimeLastSecondHighText, out _frameTimeLastSecondAverageText, out _fpsText);
         }
+
+        /// <summary>Whether this panel's body is collapsed. Derived from the panel itself rather than
+        /// cached in a field: the header's own click handler (FoldoutHeader) folds it without going
+        /// through this component, so any stored copy goes stale the first time the user clicks the
+        /// header - which froze the frame-time readout and made the H hotkey need two presses.
+        /// Reports folded when nothing is bound yet, so the first toggle unfolds (the UXML ships
+        /// folded).</summary>
+        bool IsFolded => _panelBody == null || _panelBody.resolvedStyle.display == DisplayStyle.None;
+
+        // Fails open: with no body to consult, refresh rather than silently stop updating.
+        bool IsReadoutVisible() => _root != null && _root.visible && (_panelBody == null || !IsFolded);
 
         void TrimFrameTimeSamples(float now) {
             float cutoffTime = now - OneSecondWindowDuration;
@@ -592,6 +653,7 @@ namespace Lotec.Lighting.Samples {
             float aoStrength = AoStrength;
             bool ssboRead = SsboRead;
             AutoExposure.TonemapMode tonemap = Tonemap;
+            bool autoExposure = AutoExposureEnabled;
 
             if (!_hasBindingSnapshot) {
                 _lastGiMethod = giMethod;
@@ -601,6 +663,7 @@ namespace Lotec.Lighting.Samples {
                 _lastAoStrength = aoStrength;
                 _lastSsboRead = ssboRead;
                 _lastTonemap = tonemap;
+                _lastAutoExposure = autoExposure;
                 _hasBindingSnapshot = true;
                 return;
             }
@@ -612,6 +675,7 @@ namespace Lotec.Lighting.Samples {
             UpdateFloatSnapshot(ref _lastAoStrength, aoStrength, notifyChanges, nameof(AoStrength));
             UpdateBoolSnapshot(ref _lastSsboRead, ssboRead, notifyChanges, nameof(SsboRead));
             UpdateEnumSnapshot(ref _lastTonemap, tonemap, notifyChanges, nameof(Tonemap));
+            UpdateBoolSnapshot(ref _lastAutoExposure, autoExposure, notifyChanges, nameof(AutoExposureEnabled));
         }
 
         void UpdateEnumSnapshot<T>(ref T currentValue, T nextValue, bool notifyChanges, string propertyName) where T : struct, System.Enum {
@@ -666,8 +730,30 @@ namespace Lotec.Lighting.Samples {
             label.text = text;
         }
 
+        // Allocation-free in the steady state: the value is quantised to hundredths of a millisecond and
+        // the resulting text memoised, so a value that has been shown before costs a dictionary lookup.
+        // ($"{ms:0.00} ms" allocated a string AND boxed the float on every single call.)
         static string FormatFrameTime(float milliseconds) {
-            return $"{milliseconds:0.00} ms";
+            int hundredths = Mathf.Clamp(Mathf.RoundToInt(milliseconds * 100f), 0, 999999);
+            if (s_frameTimeTextCache.TryGetValue(hundredths, out string cached)) {
+                return cached;
+            }
+
+            s_textBuilder.Clear();
+            s_textBuilder.Append(hundredths / 100).Append('.');
+            int fraction = hundredths % 100;
+            if (fraction < 10) {
+                s_textBuilder.Append('0');
+            }
+
+            string text = s_textBuilder.Append(fraction).Append(" ms").ToString();
+            // Bounded: a pathological frame-time sweep can't grow this without limit.
+            if (s_frameTimeTextCache.Count > 4096) {
+                s_frameTimeTextCache.Clear();
+            }
+
+            s_frameTimeTextCache[hundredths] = text;
+            return text;
         }
 
         static string FormatFps(float averageMilliseconds) {
@@ -675,7 +761,20 @@ namespace Lotec.Lighting.Samples {
                 return UnavailableFpsText;
             }
 
-            return $"{Mathf.RoundToInt(1000f / averageMilliseconds)} fps";
+            int fps = Mathf.RoundToInt(1000f / averageMilliseconds);
+            if (fps < 0 || fps > MaxCachedFps) {
+                return UnavailableFpsText;
+            }
+
+            // Whole numbers, so the cache saturates after the first few seconds and never allocates again.
+            string cached = s_fpsTextCache[fps];
+            if (cached == null) {
+                s_textBuilder.Clear();
+                cached = s_textBuilder.Append(fps).Append(" fps").ToString();
+                s_fpsTextCache[fps] = cached;
+            }
+
+            return cached;
         }
 
         void NotifyBindingChanged([CallerMemberName] string propertyName = "") {

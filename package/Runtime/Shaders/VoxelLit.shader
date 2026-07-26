@@ -45,7 +45,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // Each is self-contained, so these two are all the lit pass needs.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelDirectLighting.hlsl"
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/BufferGi.hlsl"
-            // Display-transform tonemap operators (Reinhard / AgX / ACES), selected by _Tonemap.
+            // Display-transform tonemap operators (Reinhard / AgX / ACES), selected by the TONEMAP_* keyword.
             #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/Tonemap.hlsl"
 
             // GI_OFF (default): direct lighting only. GI_VOXEL_BUFFER: the buffer GI read filter
@@ -59,6 +59,13 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // interpolation the SSBO gather recomputes in software). BGI_SSBO_READ flips back to the
             // original 9-tap StructuredBuffer gather, kept as an on-device A/B baseline. Driven by BufferGiUpdater.
             #pragma multi_compile __ BGI_SSBO_READ
+            // Display transform, COMPILE-TIME (not a uniform branch). A fragment kernel's register
+            // allocation covers every path it contains, so keeping all four options in one kernel sized
+            // it for AgX's worst case (two 3x3 matrices, a degree-6 polynomial, log2/pow). That capped
+            // occupancy on a shader whose cost is GI-tap memory latency, and measured ~1ms/frame even
+            // while the CHEAP operator ran - Reinhard alone in the kernel costs 0.3ms, all three 1.3ms.
+            // TONEMAP_OFF (the default) compiles the whole block out: linear HDR for a post stack.
+            #pragma multi_compile TONEMAP_OFF TONEMAP_REINHARD TONEMAP_AGX TONEMAP_ACES
 
             CBUFFER_START(UnityPerMaterial)
                 TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
@@ -71,11 +78,9 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 float _ReceiveLocalShadows;
             CBUFFER_END
 
-            // Scene-wide exposure (EV stops), published as a global by the GiFieldUpdater (auto or manual).
-            float _Exposure;
-            // In-shader display transform, published as a global by the GI updater. Matches
-            // AutoExposure.TonemapMode: 0 = Off (linear HDR out), 1 = Reinhard, 2 = AgX, 3 = ACES.
-            int _Tonemap;
+            // Scene-wide exposure as a LINEAR multiplier - exp2(EV) precomputed on the CPU by
+            // AutoExposure, so the fragment doesn't spend a transcendental per pixel on a uniform.
+            float _ExposureLinear;
 
             struct v {
                 float4 positionOS : POSITION;
@@ -172,21 +177,26 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     lit += _EmissionColor.rgb * SAMPLE_TEXTURE2D(_EmissionMap, sampler_EmissionMap, IN.uv).rgb;
                 #endif
 
-                // In-shader display transform (exposure + selected tonemap operator). _Tonemap == 0
-                // (Off) outputs linear HDR for a post-processing stack instead. The branch is on a
-                // global, so it's uniform across the frame - no warp divergence, effectively free.
-                if (_Tonemap != 0) {
+                // In-shader display transform (exposure + tonemap operator + dither). Compiled out
+                // entirely under TONEMAP_OFF, which outputs linear HDR for a post-processing stack; only
+                // ONE operator is ever present in a variant, which is what keeps the register allocation
+                // (and therefore occupancy) proportional to the operator actually in use.
+                #if !defined(TONEMAP_OFF)
                     #if defined(GI_VOXEL_BUFFER)
-                        lit *= exp2(_Exposure);   // exposure only meaningful when GI drives it
+                        lit *= _ExposureLinear;   // exposure only meaningful when GI drives it
                     #endif
-                    if (_Tonemap == 2) lit = AgxTonemap(lit);
-                    else if (_Tonemap == 3) lit = AcesTonemap(lit);
-                    else lit = ReinhardTonemap(lit);
+                    #if defined(TONEMAP_AGX)
+                        lit = AgxTonemap(lit);
+                    #elif defined(TONEMAP_ACES)
+                        lit = AcesTonemap(lit);
+                    #else
+                        lit = ReinhardTonemap(lit);
+                    #endif
                     // Interleaved-gradient-noise dither (~1/255) so the smooth GI gradients don't
                     // band when written to an 8-bit target. Skipped when Off (HDR output).
                     half ign = frac(52.9829189h * frac(dot(IN.positionHCS.xy, half2(0.06711056h, 0.00583715h))));
                     lit += (ign - 0.5h) * (1.0h / 255.0h);
-                }
+                #endif
 
                 return half4(lit, _BaseColor.a);
             }

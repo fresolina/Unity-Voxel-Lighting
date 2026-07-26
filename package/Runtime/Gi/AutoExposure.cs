@@ -4,9 +4,13 @@ using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
     /// <summary>
-    /// Backend-agnostic display transform for the GI updaters: publishes the `_Exposure` and
-    /// `_Tonemap` globals (the operator: Off / Reinhard / AgX / ACES), optionally auto-adapting
-    /// exposure to the average scene-GI luminance.
+    /// Backend-agnostic display transform for the GI updaters: publishes the `_ExposureLinear` global
+    /// and selects the tonemap operator's shader KEYWORD (Off / Reinhard / AgX / ACES), optionally
+    /// auto-adapting exposure to the average scene-GI luminance.
+    ///
+    /// The operator is a keyword, not a uniform the shader branches on: see
+    /// <see cref="LightingKeywords.Tonemap"/> for why (register allocation / occupancy). Exposure is
+    /// published pre-exponentiated so the fragment doesn't run exp2 per pixel on a uniform.
     ///
     /// The luminance MEASUREMENT is backend-specific (texture vs buffer GI read different data), so
     /// the owner passes a small dispatch callback to <see cref="Apply"/>: this controller hands it a
@@ -37,8 +41,7 @@ namespace Lotec.Lighting {
         [Tooltip("Radius around the camera (in meters) to sample for auto-exposure.")]
         [SerializeField] float _measureRadius = 3f;
 
-        static readonly int s_exposure = Shader.PropertyToID("_Exposure");
-        static readonly int s_tonemap = Shader.PropertyToID("_Tonemap");
+        static readonly int s_exposureLinear = Shader.PropertyToID("_ExposureLinear");
         static readonly uint[] s_clear = { 0u, 0u };
         // Scratch for the open-sky fallback's ambient-probe sampling (6 axis directions).
         static readonly Vector3[] s_ambientDirs =
@@ -48,6 +51,9 @@ namespace Lotec.Lighting {
         ComputeBuffer _luminanceBuffer;
         bool _readbackPending;
         float _autoExposureEV;
+        // The EV actually published (pre-exp2). Kept here rather than read back from the shader global,
+        // which now carries the LINEAR multiplier and so can't be smoothed in EV space.
+        float _currentEV;
 
         /// <summary>Radius (m) around the camera the owner's luminance kernel should sample.</summary>
         public float MeasureRadius => _measureRadius;
@@ -56,15 +62,21 @@ namespace Lotec.Lighting {
         /// post-processing stack to expose/tonemap once (also skips auto-exposure).</summary>
         public TonemapMode Tonemap { get => _tonemap; set => _tonemap = value; }
 
+        /// <summary>Adapt exposure to the measured scene-GI luminance. Off holds the manual exposure
+        /// and - the reason this is switchable at runtime - skips the per-measurement luminance
+        /// dispatch + readback, which is the part of "tonemapping on" that actually costs frame time
+        /// (the in-shader operator itself is a handful of ALU).</summary>
+        public bool Auto { get => _auto; set => _auto = value; }
+
         /// <summary>
         /// Publish exposure + the tonemap operator for this frame. When auto-exposure is on and a
         /// <paramref name="dispatchMeasure"/> callback is supplied, the controller clears its
         /// luminance buffer, lets the callback fill it (bind + dispatch the backend's luminance
-        /// kernel), reads it back asynchronously, and adapts `_Exposure` toward the target.
+        /// kernel), reads it back asynchronously, and adapts the published exposure toward the target.
         /// </summary>
         public void Apply(System.Action<ComputeBuffer> dispatchMeasure) {
-            // The lit shader branches on _Tonemap (a uniform, so free); 0 = Off skips the transform.
-            Shader.SetGlobalInt(s_tonemap, (int)_tonemap);
+            // Selects the lit shader's variant: only the chosen operator is compiled into the kernel.
+            LightingKeywords.Tonemap.Set(KeywordFor(_tonemap));
             if (_tonemap == TonemapMode.Off) {
                 return; // linear HDR out; a post stack tonemaps + exposes (auto-exposure skipped)
             }
@@ -73,8 +85,24 @@ namespace Lotec.Lighting {
                 MeasureLuminance(dispatchMeasure);
                 AdaptExposure();
             } else {
-                Shader.SetGlobalFloat(s_exposure, _exposure);
+                PublishExposure(_exposure);
             }
+        }
+
+        static string KeywordFor(TonemapMode mode) {
+            switch (mode) {
+                case TonemapMode.Off: return LightingKeywords.TonemapOff;
+                case TonemapMode.AgX: return LightingKeywords.TonemapAgx;
+                case TonemapMode.ACES: return LightingKeywords.TonemapAces;
+                default: return LightingKeywords.TonemapReinhard;
+            }
+        }
+
+        // exp2 on the CPU rather than per pixel: it's a uniform, so the fragment was recomputing the
+        // same transcendental for every pixel in the frame.
+        void PublishExposure(float ev) {
+            _currentEV = ev;
+            Shader.SetGlobalFloat(s_exposureLinear, Mathf.Pow(2f, ev));
         }
 
         void MeasureLuminance(System.Action<ComputeBuffer> dispatchMeasure) {
@@ -131,9 +159,10 @@ namespace Lotec.Lighting {
 
         void AdaptExposure() {
             float targetExposure = _autoExposureEV + _exposure;
-            float currentExposure = Shader.GetGlobalFloat(s_exposure);
             float speed = 1f - Mathf.Exp(-Time.deltaTime * _adaptationSpeed);
-            Shader.SetGlobalFloat(s_exposure, Mathf.Lerp(currentExposure, targetExposure, speed));
+            // Smoothed in EV (log) space, which is why the EV is tracked here: the published global is
+            // the linear multiplier and lerping that would adapt unevenly across stops.
+            PublishExposure(Mathf.Lerp(_currentEV, targetExposure, speed));
         }
 
         /// <summary>Release the luminance buffer (call from the owner's OnDisable).</summary>
@@ -145,6 +174,6 @@ namespace Lotec.Lighting {
 
         /// <summary>Restore the default (Reinhard) in-shader tonemap (owner's OnDisable, so a
         /// disabled GI updater leaves the direct-only path with the in-shader tonemap on).</summary>
-        public void ResetToDefault() => Shader.SetGlobalInt(s_tonemap, (int)TonemapMode.Reinhard);
+        public void ResetToDefault() => LightingKeywords.Tonemap.Set(LightingKeywords.TonemapReinhard);
     }
 }
