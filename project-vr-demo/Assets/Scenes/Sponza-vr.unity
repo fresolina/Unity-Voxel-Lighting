@@ -244,13 +244,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 784264324}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.84720105, y: -0.092491545, z: 0.15701947, w: 0.49903962}
+  m_LocalRotation: {x: 0.49162745, y: -0.15782061, z: 0.09111778, w: 0.85152376}
   m_LocalPosition: {x: 0, y: 3.8, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 119, y: -21, z: 0}
+  m_LocalEulerAnglesHint: {x: 60, y: -21, z: 0}
 --- !u!114 &784264327
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1369,7 +1369,7 @@ MonoBehaviour:
   occlusionFieldTextures:
   - {fileID: 11700000, guid: 0950b1f0954e24345b4ae52f477656b8, type: 2}
   occlusionFieldDirections:
-  - {x: -0.17374024, y: 0.8746197, z: 0.45260856}
+  - {x: 0.17918399, y: 0.86602545, z: -0.4667902}
   shadowEncoding: 1
   sdfRangeVoxels: 2
   penumbraVoxels: 0.5

@@ -515,7 +515,7 @@ MonoBehaviour:
   _aoStrength: 0
   _fineShadow: 3
   _coarseShadow: 1
-  _ssboRead: 1
+  _ssboRead: 0
   _exposureControl:
     _tonemap: 2
     _exposure: 0
