@@ -103,9 +103,6 @@ half GetBitmaskShadow(float3 worldPos, float3 normal) {
 // OCCLUSION FIELD (per-direction lit value, hardware trilinear)
 // -----------------------------------------------------------------------------
 
-// Sun direction query results (set from C# each frame).
-float3 _OccFieldSunDir;
-
 // Channel selectors for the two baked directions nearest the sun, as one-hot masks so the pick is a
 // single dot product instead of a compare chain.
 float4 _OccFieldSunMask;

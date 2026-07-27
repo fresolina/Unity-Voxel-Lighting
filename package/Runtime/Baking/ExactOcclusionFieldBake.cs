@@ -51,7 +51,10 @@ namespace Lotec.Lighting
         public bool hemisphereOnly = true;
 
         [Tooltip("EXTRA rays per direction, on top of the ray straight down the direction itself " +
-                 "(which is always traced). 0 = hard shadows from that single ray.")]
+                 "(which is always traced). 0 = hard shadows from that single ray.\n\n" +
+                 "This is the setting that matters under Signed Distance encoding: more rays place " +
+                 "the shadow boundary more accurately WITHIN a voxel, which is what the fragment " +
+                 "reconstructs a sharp edge from.")]
         [FormerlySerializedAs("samplesPerDirection")]
         [Range(0, 64)]
         public int penumbraSamples = 8;
@@ -68,18 +71,24 @@ namespace Lotec.Lighting
         public bool adaptiveSampling = true;
 
         [Tooltip("Whether the light's angular size is authored relative to the voxel grid or as a " +
-                 "fixed real-world sun angle.")]
+                 "fixed real-world sun angle.\n\n" +
+                 "NOTE: under Signed Distance encoding both modes barely matter. That pass thresholds " +
+                 "visibility at 0.5 and keeps only the iso-surface, which cone width hardly moves - " +
+                 "measured under 1% of voxels shifting by more than 8/255 between a hard cone and a " +
+                 "4-voxel one. Softness there is VoxelOcclusionField.shadowEdgeVoxels, set at runtime.")]
         public PenumbraMode penumbraMode = PenumbraMode.Voxels;
 
         [Tooltip("Voxels mode: penumbra width in voxels, measured 32 voxels from the occluder. Keeps " +
-                 "the softest shadow to something the field can actually store. 0 = hard.")]
+                 "the softest shadow to something the field can actually store. 0 = hard.\n\n" +
+                 "Only has real effect under Visibility encoding - see the Penumbra Mode tooltip.")]
         [Range(0f, 16f)]
         public float penumbraVoxels = 2f;
 
         [Tooltip("Sun Angle mode: angular DIAMETER of the light in degrees. The real sun is ~0.53; " +
-                 "larger values give visibly softer shadows. Note that at low field resolutions a " +
-                 "small angle bakes a penumbra narrower than one voxel, which trilinear filtering " +
-                 "then widens anyway.")]
+                 "larger values give visibly softer shadows. At these voxel sizes a physically " +
+                 "correct sun bakes a penumbra far narrower than one voxel, so it looks like hard " +
+                 "shadows - exaggerate it, or use Voxels mode.\n\n" +
+                 "Only has real effect under Visibility encoding - see the Penumbra Mode tooltip.")]
         [Range(0f, 30f)]
         public float sunAngularDiameter = 0.53f;
 
@@ -90,8 +99,9 @@ namespace Lotec.Lighting
 
         [Tooltip("Signed Distance stores the distance to the shadow boundary instead of the visibility " +
                  "fraction, so the fragment reconstructs a SHARP edge from the same coarse grid - the " +
-                 "SDF-font trick - and penumbra width becomes a runtime knob. Rounds off creases where " +
-                 "two shadow edges meet, so pick Visibility for foliage-like occluders.")]
+                 "SDF-font trick - and softness moves to VoxelOcclusionField.shadowEdgeVoxels, tunable " +
+                 "at runtime with no rebake. Rounds off creases where two shadow edges meet, so pick " +
+                 "Visibility for foliage-like occluders.")]
         public VoxelOcclusionField.ShadowEncoding shadowEncoding = VoxelOcclusionField.ShadowEncoding.SignedDistance;
 
         [Tooltip("Signed Distance only: the +/- voxel range the 8-bit channel spans. Caps how wide a " +

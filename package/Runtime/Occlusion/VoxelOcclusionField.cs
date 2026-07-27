@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace Lotec.Lighting {
     /// <summary>
@@ -35,11 +36,14 @@ namespace Lotec.Lighting {
                  "Written by the baker.")]
         public float sdfRangeVoxels = 4f;
 
-        [Tooltip("Signed Distance encoding only: shadow edge width in voxels. Runtime-tunable - no " +
-                 "rebake needed. Small values give sharp contact shadows; the field can resolve well " +
-                 "below one voxel because the boundary is reconstructed, not interpolated.")]
+        [Tooltip("Signed Distance encoding only: shadow edge width in voxels. This is the softness " +
+                 "knob for a Signed Distance field - it is runtime-tunable and needs no rebake, " +
+                 "unlike the baker's cone settings. Small values give sharp contact shadows; the " +
+                 "field resolves well below one voxel because the boundary is reconstructed rather " +
+                 "than interpolated.")]
+        [FormerlySerializedAs("penumbraVoxels")]
         [Range(0.05f, 4f)]
-        public float penumbraVoxels = 1f;
+        public float shadowEdgeVoxels = 1f;
 
         [Tooltip("Blend between the two baked directions nearest the sun instead of snapping to one. " +
                  "Costs a second texture tap, and removes the pop as the sun crosses between " +
@@ -49,7 +53,6 @@ namespace Lotec.Lighting {
 
         static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
         static readonly int s_voxelSizeInverse = Shader.PropertyToID("_VoxelSizeInverse");
-        static readonly int s_occFieldSunDir = Shader.PropertyToID("_OccFieldSunDir");
         static readonly int s_occFieldSunMask = Shader.PropertyToID("_OccFieldSunMask");
         static readonly int s_occFieldSunMaskB = Shader.PropertyToID("_OccFieldSunMaskB");
         static readonly int s_occFieldTex = Shader.PropertyToID("_OccFieldTex");
@@ -91,14 +94,14 @@ namespace Lotec.Lighting {
         /// Slope of the linear ramp the fragment applies to the stored channel. One formula covers
         /// both encodings, so the shader needs no branch and no keyword: a Visibility field passes
         /// straight through at 1.0, while a SignedDistance field turns into a soft edge whose width
-        /// is <see cref="penumbraVoxels"/>.
+        /// is <see cref="shadowEdgeVoxels"/>.
         ///
-        /// stored - 0.5 == d / (2 * range), and we want saturate(d / (2 * penumbra) + 0.5),
-        /// so the scale is range / penumbra.
+        /// stored - 0.5 == d / (2 * range), and we want saturate(d / (2 * edge) + 0.5),
+        /// so the scale is range / edge.
         /// </summary>
         public float DecodeScale =>
             shadowEncoding == ShadowEncoding.SignedDistance
-                ? Mathf.Max(sdfRangeVoxels, 1e-3f) / Mathf.Max(penumbraVoxels, 1e-3f)
+                ? Mathf.Max(sdfRangeVoxels, 1e-3f) / Mathf.Max(shadowEdgeVoxels, 1e-3f)
                 : 1f;
 
         // Map the current sun direction onto the baked direction set and bind the texture(s) +
@@ -118,7 +121,6 @@ namespace Lotec.Lighting {
                 sunDir, occlusionFieldDirections, occlusionFieldDirections.Length,
                 out int bestIndex, out int secondIndex, out float weight);
 
-            Shader.SetGlobalVector(s_occFieldSunDir, sunDir);
             Shader.SetGlobalVector(s_occFieldSunMask, s_channelMasks[bestIndex & 3]);
             BindFieldTexture(s_occFieldTex, bestIndex);
 
