@@ -15,16 +15,38 @@ namespace Lotec.Lighting {
     [RequireComponent(typeof(VoxelVolume))]
     [AddComponentMenu("Lotec/Voxel Lighting/Binders/Voxel Occlusion Field")]
     public class VoxelOcclusionField : MonoBehaviour {
+        /// <summary>What the baked channels actually hold. Set by the baker; drives the decode ramp.</summary>
+        public enum ShadowEncoding {
+            Visibility,     // the channel IS the lit value - decoded as a pass-through
+            SignedDistance, // signed distance to the shadow boundary, in voxels, so the fragment
+                            // reconstructs a sharp edge and the penumbra becomes a runtime knob
+        }
+
         [Tooltip("RGBA32 textures storing per-direction lit values. 4 directions per texture. Written by VoxelOcclusionFieldBaker.")]
         public Texture3D[] occlusionFieldTextures;
         [HideInInspector]
         public Vector3[] occlusionFieldDirections;
+
+        [Tooltip("What the baked channels hold. Written by the baker - do not set by hand, it must " +
+                 "match how the data was baked or the shadow decode is wrong.")]
+        public ShadowEncoding shadowEncoding = ShadowEncoding.Visibility;
+
+        [Tooltip("Signed Distance encoding only: the +/- voxel range the baked channel spans. " +
+                 "Written by the baker.")]
+        public float sdfRangeVoxels = 4f;
+
+        [Tooltip("Signed Distance encoding only: shadow edge width in voxels. Runtime-tunable - no " +
+                 "rebake needed. Small values give sharp contact shadows; the field can resolve well " +
+                 "below one voxel because the boundary is reconstructed, not interpolated.")]
+        [Range(0.05f, 4f)]
+        public float penumbraVoxels = 1f;
 
         static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
         static readonly int s_voxelSizeInverse = Shader.PropertyToID("_VoxelSizeInverse");
         static readonly int s_occFieldSunDir = Shader.PropertyToID("_OccFieldSunDir");
         static readonly int s_occFieldSunChannel = Shader.PropertyToID("_OccFieldSunChannel");
         static readonly int s_occFieldTex = Shader.PropertyToID("_OccFieldTex");
+        static readonly int s_occFieldDecode = Shader.PropertyToID("_OccFieldDecode");
 
         VoxelVolume _volume;
 
@@ -47,8 +69,23 @@ namespace Lotec.Lighting {
             if (v == null) return;
             Shader.SetGlobalVector(s_voxelSize, Vector3.one * v.VoxelSize);
             Shader.SetGlobalVector(s_voxelSizeInverse, v.VoxelSizeInverse);
+            Shader.SetGlobalFloat(s_occFieldDecode, DecodeScale);
             PublishSunField();
         }
+
+        /// <summary>
+        /// Slope of the linear ramp the fragment applies to the stored channel. One formula covers
+        /// both encodings, so the shader needs no branch and no keyword: a Visibility field passes
+        /// straight through at 1.0, while a SignedDistance field turns into a soft edge whose width
+        /// is <see cref="penumbraVoxels"/>.
+        ///
+        /// stored - 0.5 == d / (2 * range), and we want saturate(d / (2 * penumbra) + 0.5),
+        /// so the scale is range / penumbra.
+        /// </summary>
+        public float DecodeScale =>
+            shadowEncoding == ShadowEncoding.SignedDistance
+                ? Mathf.Max(sdfRangeVoxels, 1e-3f) / Mathf.Max(penumbraVoxels, 1e-3f)
+                : 1f;
 
         // Map the current sun direction to the nearest baked direction, then bind that
         // direction's texture + RGBA channel for the shader to sample.

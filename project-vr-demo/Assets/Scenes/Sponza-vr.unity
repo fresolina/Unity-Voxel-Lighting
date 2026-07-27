@@ -1348,12 +1348,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 441ae3d053d2ee344a7b0a9a11cb817f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelVolume
-  _maxResolution: 64
+  _maxResolution: 128
   _autoRegisterWithManager: 1
-  _trimmedMaxResolution: {x: 41, y: 30, z: 64}
+  _trimmedMaxResolution: {x: 81, y: 56, z: 128}
   _bounds:
     m_Center: {x: 0, y: 6.9300017, z: 0}
-    m_Extent: {x: 11.301783, y: 8.269597, z: 17.641808}
+    m_Extent: {x: 10.803828, y: 7.469313, z: 17.072716}
 --- !u!114 &1649028921
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1369,7 +1369,10 @@ MonoBehaviour:
   occlusionFieldTextures:
   - {fileID: 11700000, guid: 0950b1f0954e24345b4ae52f477656b8, type: 2}
   occlusionFieldDirections:
-  - {x: -0.17101015, y: 0.9396927, z: -0.29619813}
+  - {x: -0.17374024, y: 0.8746197, z: 0.45260856}
+  shadowEncoding: 1
+  sdfRangeVoxels: 2
+  penumbraVoxels: 0.5
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

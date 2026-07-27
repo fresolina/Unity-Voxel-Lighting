@@ -107,20 +107,34 @@ half GetBitmaskShadow(float3 worldPos, float3 normal) {
 float3 _OccFieldSunDir;
 int _OccFieldSunChannel;
 
+// Slope of the decode ramp, published by VoxelOcclusionField.Bind (see DecodeScale there).
+float _OccFieldDecode;
+
 // Active occlusion field texture (bound per-frame to the texture matching the sun direction).
 TEXTURE3D(_OccFieldTex);
 SAMPLER(sampler_OccFieldTex);
 
 // Sample the occlusion field shadow using the precomputed sun direction.
-// Returns 0.0 (shadow) to 1.0 (lit). The texture holds 0..1 lit values, so the fetch
-// narrows to fp16 immediately; only the uvw lookup stays fp32.
+// Returns 0.0 (shadow) to 1.0 (lit). The fetch narrows to fp16 immediately; only the uvw lookup
+// stays fp32.
+//
+// The ramp decodes BOTH baked encodings with no branch and no keyword, which matters because this
+// runs per fragment on a pass that is already occupancy-bound:
+//   _OccFieldDecode == 1          -> the channel is a lit value and passes straight through.
+//   _OccFieldDecode == range/pen  -> the channel is a signed distance to the shadow boundary, and
+//                                    the ramp turns it into an edge `pen` voxels wide. Because the
+//                                    boundary is RECONSTRUCTED rather than interpolated, that edge
+//                                    can be far sharper than the voxel grid - the same reason an SDF
+//                                    font stays crisp when magnified.
 half GetOccFieldShadow(float3 worldPos) {
     float3 uvw = WorldToVoxelUV(worldPos);
     half4 raw = (half4)_OccFieldTex.SampleLevel(sampler_OccFieldTex, uvw, 0);
-    if (_OccFieldSunChannel == 0) return raw.r;
-    if (_OccFieldSunChannel == 1) return raw.g;
-    if (_OccFieldSunChannel == 2) return raw.b;
-    return raw.a;
+    half stored;
+    if (_OccFieldSunChannel == 0) stored = raw.r;
+    else if (_OccFieldSunChannel == 1) stored = raw.g;
+    else if (_OccFieldSunChannel == 2) stored = raw.b;
+    else stored = raw.a;
+    return saturate((stored - 0.5h) * (half)_OccFieldDecode + 0.5h);
 }
 
 // Variant with normal-based offset to reduce self-occlusion.
