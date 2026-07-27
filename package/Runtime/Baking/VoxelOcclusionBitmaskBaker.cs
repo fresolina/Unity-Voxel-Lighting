@@ -3,20 +3,29 @@ using UnityEngine;
 namespace Lotec.Lighting {
     /// <summary>
     /// Bakes the directional occlusion bitmask used by the Bitmask buffer-GI shadow mode.
-    /// Reads the hi-res SDF, so it runs after <see cref="VoxelSdfBaker"/>.
+    ///
+    /// <see cref="ExactOcclusionBitmaskBake"/> traces scene triangles directly, so this baker has no
+    /// ordering dependency on <see cref="VoxelSdfBaker"/>.
     /// </summary>
     [AddComponentMenu("Lotec/Voxel Lighting/Bakers/Voxel Occlusion Bitmask Baker")]
     public class VoxelOcclusionBitmaskBaker : VoxelBakerBase {
-        [SerializeField] OcclusionBitmaskBake _baker = new OcclusionBitmaskBake();
+        [Header("Occlusion Bitmask Baker")]
+        [SerializeField] ExactOcclusionBitmaskBake _exactBake = new ExactOcclusionBitmaskBake();
         [HideInInspector][SerializeField] bool _hemisphereInitialized;
         [HideInInspector][SerializeField] bool _lastHemisphereOnly;
 
-        public OcclusionBitmaskBake Baker => _baker;
+        public ExactOcclusionBitmaskBake ExactBaker => _exactBake;
         public override int BakeOrder => 10;
         public override string BakeLabel => "Occlusion Bitmask";
 
         public override bool Bake(VoxelVolume volume, out string error) {
-            if (!_baker.TryBake(volume, out Texture3D baked, out Vector3[] directions, out error))
+#if UNITY_EDITOR
+            // Components serialized before the compute shader field existed have none assigned.
+            // Resolving here (rather than in OnValidate) keeps the AssetDatabase lookup on an explicit
+            // user action, where it is always safe to call.
+            AssignMissingComputeShaders();
+#endif
+            if (!_exactBake.TryBake(volume, out Texture3D baked, out Vector3[] directions, out error))
                 return false;
 
             // Store the baked bitmask on its runtime binder (added if missing).
@@ -34,25 +43,30 @@ namespace Lotec.Lighting {
 #if UNITY_EDITOR
         protected override void Reset() {
             base.Reset();
-            if (_baker.bitmaskBakeCompute == null) {
-                ComputeShader cs = FindComputeShaderByContains("OcclusionBitmaskBake");
-                if (cs != null) _baker.bitmaskBakeCompute = cs;
-                else Debug.LogWarning("VoxelOcclusionBitmaskBaker: Could not find OcclusionBitmaskBake compute shader. Assign it manually.", this);
+            AssignMissingComputeShaders();
+        }
+
+        void AssignMissingComputeShaders() {
+            if (_exactBake.occlusionFieldTraceCompute == null) {
+                ComputeShader cs = FindComputeShaderByExactName("OcclusionFieldTrace");
+                if (cs != null) _exactBake.occlusionFieldTraceCompute = cs;
+                else Debug.LogWarning("VoxelOcclusionBitmaskBaker: Could not find OcclusionFieldTrace compute shader. Assign it manually.", this);
             }
         }
 
         void OnValidate() {
+            bool hemisphereOnly = _exactBake.hemisphereOnly;
             if (!_hemisphereInitialized) {
-                _lastHemisphereOnly = _baker.hemisphereOnly;
+                _lastHemisphereOnly = hemisphereOnly;
                 _hemisphereInitialized = true;
                 return;
             }
-            if (_lastHemisphereOnly != _baker.hemisphereOnly) {
+            if (_lastHemisphereOnly != hemisphereOnly) {
                 VoxelVolume volume = ResolveVolume();
                 if (volume != null && volume.TryGetComponent(out VoxelOcclusionBitmask binder) && binder.HasData) {
                     Debug.LogWarning("VoxelOcclusionBitmaskBaker: hemisphere-only changed; existing baked bitmask no longer matches the runtime direction set. Rebake.", this);
                 }
-                _lastHemisphereOnly = _baker.hemisphereOnly;
+                _lastHemisphereOnly = hemisphereOnly;
             }
         }
 #endif
