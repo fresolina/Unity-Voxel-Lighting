@@ -8,10 +8,19 @@ namespace Lotec.Demo {
     /// steered. In a headset the sun itself is usually out of view (indoors, behind you, or below the
     /// horizon), so without this the gesture gives no feedback beyond the lighting slowly shifting.
     ///
-    /// Geometry and materials are built in code: a prefab would need authored art and a wired reference,
-    /// while Unity's primitives plus the material they already carry are always in the build.
-    /// (Shader.Find on a URP shader is not - only the built-in always-included shaders are guaranteed,
-    /// see Project Settings > Graphics.)
+    /// Geometry is built in code: a prefab would need authored art and a wired reference, while Unity's
+    /// primitives are always available.
+    ///
+    /// The material is VoxelLit, NOT the URP Lit the primitives ship with. Both reasons are build-only
+    /// problems that cannot reproduce in the editor, where nothing is stripped:
+    ///  - Variant survival. A shader_feature variant only reaches the player if some BUILD-TIME material
+    ///    uses it. This used to copy URP Lit and switch on _EMISSION at runtime; no material in the build
+    ///    has emission on, so that variant was stripped and the indicator rendered as the magenta error
+    ///    shader - which, having no multiview support, also showed up in one eye only. Every static mesh
+    ///    in the level is VoxelLit with _NORMALMAP, so that exact combination is guaranteed present.
+    ///  - Grading. VoxelLit applies the scene's exposure + tonemap in-shader; URP Lit does not, so a URP
+    ///    Lit object floats over the image ungraded.
+    /// The rule this encodes: never enable a keyword at runtime that no build-time material already uses.
     /// </summary>
     [AddComponentMenu("Lotec/Demo/Sun Rotation Indicator")]
     public class SunRotationIndicator : MonoBehaviour {
@@ -35,9 +44,12 @@ namespace Lotec.Demo {
         const float HeadLengthFraction = 0.3f;
         const float HeadWidthFactor = 3.2f;
         const int HeadSegments = 12;
-        // Emission relative to the surface colour: enough to read in an unlit room, low enough that the
-        // sphere keeps its shading instead of blooming into a flat white blob.
-        const float EmissionScale = 0.4f;
+
+        // The one VoxelLit shader_feature combination every material in the level uses, and therefore the
+        // only one guaranteed to survive shader stripping into the player. _BumpMap stays at its "bump"
+        // default (a flat normal), which shades identically to having no normal map at all.
+        const string VoxelLitShaderName = "Lotec/Voxel Lighting/Voxel Lit";
+        const string NormalMapKeyword = "_NORMALMAP";
 
         Transform _root;
         Transform _arrow;
@@ -86,7 +98,6 @@ namespace Lotec.Demo {
                 Quaternion.identity);
             _arrow.localRotation = Quaternion.FromToRotation(Vector3.up, towardSun);
             _sphereMaterial.SetColor(ShaderIds.BaseColor, sunColor);
-            _sphereMaterial.SetColor(ShaderIds.EmissionColor, sunColor * EmissionScale);
         }
 
         /// <summary>Hide the visual (kept built, so the next <see cref="Show"/> is free).</summary>
@@ -153,16 +164,20 @@ namespace Lotec.Demo {
             go.transform.localScale = localScale;
         }
 
-        // Copy of the primitive's own material (URP Lit), tinted and made emissive so it stays readable
-        // at the very moment you're most likely to be steering: with the sun down and the scene dark.
-        static Material CreateMaterial(Material source, Color color) {
-            var material = new Material(source) { name = source.name + " (Sun Indicator)" };
+        // A tinted VoxelLit material (see the class summary for why not the primitive's URP Lit). No
+        // emission: VoxelLit runs the scene's auto-exposure, so in a dark room the indicator brightens
+        // along with everything else rather than needing a glow of its own - and adding one would mean
+        // switching on _EMISSION_ON, a variant no build-time material uses and stripping would drop.
+        // `fallbackSource` is the primitive's own material, used only if the package shader somehow
+        // isn't in the build; plain URP Lit with no runtime keywords is itself a safe variant.
+        static Material CreateMaterial(Material fallbackSource, Color color) {
+            Shader shader = Shader.Find(VoxelLitShaderName);
+            Material material = shader != null
+                ? new Material(shader) { name = "Sun Indicator (VoxelLit)" }
+                : new Material(fallbackSource) { name = fallbackSource.name + " (Sun Indicator)" };
+            if (shader != null) material.EnableKeyword(NormalMapKeyword);
             if (material.HasProperty(ShaderIds.BaseColor)) material.SetColor(ShaderIds.BaseColor, color);
             if (material.HasProperty(ShaderIds.Color)) material.SetColor(ShaderIds.Color, color);
-            if (material.HasProperty(ShaderIds.EmissionColor)) {
-                material.EnableKeyword("_EMISSION");
-                material.SetColor(ShaderIds.EmissionColor, color * EmissionScale);
-            }
             // Runtime-only object: keep it out of any GI the scene bakes or gathers from emissive surfaces.
             material.globalIlluminationFlags = MaterialGlobalIlluminationFlags.EmissiveIsBlack;
             return material;
@@ -210,9 +225,8 @@ namespace Lotec.Demo {
         }
 
         static class ShaderIds {
-            public static readonly int BaseColor = Shader.PropertyToID("_BaseColor");
-            public static readonly int Color = Shader.PropertyToID("_Color");
-            public static readonly int EmissionColor = Shader.PropertyToID("_EmissionColor");
+            public static readonly int BaseColor = Shader.PropertyToID("_BaseColor"); // VoxelLit and URP Lit
+            public static readonly int Color = Shader.PropertyToID("_Color");         // legacy fallback path
         }
     }
 }

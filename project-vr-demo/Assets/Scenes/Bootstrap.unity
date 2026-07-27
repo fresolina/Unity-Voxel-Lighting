@@ -538,7 +538,6 @@ GameObject:
   - component: {fileID: 1500960147}
   - component: {fileID: 1500960152}
   - component: {fileID: 1500960151}
-  - component: {fileID: 1500960150}
   - component: {fileID: 1500960149}
   m_Layer: 0
   m_Name: Bakers
@@ -582,25 +581,6 @@ MonoBehaviour:
     shadowSoftness: 3
   _hemisphereInitialized: 1
   _lastHemisphereOnly: 1
---- !u!114 &1500960150
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1500960146}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f1ca66c064226da428d740f80012b968, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionBitmaskBaker
-  _targetVolume: {fileID: 0}
-  _baker:
-    directionCount: 8
-    hemisphereOnly: 1
-    bitmaskBakeCompute: {fileID: 7200000, guid: e0f7c494ba521474e9fdbcaf190a0e90, type: 3}
-  _hemisphereInitialized: 1
-  _lastHemisphereOnly: 1
 --- !u!114 &1500960151
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -608,7 +588,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1500960146}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 5b0a41c06d3f9ad4094ebb6168426c97, type: 3}
   m_Name: 

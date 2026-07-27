@@ -51,6 +51,15 @@ namespace Lotec.Lighting.Editor {
             }
             gi.EditorBindFields(fields);
 
+            // Refresh every derived bound this capture is about to read. VoxelVolume.Bounds and
+            // MeshBounds.Bounds are SERIALIZED derived values - they only re-derive on OnValidate or an
+            // explicit recompute - so a bake taken after e.g. a Max Resolution change, but before
+            // anything re-derived them, records the OLD padded box. The runtime then compares the asset
+            // against freshly derived bounds, rejects it, and silently falls back to runtime
+            // voxelization. VoxelSdfBaker already recomputes before baking; this gives the GI bake the
+            // same guarantee so the two bakes can't drift apart.
+            RefreshBakeBounds(gi, fields);
+
             // Bake folder is scene-adjacent; derive it from any volume in the scene.
             VoxelVolume folderVolume = gi.Volume != null ? gi.Volume : FindAnyDetailedVolume(fields);
             if (folderVolume == null) {
@@ -102,6 +111,43 @@ namespace Lotec.Lighting.Editor {
             }
             fieldsSo.ApplyModifiedProperties();
             Debug.Log($"Buffer GI: baked {assets.Count} field voxelization asset(s) to '{folder}', assigned to '{fields.name}'.", gi);
+        }
+
+        // Re-derive (and persist) the bounds every capture path reads:
+        //   - the ACTIVE volume, whose Bounds become GridOrigin/GridSize - what the runtime compares the
+        //     FINE asset against, so this is the one that has to be current for the match to succeed;
+        //   - each detailed field's sibling VoxelVolume, which is the box the fine capture records;
+        //   - the coarse MeshBounds, which CoarseWorldBounds scales into the coarse capture's box.
+        // VoxelVolume.RecomputeBoundsAndResolution refreshes its own MeshBounds as part of the job, so
+        // the coarse field only needs a direct Recompute when it has no VoxelVolume sibling.
+        static void RefreshBakeBounds(BufferGiUpdater gi, BufferGiFields fields) {
+            var seen = new HashSet<Object>();
+            RecomputeVolume(gi.Volume, seen);
+            foreach (MeshBounds field in fields.DetailedFields) {
+                if (field == null) continue;
+                RecomputeVolume(field.GetComponent<VoxelVolume>(), seen);
+            }
+            if (fields.CoarseField != null && seen.Add(fields.CoarseField)) {
+                Undo.RecordObject(fields.CoarseField, "Refresh Buffer GI Bake Bounds");
+                fields.CoarseField.Recompute();
+                EditorUtility.SetDirty(fields.CoarseField);
+            }
+        }
+
+        // SetDirty on both components: RecomputeBoundsAndResolution writes the volume's _bounds /
+        // _trimmedMaxResolution AND its MeshBounds' _bounds, and those have to reach the saved scene or
+        // a build would ship the stale box the asset no longer matches.
+        static void RecomputeVolume(VoxelVolume vv, HashSet<Object> seen) {
+            if (vv == null || !seen.Add(vv)) return;
+            MeshBounds source = vv.GetComponent<MeshBounds>();
+            Undo.RecordObject(vv, "Refresh Buffer GI Bake Bounds");
+            if (source != null) {
+                Undo.RecordObject(source, "Refresh Buffer GI Bake Bounds");
+                seen.Add(source);
+            }
+            vv.RecomputeBoundsAndResolution();
+            EditorUtility.SetDirty(vv);
+            if (source != null) EditorUtility.SetDirty(source);
         }
 
         // Save (or overwrite in place) one field asset in the bake folder.
