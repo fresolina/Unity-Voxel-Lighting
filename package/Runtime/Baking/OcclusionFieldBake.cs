@@ -12,7 +12,7 @@ namespace Lotec.Lighting {
     /// Unlike OcclusionBitmaskBake, this supports hardware trilinear interpolation.
     /// </summary>
     [Serializable]
-    public class OcclusionFieldBake {
+    public class OcclusionFieldBake : IOcclusionFieldBake {
         public enum DirectionCount {
             Dir1Sun = 1,
             Dir8 = 8,
@@ -25,7 +25,7 @@ namespace Lotec.Lighting {
         public ComputeShader occlusionFieldBakeCompute;
 
         [Tooltip("Number of directions to bake.\nDir 1 Sun bakes current sun direction.")]
-        public DirectionCount directionCount = DirectionCount.Dir64;
+        public DirectionCount directionCount = DirectionCount.Dir1Sun;
 
         [Tooltip("Use only upper hemisphere directions (Y >= 0). Useful when the sun never goes below the horizon.")]
         public bool hemisphereOnly = true;
@@ -33,6 +33,12 @@ namespace Lotec.Lighting {
         [Tooltip("Softness of shadow penumbra. Higher = sharper. 0 = binary.")]
         [Range(1f, 128f)]
         public float shadowSoftness = 3f;
+
+        public bool HemisphereOnly => hemisphereOnly;
+
+        // This path only ever writes raw lit values.
+        public VoxelOcclusionField.ShadowEncoding Encoding => VoxelOcclusionField.ShadowEncoding.Visibility;
+        public float SdfRangeVoxels => 0f;
 
         static readonly int s_boundsMin = Shader.PropertyToID("_BoundsMin");
         static readonly int s_boundsSize = Shader.PropertyToID("_BoundsSize");
@@ -46,7 +52,8 @@ namespace Lotec.Lighting {
         static readonly int s_raymarchEpsilon = Shader.PropertyToID("_RaymarchEpsilon");
         static readonly int s_sdfHires = Shader.PropertyToID("_SdfHires");
 
-        static GraphicsFormat GetOcclusionFieldFormat(bool isSingleDir) {
+        // Internal so the exact triangle-traversal bake emits a byte-identical format.
+        internal static GraphicsFormat GetOcclusionFieldFormat(bool isSingleDir) {
             if (isSingleDir)
                 return GraphicsFormat.R8_UNorm;
 #if UNITY_EDITOR
@@ -56,7 +63,7 @@ namespace Lotec.Lighting {
             return GraphicsFormat.R8G8B8A8_UNorm;
         }
 
-        static void SetPackedTextureData(Texture3D texture, NativeArray<float> readbackData, int voxelCount, GraphicsFormat format) {
+        internal static void SetPackedTextureData(Texture3D texture, NativeArray<float> readbackData, int voxelCount, GraphicsFormat format) {
             if (format == GraphicsFormat.R4G4B4A4_UNormPack16) {
                 var packed = new ushort[voxelCount];
                 for (int voxel = 0; voxel < voxelCount; voxel++) {

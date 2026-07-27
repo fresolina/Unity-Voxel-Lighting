@@ -21,18 +21,17 @@ If you want the demo project to use the in-repo package samples directly, or you
 ### Realtime shadows
 
 Static objects can cast shadows on dynamic objects. Reacts in realtime to lighting changes.
-Dynamic objects can only receive shadows.
+Dynamic objects can only *receive* shadows.
 
 3 modes:
 * SDF Shadows: (Accuracy) Ray marching from every pixel. Always used for local lights.
 * Occlusion direction field (1bit): (Performance) 8-64 directions in one texture, hard blocky voxel shadows.
 * Occlusion direction field (8bit): (Performance + Accuracy) 4 directions per texture, interpolated smoother voxel shadows. Supports 256 directions (64 textures).
 
-### Global illumination
+### Global illumination / Indirect lighting
 
-Global illumination (GI) from static and dynamic objects, 2 modes.
+Global illumination (GI) for static meshes in a GI Volume. Dynamic objects can only *receive* GI.
 * Path tracing: Ray trace from voxel towards light each frame. Requires longer temporal accumulation for stable results.
-* Light propagation volume: Simpler more performant approximation where light propagates through a voxel grid.
 
 ## Platform notes
 

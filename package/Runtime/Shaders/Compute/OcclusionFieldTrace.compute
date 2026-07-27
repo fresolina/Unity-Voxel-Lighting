@@ -1,0 +1,380 @@
+#pragma kernel CSBuildOccupancy
+#pragma kernel CSMarkBand
+#pragma kernel CSTrace
+#pragma kernel CSDilate
+#pragma kernel CSSeedShadowSdf
+#pragma kernel CSJumpFloodShadowSdf
+#pragma kernel CSResolveShadowSdf
+#pragma target 5.0
+
+// Exact occlusion field bake. Replaces the SDF sphere-trace (OcclusionFieldBake.compute) with
+// ray-triangle traversal of the uniform grid, which cannot tunnel through sub-voxel-thick
+// geometry, and replaces the Quilez penumbra estimator with supersampling.
+//
+// Why supersampling rather than a distance-based softness term: the estimator is a min() over the
+// ray, and a min() does not survive the hardware trilinear filtering this field is built around -
+// averaging eight neighbouring minima is the minimum of nothing in particular. A visibility
+// FRACTION is linear, so it interpolates correctly, and it is the physically real quantity anyway.
+//
+// Each direction always traces one ray straight down itself, plus _PenumbraSamples extra rays spread
+// over the light's disc - either hashed (Jittered) or on deterministic rings (Even). Ray ORIGINS are
+// jittered inside the voxel in both modes: that is what antialiases the shadow edge, and without it
+// every voxel resolves to a hard 0 or 1 and trilinear interpolation just makes blocky shadows with
+// soft corners. So Even is deterministic in the light's disc, not in the voxel.
+
+#include "TriangleGridTraversal.hlsl"
+
+float3 _BoundsSize;
+int3 _Resolution;
+
+int _DirCount;                 // directions in this batch (4 packed per RGBA texture, or 1 for sun-only)
+StructuredBuffer<float3> _Directions;
+
+int _PenumbraSamples;          // EXTRA rays; the direction's own ray is always traced on top
+int _MinSamples;               // adaptive early-out threshold; == total sample count disables it
+int _SampleDistribution;       // 0 = jittered, 1 = even (deterministic rings from _ConeOffsets)
+float _ConeCosMax;             // cos(cone half-angle); 1.0 = perfectly hard shadow
+float _ConeHalfAngle;          // cone half-angle in radians (Even mode maps disc radius to it linearly)
+StructuredBuffer<float2> _ConeOffsets; // unit-disc positions for Even mode, |offset| <= 1
+int _TraceBandVoxels;          // Chebyshev radius of the traced band; 0 = trace every voxel
+float _MaxRayDistance;
+
+// Shadow-SDF conversion (see the CSSeedShadowSdf block below).
+int _SdfChannel;   // which of the _DirCount channels is being converted
+int _JfaStep;
+float _SdfRange;   // encode range in voxels; stored value spans -_SdfRange..+_SdfRange
+
+RWStructuredBuffer<uint> _Occupancy;   // 1 = voxel contains geometry
+RWStructuredBuffer<uint> _TraceMask;   // 1 = voxel is near enough a surface to ever be sampled
+RWStructuredBuffer<float> _OutOcclusion; // _DirCount floats per voxel, LIT (0 = shadow, 1 = lit)
+RWStructuredBuffer<float4> _SiteIn;    // xyz = nearest boundary point in voxel space, w = valid
+RWStructuredBuffer<float4> _SiteOut;
+
+uint Flatten(uint3 id) {
+    return id.x + id.y * (uint)_Resolution.x + id.z * (uint)_Resolution.x * (uint)_Resolution.y;
+}
+
+// Decorrelated per voxel, per direction, per sample.
+uint TraceSeed(uint3 id, uint dirIndex, uint sampleIndex) {
+    uint seed = (id.x * 73856093u) ^ (id.y * 19349663u) ^ (id.z * 83492791u);
+    seed ^= dirIndex * 2654435761u;
+    seed ^= sampleIndex * 0x9e3779b9u;
+    return WangHash(seed);
+}
+
+// Tangent frame around `dir`, so a 2D offset on the light's disc can be lifted into world space.
+void ConeFrame(float3 dir, out float3 tx, out float3 ty) {
+    float3 up = abs(dir.z) < 0.999 ? float3(0, 0, 1) : float3(1, 0, 0);
+    tx = normalize(cross(up, dir));
+    ty = cross(dir, tx);
+}
+
+// Uniform direction inside a cone of half-angle acos(cosThetaMax) around `dir`. Stratifying in
+// cos(theta) is what makes the samples uniform per unit SOLID ANGLE rather than per unit angle.
+float3 SampleCone(float3 dir, float cosThetaMax, float2 u) {
+    float cosTheta = lerp(cosThetaMax, 1.0, u.x);
+    float sinTheta = sqrt(saturate(1.0 - cosTheta * cosTheta));
+    float phi = 2.0 * LOTEC_MATH_PI * u.y;
+
+    float3 tx, ty;
+    ConeFrame(dir, tx, ty);
+    return normalize(tx * (cos(phi) * sinTheta) + ty * (sin(phi) * sinTheta) + dir * cosTheta);
+}
+
+// Maps a unit-disc offset onto the cone, treating the disc as the light's visible face: radius maps
+// LINEARLY to angle, so an offset at 0.5 sits exactly halfway to the disc edge as authored. (Uniform
+// solid-angle mapping would bow that outward; at real sun angles the difference is negligible, and
+// matching the authored pattern matters more for a setting that exists to be eyeballed.)
+float3 ConeDirFromDisc(float3 dir, float halfAngle, float2 offset) {
+    float radius = length(offset);
+    if (radius < 1e-6)
+        return dir;
+
+    float theta = radius * halfAngle;
+    float2 unit = offset / radius;
+
+    float3 tx, ty;
+    ConeFrame(dir, tx, ty);
+    return normalize((tx * unit.x + ty * unit.y) * sin(theta) + dir * cos(theta));
+}
+
+// ---------------------------------------------------------------------------
+// Pass 1: conservative occupancy. A voxel is solid if ANY triangle touches it.
+// ---------------------------------------------------------------------------
+[numthreads(8, 8, 8)]
+void CSBuildOccupancy(uint3 id : SV_DispatchThreadID) {
+    if (any(id >= (uint3)_Resolution))
+        return;
+
+    float3 voxelSize = _BoundsSize / float3(_Resolution);
+    float3 center = _BoundsMin + (float3(id) + 0.5) * voxelSize;
+    _Occupancy[Flatten(id)] = VoxelIsSolid(center, voxelSize * 0.5) ? 1u : 0u;
+}
+
+// ---------------------------------------------------------------------------
+// Pass 2: mark the band worth tracing. The field is only ever read just off a surface
+// (VoxelOcclusion.hlsl offsets by 1.2 voxels along the normal, and the trilinear tap then reaches
+// +/-1 voxel), so voxels deep in open air are never sampled and tracing them is pure waste - which
+// on a scene like Sponza is most of the volume.
+// ---------------------------------------------------------------------------
+[numthreads(8, 8, 8)]
+void CSMarkBand(uint3 id : SV_DispatchThreadID) {
+    if (any(id >= (uint3)_Resolution))
+        return;
+
+    uint flat = Flatten(id);
+    if (_TraceBandVoxels <= 0) {
+        _TraceMask[flat] = 1u;
+        return;
+    }
+
+    int3 lo = max(int3(id) - _TraceBandVoxels, int3(0, 0, 0));
+    int3 hi = min(int3(id) + _TraceBandVoxels, _Resolution - int3(1, 1, 1));
+
+    uint near = 0u;
+    [loop]
+    for (int z = lo.z; z <= hi.z && near == 0u; z++) {
+        [loop]
+        for (int y = lo.y; y <= hi.y && near == 0u; y++) {
+            [loop]
+            for (int x = lo.x; x <= hi.x && near == 0u; x++) {
+                if (_Occupancy[Flatten(uint3(x, y, z))] != 0u)
+                    near = 1u;
+            }
+        }
+    }
+    _TraceMask[flat] = near;
+}
+
+// ---------------------------------------------------------------------------
+// Pass 3: trace. Writes LIT, matching the existing field format exactly.
+// ---------------------------------------------------------------------------
+[numthreads(8, 8, 8)]
+void CSTrace(uint3 id : SV_DispatchThreadID) {
+    if (any(id >= (uint3)_Resolution))
+        return;
+
+    uint flat = Flatten(id);
+    uint baseOut = flat * (uint)_DirCount;
+    bool solid = _Occupancy[flat] != 0u;
+    bool inBand = _TraceMask[flat] != 0u;
+
+    // Skipped voxels must be written EXPLICITLY. Because 0 means "shadow" in this format, leaving
+    // them at the buffer's zero value would paint every band-skipped region solid black.
+    // Solid voxels are seeded 0 here and then replaced by CSDilate.
+    if (solid || !inBand) {
+        float fill = solid ? 0.0 : 1.0;
+        for (uint sc = 0; sc < (uint)_DirCount; sc++)
+            _OutOcclusion[baseOut + sc] = fill;
+        return;
+    }
+
+    float3 voxelSize = _BoundsSize / float3(_Resolution);
+    float3 voxelCenter = _BoundsMin + (float3(id) + 0.5) * voxelSize;
+
+    // Sample 0 is always the ray straight down the direction itself; _PenumbraSamples are the extras
+    // spread over the light's disc.
+    int extraSamples = max(0, _PenumbraSamples);
+    int sampleCount = 1 + extraSamples;
+    int minSamples = clamp(_MinSamples, 1, sampleCount);
+
+    for (uint c = 0; c < (uint)_DirCount; c++) {
+        float3 dir = normalize(_Directions[c]);
+
+        int hits = 0;
+        int taken = 0;
+        [loop]
+        for (int s = 0; s < sampleCount; s++) {
+            uint seed = TraceSeed(id, c, (uint)s);
+
+            float3 rayDir;
+            if (s == 0) {
+                rayDir = dir;
+            } else if (_SampleDistribution == 1) {
+                rayDir = ConeDirFromDisc(dir, _ConeHalfAngle, _ConeOffsets[s - 1]);
+            } else {
+                // Stratified over the extras so they cover the light evenly instead of clumping
+                // the way pure hashing would at these low sample counts.
+                float2 u;
+                u.x = ((float)(s - 1) + HashTo01(seed)) / (float)extraSamples;
+                u.y = frac(HashTo01(seed ^ 0x68bc21ebu) + (float)s * 0.61803399);
+                rayDir = SampleCone(dir, _ConeCosMax, u);
+            }
+
+            // Origin jitter inside the voxel. Safe because this voxel is known empty, so no
+            // triangle can lie between the jittered origin and the voxel wall.
+            float3 jitter = float3(HashTo01(seed ^ 0x9e3779b9u),
+                                   HashTo01(seed ^ 0x85ebca6bu),
+                                   HashTo01(seed ^ 0xc2b2ae35u)) - 0.5;
+            float3 origin = voxelCenter + jitter * voxelSize;
+
+            hits += TraceShadowRay(origin, rayDir, _MaxRayDistance) ? 1 : 0;
+            taken++;
+
+            // Adaptive early-out: once enough samples agree, the rest only confirm them. Biased in
+            // the penumbra (a faint partial occlusion can be missed and flattened to fully lit or
+            // fully dark) and it truncates the Even ring pattern part-way, so _MinSamples == the
+            // total sample count turns it off for a final bake or a distribution comparison.
+            if (taken >= minSamples && (hits == 0 || hits == taken))
+                break;
+        }
+
+        _OutOcclusion[baseOut + c] = 1.0 - (float)hits / (float)taken;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pass 4: dilate into the solid. Without this the hardware tap at a wall blends toward the 0 stored
+// inside the wall, giving dark banding at wall bases - the mirror of the leak this bake fixes.
+// ---------------------------------------------------------------------------
+[numthreads(8, 8, 8)]
+void CSDilate(uint3 id : SV_DispatchThreadID) {
+    if (any(id >= (uint3)_Resolution))
+        return;
+
+    uint flat = Flatten(id);
+    if (_Occupancy[flat] == 0u)
+        return;
+
+    // Safe in place: this pass writes ONLY solid voxels and reads ONLY non-solid ones, so no thread
+    // can observe another's write. One pass suffices because the trilinear tap reaches at most one
+    // voxel into the solid, so only the first shell is ever read.
+    uint baseOut = flat * (uint)_DirCount;
+    for (uint c = 0; c < (uint)_DirCount; c++) {
+        float sum = 0.0;
+        int count = 0;
+        for (int dz = -1; dz <= 1; dz++)
+        for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++) {
+            int3 n = int3(id) + int3(dx, dy, dz);
+            if (any(n < 0) || any(n >= _Resolution))
+                continue;
+            uint nf = Flatten((uint3)n);
+            if (_Occupancy[nf] != 0u)
+                continue;
+            sum += _OutOcclusion[nf * (uint)_DirCount + c];
+            count++;
+        }
+        if (count > 0)
+            _OutOcclusion[baseOut + c] = sum / (float)count;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pass 5 (optional): re-encode the stored visibility as a SIGNED DISTANCE TO THE SHADOW BOUNDARY.
+//
+// A visibility fraction is a coverage signal, so trilinear reconstruction cannot resolve an edge
+// sharper than a voxel or two - shadows come out mushy no matter how well the bake samples them.
+// Storing distance instead and thresholding it in the fragment reconstructs the boundary at FRAGMENT
+// resolution, exactly the way an SDF font stays crisp from a low-res glyph atlas. Same one tap, same
+// 8 bits, and the penumbra width becomes a runtime uniform instead of a bake setting.
+//
+// Cost of the trade: only ONE boundary per neighbourhood survives (where two shadow edges meet
+// inside a voxel the crease rounds off), and sub-voxel shadow slivers still vanish.
+//
+// Computed with a jump flood, bounded to +/-_SdfRange voxels since that is all the encoding holds.
+// ---------------------------------------------------------------------------
+
+static const int3 kFaceNeighbors[6] = {
+    int3(1, 0, 0), int3(-1, 0, 0),
+    int3(0, 1, 0), int3(0, -1, 0),
+    int3(0, 0, 1), int3(0, 0, -1),
+};
+
+float ChannelValue(uint3 cell) {
+    return _OutOcclusion[Flatten(cell) * (uint)_DirCount + (uint)_SdfChannel];
+}
+
+// Seed: every voxel with a 0.5 crossing on one of its 6 edges records where that crossing lies.
+// Interpolating the crossing point rather than snapping it to the voxel is the whole trick - it puts
+// the boundary at sub-voxel accuracy, which is what the fragment shader then reconstructs.
+[numthreads(8, 8, 8)]
+void CSSeedShadowSdf(uint3 id : SV_DispatchThreadID) {
+    if (any(id >= (uint3)_Resolution))
+        return;
+
+    float f0 = ChannelValue(id);
+    float bestDistSq = 1e30;
+    float3 bestSite = float3(id);
+    float valid = 0.0;
+
+    [unroll]
+    for (int k = 0; k < 6; k++) {
+        int3 n = int3(id) + kFaceNeighbors[k];
+        if (any(n < 0) || any(n >= _Resolution))
+            continue;
+
+        float f1 = ChannelValue((uint3)n);
+        if ((f0 - 0.5) * (f1 - 0.5) > 0.0)
+            continue; // both ends on the same side of the boundary
+
+        float denom = f1 - f0;
+        float t = abs(denom) < 1e-6 ? 0.5 : saturate((0.5 - f0) / denom);
+        float3 site = float3(id) + float3(kFaceNeighbors[k]) * t;
+
+        float3 delta = site - float3(id);
+        float distSq = dot(delta, delta);
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            bestSite = site;
+            valid = 1.0;
+        }
+    }
+
+    _SiteOut[Flatten(id)] = float4(bestSite, valid);
+}
+
+// Standard jump-flood step: adopt a neighbour's boundary point when it is closer than our own.
+[numthreads(8, 8, 8)]
+void CSJumpFloodShadowSdf(uint3 id : SV_DispatchThreadID) {
+    if (any(id >= (uint3)_Resolution))
+        return;
+
+    uint flat = Flatten(id);
+    float4 best = _SiteIn[flat];
+    float3 selfDelta = best.xyz - float3(id);
+    float bestDistSq = best.w > 0.5 ? dot(selfDelta, selfDelta) : 1e30;
+
+    [unroll]
+    for (int dz = -1; dz <= 1; dz++)
+    [unroll]
+    for (int dy = -1; dy <= 1; dy++)
+    [unroll]
+    for (int dx = -1; dx <= 1; dx++) {
+        int3 n = int3(id) + int3(dx, dy, dz) * _JfaStep;
+        if (any(n < 0) || any(n >= _Resolution))
+            continue;
+
+        float4 candidate = _SiteIn[Flatten((uint3)n)];
+        if (candidate.w < 0.5)
+            continue;
+
+        float3 delta = candidate.xyz - float3(id);
+        float distSq = dot(delta, delta);
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            best = candidate;
+        }
+    }
+
+    _SiteOut[flat] = best;
+}
+
+// Resolve: signed distance in voxels, encoded into 0..1. The sign comes from the voxel's own
+// visibility, so the field stays correct even where the flood never reached.
+[numthreads(8, 8, 8)]
+void CSResolveShadowSdf(uint3 id : SV_DispatchThreadID) {
+    if (any(id >= (uint3)_Resolution))
+        return;
+
+    uint flat = Flatten(id);
+    uint slot = flat * (uint)_DirCount + (uint)_SdfChannel;
+
+    float lit = _OutOcclusion[slot];
+    float4 site = _SiteIn[flat];
+
+    float distance = site.w > 0.5 ? length(site.xyz - float3(id)) : _SdfRange;
+    float signedDistance = lit >= 0.5 ? distance : -distance;
+
+    _OutOcclusion[slot] = saturate(signedDistance / (2.0 * _SdfRange) + 0.5);
+}

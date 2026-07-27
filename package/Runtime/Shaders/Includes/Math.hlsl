@@ -200,33 +200,32 @@ inline AabbHit RayIntersectUnitAabb(float3 ro, float3 rd)
 // Returns true if hit with positive distance; dist is the ray parameter.
 inline bool RayTriangleIntersect(float3 rayOrigin, float3 rayDir, float3 v0, float3 v1, float3 v2, out float dist)
 {
-	dist = 1e6;
-
+	// Single exit on purpose: with early returns, Unity's Vulkan compiler reports a false
+	// "potentially uninitialized variable" for `dist` wherever the result feeds a short-circuiting
+	// && at the call site (as the occlusion field bake's cell scan does).
 	float3 e0 = v1 - v0;
 	float3 e1 = v2 - v0;
 	float3 h = cross(rayDir, e1);
-
 	float a = dot(e0, h);
-	if (abs(a) < 1e-8)
-		return false; // Ray parallel to triangle
 
-	// Accept both backfaces and frontfaces by using the reciprocal of a
-	float f = 1.0 / a;
+	bool hit = abs(a) >= 1e-8; // otherwise the ray is parallel to the triangle
+
+	// Accept both backfaces and frontfaces by using the reciprocal of a.
+	float f = hit ? 1.0 / a : 0.0;
 	float3 s = rayOrigin - v0;
 	float u = f * dot(s, h);
-
-	if (u < 0.0 || u > 1.0)
-		return false;
+	hit = hit && u >= 0.0 && u <= 1.0;
 
 	float3 q = cross(s, e0);
 	float v = f * dot(rayDir, q);
+	hit = hit && v >= 0.0 && u + v <= 1.0;
 
-	if (v < 0.0 || u + v > 1.0)
-		return false;
-
-	dist = f * dot(e1, q);
 	// Accept hits slightly above zero; origin offset is applied by caller to avoid self-intersection.
-	return dist > 1e-5;
+	float t = f * dot(e1, q);
+	hit = hit && t > 1e-5;
+
+	dist = hit ? t : 1e6;
+	return hit;
 }
 
 // Compute closest point on triangle and squared distance

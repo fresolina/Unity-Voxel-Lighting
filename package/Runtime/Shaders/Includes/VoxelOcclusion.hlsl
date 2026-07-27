@@ -105,22 +105,57 @@ half GetBitmaskShadow(float3 worldPos, float3 normal) {
 
 // Sun direction query results (set from C# each frame).
 float3 _OccFieldSunDir;
-int _OccFieldSunChannel;
 
-// Active occlusion field texture (bound per-frame to the texture matching the sun direction).
+// Channel selectors for the two baked directions nearest the sun, as one-hot masks so the pick is a
+// single dot product instead of a compare chain.
+float4 _OccFieldSunMask;
+float4 _OccFieldSunMaskB;
+
+// Weight toward the second-nearest direction, 0..0.5. 0 disables the second tap entirely.
+float _OccFieldBlend;
+
+// Slope of the decode ramp, published by VoxelOcclusionField.Bind (see DecodeScale there).
+float _OccFieldDecode;
+
+// Active occlusion field textures (bound per-frame to the textures holding the two nearest directions).
 TEXTURE3D(_OccFieldTex);
 SAMPLER(sampler_OccFieldTex);
+TEXTURE3D(_OccFieldTexB);
+SAMPLER(sampler_OccFieldTexB);
 
 // Sample the occlusion field shadow using the precomputed sun direction.
-// Returns 0.0 (shadow) to 1.0 (lit). The texture holds 0..1 lit values, so the fetch
-// narrows to fp16 immediately; only the uvw lookup stays fp32.
+// Returns 0.0 (shadow) to 1.0 (lit). The fetch narrows to fp16 immediately; only the uvw lookup
+// stays fp32.
+//
+// The ramp decodes BOTH baked encodings with no branch and no keyword, which matters because this
+// runs per fragment on a pass that is already occupancy-bound:
+//   _OccFieldDecode == 1          -> the channel is a lit value and passes straight through.
+//   _OccFieldDecode == range/pen  -> the channel is a signed distance to the shadow boundary, and
+//                                    the ramp turns it into an edge `pen` voxels wide. Because the
+//                                    boundary is RECONSTRUCTED rather than interpolated, that edge
+//                                    can be far sharper than the voxel grid - the same reason an SDF
+//                                    font stays crisp when magnified.
 half GetOccFieldShadow(float3 worldPos) {
     float3 uvw = WorldToVoxelUV(worldPos);
     half4 raw = (half4)_OccFieldTex.SampleLevel(sampler_OccFieldTex, uvw, 0);
-    if (_OccFieldSunChannel == 0) return raw.r;
-    if (_OccFieldSunChannel == 1) return raw.g;
-    if (_OccFieldSunChannel == 2) return raw.b;
-    return raw.a;
+    half stored = dot(raw, (half4)_OccFieldSunMask);
+
+    // Slide toward the second-nearest baked direction. Snapping to one direction leaves the shadow
+    // displaced by the angular gap (~15 deg at 8 directions, which shifts a shadow by ~0.28x the
+    // occluder distance and detaches it from the caster's base) and pops when the sun crosses cells.
+    //
+    // Blending the STORED value before the ramp is what makes this work under the SignedDistance
+    // encoding: interpolating two distance fields slides ONE boundary between the two directions.
+    // Blending decoded shadow terms instead would cross-fade two shadows and ghost.
+    //
+    // Uniform branch, so it is either taken by every fragment or none - and when it is not taken the
+    // second fetch is genuinely skipped, which is why a single-direction bake pays nothing for this.
+    if (_OccFieldBlend > 0.0) {
+        half4 rawB = (half4)_OccFieldTexB.SampleLevel(sampler_OccFieldTexB, uvw, 0);
+        stored = lerp(stored, dot(rawB, (half4)_OccFieldSunMaskB), (half)_OccFieldBlend);
+    }
+
+    return saturate((stored - 0.5h) * (half)_OccFieldDecode + 0.5h);
 }
 
 // Variant with normal-based offset to reduce self-occlusion.

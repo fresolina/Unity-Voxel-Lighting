@@ -38,12 +38,7 @@ namespace Lotec.Lighting {
         public abstract bool Bake(VoxelVolume volume, out string error);
 
 #if UNITY_EDITOR
-        protected virtual void Reset() {
-            if (_targetVolume == null) {
-                LightingManager manager = FindAnyObjectByType<LightingManager>();
-                if (manager != null) _targetVolume = manager.Volume;
-            }
-        }
+        protected virtual void Reset() { }
 
         // FindAssets does substring matching, so "SdfBake" also returns "SdfBakeJfa".
         // Resolve to the asset whose file name (without extension) matches exactly.
