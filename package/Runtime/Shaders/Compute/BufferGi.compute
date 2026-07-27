@@ -77,6 +77,18 @@ float _ReachBoost;
 float _GiFireflyClamp;
 float3 _DirectLightDir;   // toward the light
 float4 _DirectLightColor;
+// How the Baked sun-shadow estimates per-voxel sun visibility. See SunVisibility* below.
+//   0 = Centre       : one ray from the voxel centre - a single BIT, the original behaviour
+//   1 = Supersampled : _BgiSunShadowSamples stratified rays inside the voxel, averaged
+//   2 = Temporal     : one per-frame-jittered ray folded into the running average in the w channel
+#define BGI_SUNSHADOW_CENTRE       0
+#define BGI_SUNSHADOW_SUPERSAMPLED 1
+#define BGI_SUNSHADOW_TEMPORAL     2
+int _BgiSunShadowMode;
+int _BgiSunShadowSamples;
+// 1 = box-blur the sun visibility alongside the irradiance (original behaviour); 0 = keep each voxel's
+// own value, so the fragment's sharpening has an unsmeared edge to work from.
+int _BgiBlurSunVis;
 // Environment lighting as L2 SH from Unity's ambient probe (which already reflects the Lighting
 // window's Environment Source = Skybox / Gradient / Color). Evaluated per escaped-ray direction.
 // Packed like Unity's unity_SH* / ShadeSH9.
@@ -123,14 +135,23 @@ float2 GiSampleNoise(uint3 id, uint frame, uint salt)
 // (so a voxel never self-occludes), stops at the first solid cell or past maxDist. Returns 1 on a
 // solid hit (hitCell valid), else 0.
 // ----------------------------------------------------------
-int MarchOccupancy(int3 start, float3 worldDir, float maxDist, out int3 hitCell)
+// Sub-voxel origin variant: `gridPos` is in VOXEL units (cell index + fraction), so a ray can start
+// anywhere inside a cell rather than only at its centre. That is what lets sun visibility become an
+// area fraction instead of a single yes/no sampled at the centre.
+int MarchOccupancyFrom(float3 gridPos, float3 worldDir, float maxDist, out int3 hitCell)
 {
-    hitCell = start;
-    int3 cell = start;
+    int3 cell = (int3)floor(gridPos);
+    hitCell = cell;
+    float3 inCell = gridPos - (float3)cell;         // 0..1 position within the origin cell
     float3 d = worldDir / max(_BgiVoxelSize, 1e-6); // world dir -> grid-space dir
     int3 step = int3(d.x >= 0 ? 1 : -1, d.y >= 0 ? 1 : -1, d.z >= 0 ? 1 : -1);
     float3 inv = 1.0 / max(abs(d), 1e-6);
-    float3 tMax = inv * 0.5;   // world distance from cell center to the first boundary on each axis
+    // World distance from the ORIGIN to the first cell boundary on each axis. At inCell = 0.5 this is
+    // inv * 0.5 - bit-for-bit what the centre-origin march used before.
+    float3 toBoundary = float3(d.x >= 0 ? 1.0 - inCell.x : inCell.x,
+                               d.y >= 0 ? 1.0 - inCell.y : inCell.y,
+                               d.z >= 0 ? 1.0 - inCell.z : inCell.z);
+    float3 tMax = inv * toBoundary;
     float3 tDelta = inv;       // world distance to cross one full voxel on each axis
 
     [loop]
@@ -148,6 +169,64 @@ int MarchOccupancy(int3 start, float3 worldDir, float maxDist, out int3 hitCell)
         if (BgiSolidBit(BgiSlot((uint3)cell))) { hitCell = cell; return 1; }
     }
     return 0;
+}
+
+// Centre-origin march, unchanged for every existing caller (gather rays, point/spot shadow rays).
+int MarchOccupancy(int3 start, float3 worldDir, float maxDist, out int3 hitCell)
+{
+    return MarchOccupancyFrom((float3)start + 0.5, worldDir, maxDist, hitCell);
+}
+
+// 3D R2 (generalised golden ratio) increments - the low-discrepancy analogue of the 2D pair used by
+// GiSampleNoise. Successive multiples spread evenly through the unit cube, so a handful of samples
+// covers a voxel without the clumping plain hashing gives.
+static const float3 BGI_R2_3D = float3(0.8191725134, 0.6710436067, 0.5497004779);
+
+// Per-voxel random base offset, hashed on the cell only (never the frame) so it is stable in time.
+float3 BgiVoxelJitterBase(int3 cell)
+{
+    uint seed = ((uint)cell.x * 73856093u) ^ ((uint)cell.y * 19349663u) ^ ((uint)cell.z * 83492791u);
+    return float3(HashTo01(seed), HashTo01(seed ^ 0x9e3779b9u), HashTo01(seed ^ 0x85ebca6bu));
+}
+
+inline half BgiSunRay(int3 cell, float3 offset)
+{
+    int3 hit;
+    return MarchOccupancyFrom((float3)cell + offset, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0h : 1.0h;
+}
+
+// Sun visibility as an AREA FRACTION of the voxel, averaged over `n` stratified interior origins.
+//
+// One ray from the centre can only ever answer 0 or 1, and neither CSBlur's 7-tap box nor the
+// fragment's trilinear tap can recover where inside the voxel the shadow edge actually fell - they
+// only widen a binary edge, which is the one-voxel staircase the Baked mode shows. Sampling the
+// voxel's volume captures that position, and the value it produces is what interpolation wants.
+//
+// Offsets are deterministic per voxel, so the result is stable frame to frame and needs no temporal
+// accumulation: this mode stays instant when the sun moves.
+// Single-exit and fully initialised on purpose: an early return feeding the caller's branch makes
+// Vulkan/SPIR-V report "use of potentially uninitialized variable" even when every path assigns.
+half SunVisibilityStratified(int3 cell, int n)
+{
+    half lit = 0.0h;
+    if (n <= 1) {
+        lit = BgiSunRay(cell, 0.5); // exactly the original centre ray
+    } else {
+        float3 jitterBase = BgiVoxelJitterBase(cell);
+        [loop]
+        for (int s = 0; s < n; s++)
+            lit += BgiSunRay(cell, frac(jitterBase + BGI_R2_3D * (float)s));
+        lit /= (half)n;
+    }
+    return lit;
+}
+
+// One sample of the same quantity, moved through the voxel by frame index. Averaged over frames by
+// the caller's progressive mean it converges to the same area fraction as the stratified estimator,
+// but for ONE ray per frame instead of n - the reason the Baked mode can afford it.
+half SunVisibilitySample(int3 cell, uint frame)
+{
+    return BgiSunRay(cell, frac(BgiVoxelJitterBase(cell) + BGI_R2_3D * (float)frame));
 }
 
 // Surface normal from the occupancy gradient: sum the directions toward empty neighbors. Out-of-grid
@@ -257,8 +336,23 @@ float3 GetDirectLight(int3 cell, float3 normal, out half sunVis)
     // normal-mapped pixels whose shading normal faces the sun while the geometric voxel doesn't). A
     // face pointing away self-occludes - its own geometry blocks the ray - so it marches to ~0, the
     // physically correct "in shadow from the sun" (rather than a defaulted 1 = lit).
+    //
+    // The estimator is selectable (see _BgiSunShadowMode): a single centre ray gives one bit, which is
+    // what makes the Baked shadow blocky; the other two resolve it to a sub-voxel fraction. Temporal
+    // costs one extra _Radiance read here (unlike the air path, CSInject does not otherwise read it),
+    // and the same mode must be used for air and solid or the fragment's trilinear tap blends a smooth
+    // layer against a hard one and bands at every surface.
     float3 total = 0;
-    sunVis = MarchOccupancy(shadowStart, _DirectLightDir, BGI_MAX_RAY_DIST, hit) ? 0.0h : 1.0h;
+    if (_BgiSunShadowMode == BGI_SUNSHADOW_TEMPORAL) {
+        half3 prevRgb; half prevSun;
+        BgiUnpackRgbH(_Radiance[BgiSlot((uint3)cell)], prevRgb, prevSun);
+        half sample = SunVisibilitySample(shadowStart, _FrameCount);
+        // _EmaWeight is exactly 1 on the first frame after a change, so this starts AT the sample
+        // rather than fading up from a black buffer.
+        sunVis = lerp(prevSun, sample, (half)min(1.0, _EmaWeight));
+    } else {
+        sunVis = SunVisibilityStratified(shadowStart, _BgiSunShadowSamples);
+    }
     half ndlSun = saturate((half)dot(normal, _DirectLightDir));
     if (ndlSun > 0.0h)
         total += _DirectLightColor.rgb * (float)(ndlSun * sunVis);
@@ -459,16 +553,27 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     }
     incoming *= rcp((float)sampleCount); // this frame's estimate = mean of sampleCount samples
 
-    // Baked SUN VISIBILITY for the air probe: one deterministic shadow-ray march toward the sun from
-    // this air voxel (1 = lit, 0 = shadowed). Carried in the irradiance w channel so CSBlur can mirror
-    // it into the displayed texture's ALPHA - the fragment then reads a baked sun shadow as a single
+    // Previous value, needed both by the irradiance progressive average below and (in Temporal mode)
+    // by the sun visibility. Note oldSun was already being unpacked and discarded here, so reading it
+    // costs nothing - which is why the temporal sun-shadow estimator is effectively free.
+    half3 oldC; half oldSun;
+    BgiUnpackRgbH(_Irradiance[_FieldOffset + i], oldC, oldSun);
+    float weight = min(1.0, _EmaWeight);
+
+    // Baked SUN VISIBILITY for the air probe: shadow ray(s) toward the sun from this air voxel
+    // (1 = lit, 0 = shadowed). Carried in the irradiance w channel so CSBlur can mirror it into the
+    // displayed texture's ALPHA - the fragment then reads a baked sun shadow as a single
     // hardware-interpolated texture tap instead of 4-8 StructuredBuffer face taps (the Adreno cost).
-    // Deterministic (no noise), so it's stable frame-to-frame and needs no temporal accumulation. Only
-    // AIR voxels (the read samples the air layer in front of surfaces); solid voxels store 1 (unused).
+    // Only AIR voxels (the read samples the air layer in front of surfaces); solid voxels store 1.
+    //
+    // A single centre ray yields one BIT per voxel, which no downstream filter can turn back into a
+    // sub-voxel edge - that is the Baked mode's blockiness. See _BgiSunShadowMode for the estimators.
     half sunVis = 1.0h;
     if (!solid) {
-        int3 sunHit;
-        sunVis = MarchOccupancy(cell, _DirectLightDir, BGI_MAX_RAY_DIST, sunHit) ? 0.0h : 1.0h;
+        if (_BgiSunShadowMode == BGI_SUNSHADOW_TEMPORAL)
+            sunVis = lerp(oldSun, SunVisibilitySample(cell, _FrameCount), (half)weight);
+        else
+            sunVis = SunVisibilityStratified(cell, _BgiSunShadowSamples);
     }
 
     // Temporal PROGRESSIVE average: fold this frame's sampleCount-ray estimate into the running mean of
@@ -476,9 +581,7 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     // ACCUMULATES so variance ~1/totalSamples -> it keeps getting cleaner and converges (not a fixed
     // window that shimmers forever). The first frame is ~weight 1 (noisy), but CSBlur's Confidence≈0
     // hides that warm-up. The w channel carries the baked sun visibility (above), not a sample count.
-    half3 oldC; half oldN;
-    BgiUnpackRgbH(_Irradiance[_FieldOffset + i], oldC, oldN); // oldN unused
-    float weight = min(1.0, _EmaWeight);
+    // oldC / weight are read above, where the sun visibility also needs them.
     half3 newC = SanitizeColor(lerp((float3)oldC, incoming, weight));
     _Irradiance[_FieldOffset + i] = BgiPackRgb(newC, sunVis);
 }
@@ -541,9 +644,14 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
     half3 result = lerp(prevBlur, blurred, (half)_Confidence);
     _IrradianceBlur[_FieldOffset + i] = BgiPackRgb(result, 0.0);
     // Fused mirror: write the displayed irradiance into the field's Texture3D rgb (the fragment's 1-tap
-    // GI read) and the gated-blurred sun visibility into its ALPHA (the fragment's 1-tap baked shadow).
+    // GI read) and the sun visibility into its ALPHA (the fragment's 1-tap baked shadow).
     // The sun vis is NOT confidence-eased - it's deterministic, so it responds immediately to a sun move.
-    _BgiIrradianceTexWrite[BgiCoord(i)] = float4(result, sunSum / wsum);
+    //
+    // Blurring the alpha earns its keep only while the value is a noisy per-voxel BIT. Once the solve
+    // stores a real coverage fraction the box blur just widens the very edge the fragment is trying to
+    // reconstruct, and it fights _BgiShadowSharpness - so it is switchable independently of the rgb blur.
+    float sunOut = _BgiBlurSunVis != 0 ? (sunSum / wsum) : (float)centerSun;
+    _BgiIrradianceTexWrite[BgiCoord(i)] = float4(result, sunOut);
 }
 
 // ----------------------------------------------------------

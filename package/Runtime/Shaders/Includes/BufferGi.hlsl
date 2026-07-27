@@ -68,6 +68,11 @@ float _BgiAoStrength;
 // coarse by whether the shading point is inside the fine volume.
 int _BgiShadowModeFine;
 int _BgiShadowModeCoarse;
+// Baked shadow edge sharpening (see BgiSampleShadowTexture). 1 = passthrough / original behaviour.
+float _BgiShadowSharpness;
+// How far off the surface the baked shadow tap sits, in voxels. 0.5 = first air voxel's centre,
+// 1.0 = the historical value.
+float _BgiShadowNormalOffset;
 
 // Which field (fine vs coarse) a shading point falls in, plus that field's grid + buffer slice.
 // Shared by the GI gather and the AO/sun-shadow face read so they all agree on the same voxels.
@@ -91,11 +96,25 @@ half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
     float3 origin   = insideFine ? _BgiGridOrigin   : _BgiCoarseOrigin;
     float3 vox      = insideFine ? _BgiVoxelSize     : _BgiCoarseVoxelSize;
     float3 gridSize = insideFine ? _BgiGridSize      : _BgiCoarseVoxelSize * (float)BGI_GRID;
-    float3 uvw = (worldPos + normal * vox - origin) / max(gridSize, 1e-6);
+    // Offset off the surface into the air layer that carries sun-vis. The shading point sits ON the
+    // solid/air voxel boundary, so 0.5 voxel lands exactly at the FIRST air voxel's centre; the
+    // historical 1.0 lands on the boundary between the first and second air layers, so the trilinear
+    // tap blends in air a whole voxel further out. That over-reach is why a floor next to a tall
+    // occluder reads shadowed - the tap is sampling air inside the occluder's shadow rather than the
+    // air just above the floor - and at a grazing sun it doubles the along-surface displacement.
+    float3 uvw = (worldPos + normal * vox * _BgiShadowNormalOffset - origin) / max(gridSize, 1e-6);
     if (any(uvw < 0.0) || any(uvw > 1.0)) return 1.0h; // outside the field -> lit (no baked info)
-    return insideFine
+    half a = insideFine
         ? (half)_BgiIrradianceTex.SampleLevel(sampler_BgiIrradianceTex, uvw, 0).a
         : (half)_BgiIrradianceTexCoarse.SampleLevel(sampler_BgiIrradianceTexCoarse, uvw, 0).a;
+
+    // Sharpen the reconstructed edge. Near a shadow boundary the stored value is the voxel's sun
+    // COVERAGE, and coverage is a local signed distance to that boundary - so re-centring on 0.5 and
+    // steepening rebuilds an edge finer than the voxel it came from. Same SDF-font trick as
+    // GetOccFieldShadow's _OccFieldDecode, and the reason it works here at all is that the solve now
+    // stores a fraction: against the old 0/1 field this would only harden the staircase.
+    // 1 = passthrough (identical to before). Costs one MAD.
+    return saturate((a - 0.5h) * (half)_BgiShadowSharpness + 0.5h);
 }
 
 // One face-plane read that yields BOTH the baked static AO (openness, _Surface bits 16-23) and the
