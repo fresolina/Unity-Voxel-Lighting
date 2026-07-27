@@ -34,7 +34,12 @@ namespace Lotec.Lighting {
             if (!volume.TryGetComponent(out VoxelOcclusionField binder))
                 binder = volume.gameObject.AddComponent<VoxelOcclusionField>();
             binder.occlusionFieldTextures = fieldTextures;
-            binder.occlusionFieldDirections = fieldDirections;
+            // Hand the directions over inline; the editor's SaveBakedAssets moves them into an asset.
+            // The old asset MUST be dropped in the same breath - the binder prefers the asset over the
+            // inline array, so the previous bake's set would otherwise be read against fresh textures.
+            // Dir 1 Sun makes this acute: its single direction is wherever the sun was last bake.
+            binder.pendingDirections = fieldDirections;
+            binder.directionSet = null;
             // The decode ramp is driven by these, so they must travel with the data - a field baked
             // as signed distance and read as visibility (or vice versa) is silently wrong, not broken.
             binder.shadowEncoding = _exactBake.shadowEncoding;

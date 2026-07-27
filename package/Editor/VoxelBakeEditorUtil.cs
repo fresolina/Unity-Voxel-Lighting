@@ -36,7 +36,10 @@ namespace Lotec.Lighting.Editor {
             VoxelOcclusionBitmask bitmask = volume.GetComponent<VoxelOcclusionBitmask>();
             if (bitmask != null && bitmask.occlusionBitmaskTexture != null) {
                 string path = System.IO.Path.Combine(basePath, $"{bitmask.occlusionBitmaskTexture.name}.asset");
+                string texName = bitmask.occlusionBitmaskTexture.name;
                 bitmask.occlusionBitmaskTexture = SaveAsset(bitmask.occlusionBitmaskTexture, path, "Occlusion Bitmask");
+                SaveDirectionSet(basePath, $"{texName}Directions",
+                                 ref bitmask.directionSet, ref bitmask.pendingDirections);
                 EditorUtility.SetDirty(bitmask);
             }
             VoxelOcclusionField occField = volume.GetComponent<VoxelOcclusionField>();
@@ -47,11 +50,36 @@ namespace Lotec.Lighting.Editor {
                     string path = System.IO.Path.Combine(basePath, $"{tex.name}.asset");
                     occField.occlusionFieldTextures[i] = SaveAsset(tex, path, "Occlusion Field");
                 }
+                string rootName = volume.BakeRoot != null ? volume.BakeRoot.name : volume.gameObject.name;
+                SaveDirectionSet(basePath, $"{rootName}_OcclusionFieldDirections",
+                                 ref occField.directionSet, ref occField.pendingDirections);
                 EditorUtility.SetDirty(occField);
             }
             EditorUtility.SetDirty(volume);
             EditorSceneManager.MarkSceneDirty(volume.gameObject.scene);
             Debug.Log($"Voxel lighting bake assets saved for '{volume.gameObject.name}'.", context);
+        }
+
+        /// <summary>
+        /// Persist the directions a baker just parked on its binder into an asset beside that bake's
+        /// textures. One asset PER BAKE, never shared: see <see cref="VoxelDirectionSet"/> for why.
+        ///
+        /// No-ops when <paramref name="pending"/> is empty, so re-saving a binder that was not rebaked
+        /// this round leaves its existing asset reference alone instead of blanking it.
+        /// </summary>
+        static void SaveDirectionSet(string basePath, string assetName, ref VoxelDirectionSet target, ref Vector3[] pending) {
+            if (pending == null || pending.Length == 0)
+                return;
+
+            var set = ScriptableObject.CreateInstance<VoxelDirectionSet>();
+            set.name = assetName;
+            set.directions = pending;
+
+            string path = System.IO.Path.Combine(basePath, $"{assetName}.asset");
+            // SaveAsset CopySerialized's into an existing asset when one is there, so the GUID the
+            // binder already references survives a rebake.
+            target = SaveAsset(set, path, "Occlusion Directions");
+            pending = null;
         }
 
         internal static bool TryGetSceneFolderPath(GameObject go, out string folder, out string sceneName, out string scenePath) {

@@ -2054,8 +2054,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionField
   occlusionFieldTextures:
   - {fileID: 11700000, guid: f253887f4c3f8c241b21b5e134da95c3, type: 2}
-  occlusionFieldDirections:
-  - {x: -0, y: 0.9848078, z: -0.17364824}
+  directionSet: {fileID: 11400000, guid: 9e83b1c05d2a4f7789ac4e6b1f30d8a2, type: 2}
 --- !u!114 &772833391
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2069,15 +2068,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionBitmask
   occlusionBitmaskTexture: {fileID: 11700000, guid: f6ea547a7010c7f4abc701800abd4889, type: 2}
-  occlusionBitmaskDirections:
-  - {x: 0.34798527, y: 0.9375, z: 0}
-  - {x: -0.4298574, y: 0.8125, z: 0.39378467}
-  - {x: 0.06348706, y: 0.6875, z: -0.7234039}
-  - {x: 0.50305593, y: 0.5625, z: 0.6561467}
-  - {x: -0.8854726, y: 0.4375, z: -0.1566273}
-  - {x: 0.801498, y: 0.3125, z: -0.50984764}
-  - {x: -0.25499916, y: 0.1875, z: 0.94858795}
-  - {x: -0.46000668, y: 0.0625, z: -0.88571304}
+  directionSet: {fileID: 11400000, guid: d05a6f83e17b4c249f62b3a8c7e10d54, type: 2}
   sampling: 0
 --- !u!114 &772833395
 MonoBehaviour:
@@ -2978,8 +2969,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionField
   occlusionFieldTextures:
   - {fileID: 11700000, guid: 1069c9bf2755a364f8f6760a99577d7e, type: 2}
-  occlusionFieldDirections:
-  - {x: -0, y: 0.9848078, z: -0.17364824}
+  directionSet: {fileID: 11400000, guid: 7b4e2d19c6a84f3ba85d0e91f43c6a27, type: 2}
 --- !u!114 &1127919672
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2993,15 +2983,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionBitmask
   occlusionBitmaskTexture: {fileID: 11700000, guid: 6e0dac05ebcd3354e8823d73c4e17876, type: 2}
-  occlusionBitmaskDirections:
-  - {x: 0.34798527, y: 0.9375, z: 0}
-  - {x: -0.4298574, y: 0.8125, z: 0.39378467}
-  - {x: 0.06348706, y: 0.6875, z: -0.7234039}
-  - {x: 0.50305593, y: 0.5625, z: 0.6561467}
-  - {x: -0.8854726, y: 0.4375, z: -0.1566273}
-  - {x: 0.801498, y: 0.3125, z: -0.50984764}
-  - {x: -0.25499916, y: 0.1875, z: 0.94858795}
-  - {x: -0.46000668, y: 0.0625, z: -0.88571304}
+  directionSet: {fileID: 11400000, guid: 3c1f8a72b9d44e5490a1c7e6f2d80b31, type: 2}
   sampling: 0
 --- !u!114 &1127919673
 MonoBehaviour:

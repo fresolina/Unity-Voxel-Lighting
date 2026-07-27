@@ -32,7 +32,12 @@ namespace Lotec.Lighting {
             if (!volume.TryGetComponent(out VoxelOcclusionBitmask binder))
                 binder = volume.gameObject.AddComponent<VoxelOcclusionBitmask>();
             binder.occlusionBitmaskTexture = baked;
-            binder.occlusionBitmaskDirections = directions;
+            // Hand the directions over inline; the editor's SaveBakedAssets moves them into an asset.
+            // The old asset MUST be dropped in the same breath - the binder prefers the asset over the
+            // inline array, so a Dir64 set left behind by the previous bake would otherwise be read
+            // against a fresh Dir8 texture, decoding every bit to the wrong angle with no error.
+            binder.pendingDirections = directions;
+            binder.directionSet = null;
 
             // Push the fresh bake to the buffer-GI driver so the Bitmask ShadowMode reflects it in edit
             // mode right away (the holder is passive now - the updater publishes it).
