@@ -41,12 +41,26 @@ namespace Lotec.Lighting {
         [Range(0.05f, 4f)]
         public float penumbraVoxels = 1f;
 
+        [Tooltip("Blend between the two baked directions nearest the sun instead of snapping to one. " +
+                 "Costs a second texture tap, and removes the pop as the sun crosses between " +
+                 "directions plus most of the shadow displacement from direction quantisation. " +
+                 "Pointless for a single-direction (Dir 1 Sun) bake, which is already exact.")]
+        public bool blendDirections = true;
+
         static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
         static readonly int s_voxelSizeInverse = Shader.PropertyToID("_VoxelSizeInverse");
         static readonly int s_occFieldSunDir = Shader.PropertyToID("_OccFieldSunDir");
-        static readonly int s_occFieldSunChannel = Shader.PropertyToID("_OccFieldSunChannel");
+        static readonly int s_occFieldSunMask = Shader.PropertyToID("_OccFieldSunMask");
+        static readonly int s_occFieldSunMaskB = Shader.PropertyToID("_OccFieldSunMaskB");
         static readonly int s_occFieldTex = Shader.PropertyToID("_OccFieldTex");
+        static readonly int s_occFieldTexB = Shader.PropertyToID("_OccFieldTexB");
+        static readonly int s_occFieldBlend = Shader.PropertyToID("_OccFieldBlend");
         static readonly int s_occFieldDecode = Shader.PropertyToID("_OccFieldDecode");
+
+        static readonly Vector4[] s_channelMasks = {
+            new Vector4(1, 0, 0, 0), new Vector4(0, 1, 0, 0),
+            new Vector4(0, 0, 1, 0), new Vector4(0, 0, 0, 1),
+        };
 
         VoxelVolume _volume;
 
@@ -87,21 +101,50 @@ namespace Lotec.Lighting {
                 ? Mathf.Max(sdfRangeVoxels, 1e-3f) / Mathf.Max(penumbraVoxels, 1e-3f)
                 : 1f;
 
-        // Map the current sun direction to the nearest baked direction, then bind that
-        // direction's texture + RGBA channel for the shader to sample.
+        // Map the current sun direction onto the baked direction set and bind the texture(s) +
+        // channel mask(s) the shader samples. With blending on, the two nearest directions are bound
+        // and the shader slides between them; otherwise it snaps to the nearest, as before.
         void PublishSunField() {
+            // Publish the disabled state FIRST. Shader globals persist across volumes, so bailing out
+            // without writing this would leave a previous binder's blend weight live and the shader
+            // would tap a second texture that no longer belongs to this field.
+            Shader.SetGlobalFloat(s_occFieldBlend, 0f);
+
             if (occlusionFieldDirections == null || occlusionFieldDirections.Length == 0 || occlusionFieldTextures == null)
                 return;
 
             Vector3 sunDir = OcclusionFieldQuery.GetSunDirection();
-            int bestIndex = OcclusionFieldQuery.FindNearestDirection(sunDir, occlusionFieldDirections, occlusionFieldDirections.Length);
-            int texIndex = bestIndex / 4;
-            int channel = bestIndex % 4;
+            OcclusionFieldQuery.FindNearestTwoDirections(
+                sunDir, occlusionFieldDirections, occlusionFieldDirections.Length,
+                out int bestIndex, out int secondIndex, out float weight);
 
             Shader.SetGlobalVector(s_occFieldSunDir, sunDir);
-            Shader.SetGlobalInt(s_occFieldSunChannel, channel);
-            if (texIndex >= 0 && texIndex < occlusionFieldTextures.Length && occlusionFieldTextures[texIndex] != null)
-                Shader.SetGlobalTexture(s_occFieldTex, occlusionFieldTextures[texIndex]);
+            Shader.SetGlobalVector(s_occFieldSunMask, s_channelMasks[bestIndex & 3]);
+            BindFieldTexture(s_occFieldTex, bestIndex);
+
+            // Blending needs a genuine second direction AND a texture holding it. A Dir 1 Sun bake has
+            // neither (secondIndex is -1), and a partially written binder can have directions whose
+            // texture is missing - in both cases fall back to the single-tap path rather than blend
+            // against whatever texture happened to be bound last.
+            float blend = 0f;
+            if (blendDirections && secondIndex >= 0 && BindFieldTexture(s_occFieldTexB, secondIndex)) {
+                blend = weight;
+                Shader.SetGlobalVector(s_occFieldSunMaskB, s_channelMasks[secondIndex & 3]);
+            } else {
+                // Keep the second slot pointing at valid data even when unused - the shader skips the
+                // fetch, but the global should never be left dangling at a stale texture.
+                Shader.SetGlobalVector(s_occFieldSunMaskB, s_channelMasks[bestIndex & 3]);
+                BindFieldTexture(s_occFieldTexB, bestIndex);
+            }
+            Shader.SetGlobalFloat(s_occFieldBlend, blend);
+        }
+
+        bool BindFieldTexture(int propertyId, int directionIndex) {
+            int texIndex = directionIndex / 4;
+            if (texIndex < 0 || texIndex >= occlusionFieldTextures.Length || occlusionFieldTextures[texIndex] == null)
+                return false;
+            Shader.SetGlobalTexture(propertyId, occlusionFieldTextures[texIndex]);
+            return true;
         }
     }
 }

@@ -1373,6 +1373,7 @@ MonoBehaviour:
   shadowEncoding: 1
   sdfRangeVoxels: 2
   penumbraVoxels: 0.5
+  blendDirections: 1
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
