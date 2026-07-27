@@ -58,6 +58,12 @@ namespace Lotec.Lighting {
         // field beyond the fine SDF bounds).
         public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2, OcclusionField = 3, Bitmask = 4 }
 
+        // How the Baked mode estimates per-voxel sun visibility (matches _BgiSunShadowMode in
+        // BufferGi.compute). Centre stores a single BIT per voxel - no filter downstream can recover
+        // a sub-voxel edge from that, which is why Baked shadows look blocky. The other two spend
+        // either rays (Supersampled) or frames (Temporal) to make it a real area fraction.
+        public enum SunShadowSampling { Centre = 0, Supersampled = 1, Temporal = 2 }
+
         public static BufferGiUpdater Instance { get; private set; }
 
         [Header("Solve")]
@@ -113,6 +119,37 @@ namespace Lotec.Lighting {
                  "the far field.\n OcclusionField / Bitmask: the volume's baked occlusion source, if its " +
                  "binder covers the far field.")]
         [SerializeField] ShadowMode _coarseShadow = ShadowMode.Off;
+        [Tooltip("Baked shadow mode ONLY: how the solve estimates each voxel's sun visibility.\n " +
+                 "Centre: one ray from the voxel centre - a single bit per voxel, which is what makes " +
+                 "the Baked shadow blocky. The original behaviour.\n " +
+                 "Supersampled: several stratified rays inside the voxel, averaged into a sub-voxel " +
+                 "fraction. Instant and stable when the sun moves, but costs that many sun rays.\n " +
+                 "Temporal: one jittered ray per frame folded into the running average - converges to " +
+                 "the same fraction for NO extra rays, but STATIC SUN ONLY. Every sun change restarts " +
+                 "the average, and a restarted average is a single binary sample, so a moving sun keeps " +
+                 "it near 0/1 and visibly volatile. Use Supersampled if the sun moves.")]
+        [SerializeField] SunShadowSampling _sunShadowSampling = SunShadowSampling.Supersampled;
+        [Tooltip("Supersampled only: rays per voxel per frame. 1 is identical to Centre.")]
+        [Range(1, 16)][SerializeField] int _sunShadowSamples = 4;
+        [Tooltip("Baked shadow mode ONLY: steepens the shadow edge the fragment reconstructs from the " +
+                 "voxel grid. Near a boundary the stored value is the voxel's sun coverage, which is a " +
+                 "local distance to that boundary - so steepening it rebuilds an edge finer than the " +
+                 "voxel. 1 = off. Needs Supersampled or Temporal: against a 0/1 field this only hardens " +
+                 "the staircase. Too high re-introduces hard voxel edges.")]
+        [Range(1f, 16f)][SerializeField] float _bakedShadowSharpness = 1f;
+        [Tooltip("Baked shadow mode ONLY: box-blur the sun visibility along with the irradiance. Worth " +
+                 "it when each voxel holds a noisy bit (Centre); with a coverage fraction it mostly " +
+                 "widens the edge and works against Shadow Sharpness.")]
+        [SerializeField] bool _blurSunVisibility = true;
+        [Tooltip("Baked shadow mode ONLY: how far off the surface the shadow tap sits, in voxels.\n " +
+                 "0.5 is the geometrically correct value - the shading point lies on the solid/air voxel " +
+                 "boundary, so half a voxel lands at the first air voxel's centre.\n " +
+                 "1.0 (the historical value) lands on the boundary between the first and second air " +
+                 "layers, so the tap blends in air a whole voxel further out: floors read shadowed next " +
+                 "to tall occluders, and a grazing sun displaces the shadow twice as far along the " +
+                 "surface. Lower if shadows look detached or over-reaching; raise if surfaces " +
+                 "self-shadow.")]
+        [Range(0.25f, 2f)][SerializeField] float _shadowNormalOffset = 1f;
         [Tooltip("A/B: read the GI from the original StructuredBuffer gather instead of the mirrored " +
                  "irradiance texture (keyword BGI_SSBO_READ). Off (default) = one hardware-trilinear " +
                  "texture tap, much cheaper on Adreno/Quest. On = the SSBO gather, kept for comparison.")]
@@ -270,6 +307,51 @@ namespace Lotec.Lighting {
             set => _fineShadow = value;
         }
 
+        /// <summary>A/B: how the Baked shadow mode estimates sun visibility. Changing it restarts the
+        /// progressive average, since Temporal's stored value is only meaningful once re-converged.</summary>
+        public SunShadowSampling SunShadowMode {
+            get => _sunShadowSampling;
+            set {
+                if (_sunShadowSampling == value) return;
+                _sunShadowSampling = value;
+                _collectedSamples = 0;
+            }
+        }
+
+        /// <summary>Supersampled rays per voxel per frame. 1 is identical to Centre.</summary>
+        public int SunShadowSamples {
+            get => _sunShadowSamples;
+            set {
+                int clamped = Mathf.Clamp(value, 1, 16);
+                if (_sunShadowSamples == clamped) return;
+                _sunShadowSamples = clamped;
+                _collectedSamples = 0;
+            }
+        }
+
+        /// <summary>Baked-shadow edge sharpening. 1 = off. Fragment-side only, so no re-solve needed.</summary>
+        public float BakedShadowSharpness {
+            get => _bakedShadowSharpness;
+            set => _bakedShadowSharpness = Mathf.Clamp(value, 1f, 16f);
+        }
+
+        /// <summary>Baked-shadow tap offset off the surface, in voxels. Fragment-side only.</summary>
+        public float ShadowNormalOffset {
+            get => _shadowNormalOffset;
+            set => _shadowNormalOffset = Mathf.Clamp(value, 0.25f, 2f);
+        }
+
+        /// <summary>Blur the sun visibility alongside the irradiance. Restarts the solve, since the
+        /// mirrored texture alpha is only rewritten while the solve is dispatching.</summary>
+        public bool BlurSunVisibility {
+            get => _blurSunVisibility;
+            set {
+                if (_blurSunVisibility == value) return;
+                _blurSunVisibility = value;
+                _collectedSamples = 0;
+            }
+        }
+
         /// <summary>A/B: read GI from the SSBO gather (BGI_SSBO_READ) instead of the default texture tap.</summary>
         public bool SsboRead {
             get => _ssboRead;
@@ -334,6 +416,11 @@ namespace Lotec.Lighting {
         static readonly int s_samplesPerFrame = Shader.PropertyToID("_SamplesPerFrame");
         static readonly int s_giFireflyClamp = Shader.PropertyToID("_GiFireflyClamp");
         static readonly int s_reachBoost = Shader.PropertyToID("_ReachBoost");
+        static readonly int s_sunShadowMode = Shader.PropertyToID("_BgiSunShadowMode");
+        static readonly int s_sunShadowSamples = Shader.PropertyToID("_BgiSunShadowSamples");
+        static readonly int s_blurSunVis = Shader.PropertyToID("_BgiBlurSunVis");
+        static readonly int s_shadowSharpness = Shader.PropertyToID("_BgiShadowSharpness");
+        static readonly int s_shadowNormalOffset = Shader.PropertyToID("_BgiShadowNormalOffset");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
         static readonly int s_directLightColor = Shader.PropertyToID("_DirectLightColor");
         static readonly int[] s_envSh = {
@@ -646,6 +733,10 @@ namespace Lotec.Lighting {
             Shader.SetGlobalBuffer(s_radiance, _radianceBuffer);
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
+            // Fragment-side knobs for the Baked mode (BgiSampleShadowTexture). Both are pure read
+            // parameters, so they take effect immediately without a re-solve.
+            Shader.SetGlobalFloat(s_shadowSharpness, Mathf.Max(1f, _bakedShadowSharpness));
+            Shader.SetGlobalFloat(s_shadowNormalOffset, Mathf.Clamp(_shadowNormalOffset, 0.25f, 2f));
             PublishOcclusionSources();
             // Mirrored irradiance textures (the default fragment read source), one per field.
             Shader.SetGlobalTexture(s_bgiIrradianceTex, _irradianceTex);
@@ -1186,6 +1277,12 @@ namespace Lotec.Lighting {
             _computeShader.SetFloat(s_confidence, Confidence);
             _computeShader.SetFloat(s_giFireflyClamp, _giFireflyClamp);
             _computeShader.SetFloat(s_reachBoost, _reachBoost);
+            // Baked sun-shadow estimator. Samples only matter in Supersampled; Centre and Temporal both
+            // cast one ray, so pass 1 there to keep the compute's loop bound honest.
+            _computeShader.SetInt(s_sunShadowMode, (int)_sunShadowSampling);
+            _computeShader.SetInt(s_sunShadowSamples,
+                _sunShadowSampling == SunShadowSampling.Supersampled ? Mathf.Clamp(_sunShadowSamples, 1, 16) : 1);
+            _computeShader.SetInt(s_blurSunVis, _blurSunVisibility ? 1 : 0);
             _computeShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
             SetDirectionalLightUniforms();
             LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_computeShader);
