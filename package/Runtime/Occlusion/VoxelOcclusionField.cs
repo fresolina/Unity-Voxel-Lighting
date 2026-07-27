@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace Lotec.Lighting {
     /// <summary>
@@ -24,8 +25,21 @@ namespace Lotec.Lighting {
 
         [Tooltip("RGBA32 textures storing per-direction lit values. 4 directions per texture. Written by VoxelOcclusionFieldBaker.")]
         public Texture3D[] occlusionFieldTextures;
-        [HideInInspector]
-        public Vector3[] occlusionFieldDirections;
+
+        [Tooltip("The directions this field was baked with, saved beside its textures. Written by the " +
+                 "baker - it must match the textures or the channels decode to the wrong angles.")]
+        public VoxelDirectionSet directionSet;
+
+        /// <summary>
+        /// Bake-to-save handoff only, never serialized. <see cref="VoxelOcclusionFieldBaker"/> runs in
+        /// the runtime assembly and parks the freshly baked directions here; the editor's
+        /// SaveBakedAssets picks them up and writes <see cref="directionSet"/>. Reading it in between
+        /// is what lets a bake preview in edit mode before its assets are saved.
+        /// </summary>
+        [System.NonSerialized]
+        public Vector3[] pendingDirections;
+
+        [System.NonSerialized] bool _warnedMissingDirections;
 
         [Tooltip("What the baked channels hold. Written by the baker - do not set by hand, it must " +
                  "match how the data was baked or the shadow decode is wrong.")]
@@ -35,11 +49,14 @@ namespace Lotec.Lighting {
                  "Written by the baker.")]
         public float sdfRangeVoxels = 4f;
 
-        [Tooltip("Signed Distance encoding only: shadow edge width in voxels. Runtime-tunable - no " +
-                 "rebake needed. Small values give sharp contact shadows; the field can resolve well " +
-                 "below one voxel because the boundary is reconstructed, not interpolated.")]
+        [Tooltip("Signed Distance encoding only: shadow edge width in voxels. This is the softness " +
+                 "knob for a Signed Distance field - it is runtime-tunable and needs no rebake, " +
+                 "unlike the baker's cone settings. Small values give sharp contact shadows; the " +
+                 "field resolves well below one voxel because the boundary is reconstructed rather " +
+                 "than interpolated.")]
+        [FormerlySerializedAs("penumbraVoxels")]
         [Range(0.05f, 4f)]
-        public float penumbraVoxels = 1f;
+        public float shadowEdgeVoxels = 1f;
 
         [Tooltip("Blend between the two baked directions nearest the sun instead of snapping to one. " +
                  "Costs a second texture tap, and removes the pop as the sun crosses between " +
@@ -49,7 +66,6 @@ namespace Lotec.Lighting {
 
         static readonly int s_voxelSize = Shader.PropertyToID("_VoxelSize");
         static readonly int s_voxelSizeInverse = Shader.PropertyToID("_VoxelSizeInverse");
-        static readonly int s_occFieldSunDir = Shader.PropertyToID("_OccFieldSunDir");
         static readonly int s_occFieldSunMask = Shader.PropertyToID("_OccFieldSunMask");
         static readonly int s_occFieldSunMaskB = Shader.PropertyToID("_OccFieldSunMaskB");
         static readonly int s_occFieldTex = Shader.PropertyToID("_OccFieldTex");
@@ -71,10 +87,34 @@ namespace Lotec.Lighting {
             }
         }
 
+        /// <summary>
+        /// The baked directions: the saved asset, or the not-yet-saved bake still in memory.
+        /// Null/empty means this binder has no usable bake.
+        /// </summary>
+        public Vector3[] Directions =>
+            directionSet != null && directionSet.Count > 0
+                ? directionSet.directions
+                : pendingDirections;
+
         /// <summary>True when there is baked occlusion-field data to publish.</summary>
-        public bool HasData =>
-            occlusionFieldTextures != null && occlusionFieldTextures.Length > 0
-            && occlusionFieldDirections != null && occlusionFieldDirections.Length > 0;
+        public bool HasData {
+            get {
+                Vector3[] dirs = Directions;
+                bool hasTextures = occlusionFieldTextures != null && occlusionFieldTextures.Length > 0;
+                bool ok = hasTextures && dirs != null && dirs.Length > 0;
+                // Textures with no directions is the shape of a bake made before the directions moved
+                // into an asset: the channels are fine but nothing says which angle each one means, so
+                // the mode would just silently stop shadowing. Say so once rather than render wrong.
+                if (!ok && hasTextures && !_warnedMissingDirections) {
+                    _warnedMissingDirections = true;
+                    Debug.LogWarning(
+                        $"VoxelOcclusionField on '{name}' has baked textures but no direction set. " +
+                        "This bake predates VoxelDirectionSet - rebake the volume to migrate it. " +
+                        "Until then the OcclusionField shadow mode has no data and renders unshadowed.", this);
+                }
+                return ok;
+            }
+        }
 
         /// <summary>Publish the occlusion-field globals + the occlusion-grid inverse voxel size
         /// (the volume bounds it samples against are published by the active VoxelVolume).</summary>
@@ -91,14 +131,14 @@ namespace Lotec.Lighting {
         /// Slope of the linear ramp the fragment applies to the stored channel. One formula covers
         /// both encodings, so the shader needs no branch and no keyword: a Visibility field passes
         /// straight through at 1.0, while a SignedDistance field turns into a soft edge whose width
-        /// is <see cref="penumbraVoxels"/>.
+        /// is <see cref="shadowEdgeVoxels"/>.
         ///
-        /// stored - 0.5 == d / (2 * range), and we want saturate(d / (2 * penumbra) + 0.5),
-        /// so the scale is range / penumbra.
+        /// stored - 0.5 == d / (2 * range), and we want saturate(d / (2 * edge) + 0.5),
+        /// so the scale is range / edge.
         /// </summary>
         public float DecodeScale =>
             shadowEncoding == ShadowEncoding.SignedDistance
-                ? Mathf.Max(sdfRangeVoxels, 1e-3f) / Mathf.Max(penumbraVoxels, 1e-3f)
+                ? Mathf.Max(sdfRangeVoxels, 1e-3f) / Mathf.Max(shadowEdgeVoxels, 1e-3f)
                 : 1f;
 
         // Map the current sun direction onto the baked direction set and bind the texture(s) +
@@ -110,15 +150,15 @@ namespace Lotec.Lighting {
             // would tap a second texture that no longer belongs to this field.
             Shader.SetGlobalFloat(s_occFieldBlend, 0f);
 
-            if (occlusionFieldDirections == null || occlusionFieldDirections.Length == 0 || occlusionFieldTextures == null)
+            Vector3[] dirs = Directions;
+            if (dirs == null || dirs.Length == 0 || occlusionFieldTextures == null)
                 return;
 
             Vector3 sunDir = OcclusionFieldQuery.GetSunDirection();
             OcclusionFieldQuery.FindNearestTwoDirections(
-                sunDir, occlusionFieldDirections, occlusionFieldDirections.Length,
+                sunDir, dirs, dirs.Length,
                 out int bestIndex, out int secondIndex, out float weight);
 
-            Shader.SetGlobalVector(s_occFieldSunDir, sunDir);
             Shader.SetGlobalVector(s_occFieldSunMask, s_channelMasks[bestIndex & 3]);
             BindFieldTexture(s_occFieldTex, bestIndex);
 

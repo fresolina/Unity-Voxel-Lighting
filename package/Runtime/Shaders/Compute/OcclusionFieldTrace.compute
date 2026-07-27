@@ -7,9 +7,9 @@
 #pragma kernel CSResolveShadowSdf
 #pragma target 5.0
 
-// Exact occlusion field bake. Replaces the SDF sphere-trace (OcclusionFieldBake.compute) with
-// ray-triangle traversal of the uniform grid, which cannot tunnel through sub-voxel-thick
-// geometry, and replaces the Quilez penumbra estimator with supersampling.
+// Occlusion field + bitmask bake. Ray-triangle traversal of the uniform grid, which cannot tunnel
+// through sub-voxel-thick geometry the way the SDF sphere-trace this replaced did, plus a
+// supersampled penumbra in place of the Quilez estimator.
 //
 // Why supersampling rather than a distance-based softness term: the estimator is a min() over the
 // ray, and a min() does not survive the hardware trilinear filtering this field is built around -

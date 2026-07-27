@@ -513,9 +513,9 @@ MonoBehaviour:
   _reachBoost: 1
   _bakedNormals: 1
   _aoStrength: 0
-  _fineShadow: 3
+  _fineShadow: 1
   _coarseShadow: 1
-  _ssboRead: 0
+  _ssboRead: 1
   _exposureControl:
     _tonemap: 2
     _exposure: 0
@@ -539,6 +539,7 @@ GameObject:
   - component: {fileID: 1500960152}
   - component: {fileID: 1500960151}
   - component: {fileID: 1500960149}
+  - component: {fileID: 1500960153}
   m_Layer: 0
   m_Name: Bakers
   m_TagString: Untagged
@@ -574,7 +575,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionFieldBaker
   _targetVolume: {fileID: 0}
-  bakeMode: 0
   _exactBake:
     occlusionFieldTraceCompute: {fileID: 7200000, guid: 126e1c33f1d320f42892c128ccdb69a9, type: 3}
     directionCount: 1
@@ -588,11 +588,6 @@ MonoBehaviour:
     traceBandVoxels: 4
     shadowEncoding: 1
     sdfRangeVoxels: 2
-  _baker:
-    occlusionFieldBakeCompute: {fileID: 7200000, guid: 072dc532c95fd5040894f9193b6fad72, type: 3}
-    directionCount: 1
-    hemisphereOnly: 1
-    shadowSoftness: 5.7
   _hemisphereInitialized: 1
   _lastHemisphereOnly: 1
 --- !u!114 &1500960151
@@ -628,6 +623,30 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelLightingBaker
   _targetVolume: {fileID: 0}
+--- !u!114 &1500960153
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1500960146}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f1ca66c064226da428d740f80012b968, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionBitmaskBaker
+  _targetVolume: {fileID: 0}
+  _exactBake:
+    occlusionFieldTraceCompute: {fileID: 7200000, guid: 126e1c33f1d320f42892c128ccdb69a9, type: 3}
+    directionCount: 64
+    hemisphereOnly: 1
+    penumbraSamples: 4
+    sampleDistribution: 0
+    adaptiveSampling: 0
+    penumbraVoxels: 2
+    traceBandVoxels: 4
+  _hemisphereInitialized: 1
+  _lastHemisphereOnly: 1
 --- !u!1 &1628000039
 GameObject:
   m_ObjectHideFlags: 0

@@ -683,7 +683,7 @@ MonoBehaviour:
   _aoStrength: 0
   _fineShadow: 2
   _coarseShadow: 1
-  _ssboRead: 0
+  _ssboRead: 1
   _exposureControl:
     _tonemap: 2
     _exposure: 0
@@ -760,11 +760,19 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionFieldBaker
   _targetVolume: {fileID: 0}
-  _baker:
-    occlusionFieldBakeCompute: {fileID: 7200000, guid: 072dc532c95fd5040894f9193b6fad72, type: 3}
+  _exactBake:
+    occlusionFieldTraceCompute: {fileID: 7200000, guid: 126e1c33f1d320f42892c128ccdb69a9, type: 3}
     directionCount: 1
     hemisphereOnly: 1
-    shadowSoftness: 3
+    penumbraSamples: 64
+    sampleDistribution: 0
+    adaptiveSampling: 1
+    penumbraMode: 0
+    penumbraVoxels: 2
+    sunAngularDiameter: 0.53
+    traceBandVoxels: 4
+    shadowEncoding: 1
+    sdfRangeVoxels: 4
   _hemisphereInitialized: 1
   _lastHemisphereOnly: 1
 --- !u!114 &1500960150
@@ -780,10 +788,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionBitmaskBaker
   _targetVolume: {fileID: 0}
-  _baker:
-    directionCount: 8
+  _exactBake:
+    occlusionFieldTraceCompute: {fileID: 7200000, guid: 126e1c33f1d320f42892c128ccdb69a9, type: 3}
+    directionCount: 64
     hemisphereOnly: 1
-    bitmaskBakeCompute: {fileID: 7200000, guid: e0f7c494ba521474e9fdbcaf190a0e90, type: 3}
+    penumbraSamples: 8
+    sampleDistribution: 0
+    adaptiveSampling: 1
+    penumbraVoxels: 2
+    traceBandVoxels: 4
   _hemisphereInitialized: 1
   _lastHemisphereOnly: 1
 --- !u!114 &1500960151

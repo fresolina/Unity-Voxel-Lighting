@@ -111,6 +111,9 @@ half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
 //                 direct light), NOT a fall-through to any other shadow source; Baked (1) is the baked
 //                 value interpolated across the face; Sdf (2) is the per-pixel SDF raymarch result.
 // lightDir is the UNIT direction TOWARD the main light (used only by the Sdf mode's raymarch).
+// `normal` MUST be the geometric (vertex) normal, never a normal-mapped one - it both offsets the
+// sample off the surface and picks the dominant face-plane axis, and the voxel grid knows nothing
+// about normal maps. Feeding it a per-texel normal makes both jump within a single flat face.
 void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out half ao, out half shadow)
 {
     ao = 1.0h;

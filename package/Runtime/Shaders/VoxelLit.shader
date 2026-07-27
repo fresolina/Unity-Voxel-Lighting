@@ -140,6 +140,19 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 #endif
             }
 
+            // The interpolated VERTEX normal, never the normal map. Everything that steps into the
+            // voxel grid must use this: the grid has no idea a normal map exists, so perturbing the
+            // lookup by one makes the offset - and the face-plane axis pick - jump per texel. With a
+            // point-sampled bitmask that lands the sample in a different voxel and punches unshadowed
+            // holes along shadow edges; the old 8-tap only blurred the same error into a gradient.
+            half3 GetGeometricNormal(v2f input) {
+                #ifdef _NORMALMAP
+                    return normalize(input.normal);
+                #else
+                    return normalize(input.normalWS);
+                #endif
+            }
+
             half4 frag(v2f IN) : SV_Target
             {
                 Light light = GetMainLight();
@@ -155,7 +168,8 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 // modes resolve the main-light shadow inside GetShadow as before.
                 #if defined(GI_VOXEL_BUFFER)
                     half bgiAo, bgiShadow;
-                    BgiSampleFaceAoShadow(IN.positionWS, N, light.direction, bgiAo, bgiShadow);
+                    // Geometric normal, not N: this is a voxel-grid lookup, not a shading term.
+                    BgiSampleFaceAoShadow(IN.positionWS, GetGeometricNormal(IN), light.direction, bgiAo, bgiShadow);
                     half3 lit = GetMainDirectLightingShadow(light, IN.positionWS, N, albedo, bgiShadow);
                 #else
                     half3 lit = GetMainDirectLighting(light, IN.positionWS, N, albedo);

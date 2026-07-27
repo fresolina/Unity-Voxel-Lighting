@@ -3,8 +3,8 @@
 
 // Baked directional occlusion shadow sources, read by the buffer-GI per-field shadow modes
 // (BgiSampleFaceAoShadow):
-//   GetBitmaskShadow   -> per-voxel directional bitmask (trilinear 8-tap)
-//   GetOccFieldShadow  -> per-direction occlusion field (hardware trilinear)
+//   GetBitmaskShadow   -> per-voxel directional bitmask (one point fetch, hard voxel edges)
+//   GetOccFieldShadow  -> per-direction occlusion field (hardware trilinear, soft/sharp edges)
 // Both are baked alternatives to the runtime SDF shadow march.
 
 #include "Volume.hlsl"   // _VoxelVolumeBounds*, WorldToVoxelUV
@@ -60,37 +60,23 @@ inline uint2 GetBitmaskAtVoxel(int3 voxelIdx) {
     return uint2(xLo | (xHi << 16), yLo | (yHi << 16));
 }
 
-// Trilinear interpolation of a single occlusion bit across 8 neighboring voxels.
-// Returns 0.0 (shadow) to 1.0 (lit). The taps are single bits and the weights are
-// fractions in [0,1), so the whole blend runs in fp16; only `localPos` (a voxel-space
-// coordinate that reaches the grid resolution) has to be fp32 for frac() to be exact.
-inline half GetShadowBitTrilinear8Tap(float3 localPos, uint chosenIndex) {
-    int3 baseIdx = int3(floor(localPos));
-    half3 f = (half3)frac(localPos);
-
-    half o000 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 0, 0)), chosenIndex);
-    half o100 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 0, 0)), chosenIndex);
-    half o010 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 1, 0)), chosenIndex);
-    half o110 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 1, 0)), chosenIndex);
-    half o001 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 0, 1)), chosenIndex);
-    half o101 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 0, 1)), chosenIndex);
-    half o011 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(0, 1, 1)), chosenIndex);
-    half o111 = (half)GetBit64(GetBitmaskAtVoxel(baseIdx + int3(1, 1, 1)), chosenIndex);
-
-    half oX00 = lerp(o000, o100, f.x);
-    half oX10 = lerp(o010, o110, f.x);
-    half oX01 = lerp(o001, o101, f.x);
-    half oX11 = lerp(o011, o111, f.x);
-    half oXY0 = lerp(oX00, oX10, f.y);
-    half oXY1 = lerp(oX01, oX11, f.y);
-
-    return saturate(1.0h - lerp(oXY0, oXY1, f.z));
+// Single fetch of the occlusion bit in the voxel containing `localPos`.
+// Returns 0.0 (shadow) or 1.0 (lit) - hard-edged at voxel granularity, by design.
+//
+// This deliberately does NOT interpolate. A bit has no sub-voxel information to interpolate: an
+// 8-tap blend of eight 0/1 samples only dithers the same staircase over a voxel's width, and it
+// costs eight dependent Loads on a pass that is already occupancy-bound. Softening the edge is the
+// occlusion FIELD's job - it stores a signed distance and reconstructs a boundary from one hardware
+// tap. The bitmask exists to be cheap, so it takes one Load and accepts the hard edge.
+inline half GetShadowBitPoint(float3 localPos, uint chosenIndex) {
+    int3 voxelIdx = int3(floor(localPos));
+    return saturate(1.0h - (half)GetBit64(GetBitmaskAtVoxel(voxelIdx), chosenIndex));
 }
 
 // Shadow query using the precomputed sun Fibonacci index. Returns 0.0 (shadow) to 1.0 (lit).
 half GetBitmaskShadow(float3 worldPos) {
     float3 localPos = (worldPos - _VoxelVolumeBoundsMin) * _VoxelSizeInverse;
-    return GetShadowBitTrilinear8Tap(localPos, (uint)_BitmaskSunFibIndex);
+    return GetShadowBitPoint(localPos, (uint)_BitmaskSunFibIndex);
 }
 
 // Variant with normal-based offset to reduce self-occlusion.
@@ -102,9 +88,6 @@ half GetBitmaskShadow(float3 worldPos, float3 normal) {
 // -----------------------------------------------------------------------------
 // OCCLUSION FIELD (per-direction lit value, hardware trilinear)
 // -----------------------------------------------------------------------------
-
-// Sun direction query results (set from C# each frame).
-float3 _OccFieldSunDir;
 
 // Channel selectors for the two baked directions nearest the sun, as one-hot masks so the pick is a
 // single dot product instead of a compare chain.

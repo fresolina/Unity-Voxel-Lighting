@@ -8,22 +8,29 @@ using UnityEngine.Serialization;
 namespace Lotec.Lighting
 {
     /// <summary>
-    /// Exact occlusion field bake: traces scene triangles through the uniform grid instead of
-    /// sphere-tracing an SDF, and derives the penumbra by supersampling instead of from a
-    /// distance-based estimator.
+    /// Occlusion field bake: traces scene triangles through the uniform grid, and derives the
+    /// penumbra by supersampling instead of from a distance-based estimator.
     ///
-    /// The SDF path (<see cref="OcclusionFieldBake"/>) leaks - a wall thinner than a voxel has its
-    /// negative interior smoothed away by trilinear interpolation, so rays pass straight through,
-    /// which shows up as gaps in walls near the floor. That is a spatial sampling limit, not a
-    /// precision one, so no SDF resolution or storage format fixes it. Offline the exact answer is
-    /// affordable: the grid is sized to ~1 triangle per cell, so a ray tests only a handful.
-    ///
-    /// Output is byte-identical in format to the SDF path (lit values, 4 directions per RGBA
-    /// texture), so nothing downstream - binder, asset saving, runtime HLSL - changes.
+    /// This replaced an earlier bake that sphere-traced a hi-res SDF. That one leaked - a wall
+    /// thinner than a voxel has its negative interior smoothed away by trilinear interpolation, so
+    /// rays pass straight through, which shows up as gaps in walls near the floor. That is a spatial
+    /// sampling limit, not a precision one, so no SDF resolution or storage format fixed it. Offline
+    /// the exact answer is affordable: the grid is sized to ~1 triangle per cell, so a ray tests
+    /// only a handful, and the geometry SDF drops out of the shadow dependency chain entirely.
     /// </summary>
     [Serializable]
-    public class ExactOcclusionFieldBake : IOcclusionFieldBake
+    public class ExactOcclusionFieldBake
     {
+        public enum DirectionCount
+        {
+            Dir1Sun = 1,
+            Dir8 = 8,
+            Dir32 = 32,
+            Dir64 = 64,
+            Dir128 = 128,
+            Dir256 = 256,
+        }
+
         /// <summary>How the light's angular size - and therefore the penumbra - is authored.</summary>
         public enum PenumbraMode
         {
@@ -45,13 +52,16 @@ namespace Lotec.Lighting
         public ComputeShader occlusionFieldTraceCompute;
 
         [Tooltip("Number of directions to bake.\nDir 1 Sun bakes current sun direction.")]
-        public OcclusionFieldBake.DirectionCount directionCount = OcclusionFieldBake.DirectionCount.Dir1Sun;
+        public DirectionCount directionCount = DirectionCount.Dir1Sun;
 
         [Tooltip("Use only upper hemisphere directions (Y >= 0). Useful when the sun never goes below the horizon.")]
         public bool hemisphereOnly = true;
 
         [Tooltip("EXTRA rays per direction, on top of the ray straight down the direction itself " +
-                 "(which is always traced). 0 = hard shadows from that single ray.")]
+                 "(which is always traced). 0 = hard shadows from that single ray.\n\n" +
+                 "This is the setting that matters under Signed Distance encoding: more rays place " +
+                 "the shadow boundary more accurately WITHIN a voxel, which is what the fragment " +
+                 "reconstructs a sharp edge from.")]
         [FormerlySerializedAs("samplesPerDirection")]
         [Range(0, 64)]
         public int penumbraSamples = 8;
@@ -68,18 +78,24 @@ namespace Lotec.Lighting
         public bool adaptiveSampling = true;
 
         [Tooltip("Whether the light's angular size is authored relative to the voxel grid or as a " +
-                 "fixed real-world sun angle.")]
+                 "fixed real-world sun angle.\n\n" +
+                 "NOTE: under Signed Distance encoding both modes barely matter. That pass thresholds " +
+                 "visibility at 0.5 and keeps only the iso-surface, which cone width hardly moves - " +
+                 "measured under 1% of voxels shifting by more than 8/255 between a hard cone and a " +
+                 "4-voxel one. Softness there is VoxelOcclusionField.shadowEdgeVoxels, set at runtime.")]
         public PenumbraMode penumbraMode = PenumbraMode.Voxels;
 
         [Tooltip("Voxels mode: penumbra width in voxels, measured 32 voxels from the occluder. Keeps " +
-                 "the softest shadow to something the field can actually store. 0 = hard.")]
+                 "the softest shadow to something the field can actually store. 0 = hard.\n\n" +
+                 "Only has real effect under Visibility encoding - see the Penumbra Mode tooltip.")]
         [Range(0f, 16f)]
         public float penumbraVoxels = 2f;
 
         [Tooltip("Sun Angle mode: angular DIAMETER of the light in degrees. The real sun is ~0.53; " +
-                 "larger values give visibly softer shadows. Note that at low field resolutions a " +
-                 "small angle bakes a penumbra narrower than one voxel, which trilinear filtering " +
-                 "then widens anyway.")]
+                 "larger values give visibly softer shadows. At these voxel sizes a physically " +
+                 "correct sun bakes a penumbra far narrower than one voxel, so it looks like hard " +
+                 "shadows - exaggerate it, or use Voxels mode.\n\n" +
+                 "Only has real effect under Visibility encoding - see the Penumbra Mode tooltip.")]
         [Range(0f, 30f)]
         public float sunAngularDiameter = 0.53f;
 
@@ -90,8 +106,9 @@ namespace Lotec.Lighting
 
         [Tooltip("Signed Distance stores the distance to the shadow boundary instead of the visibility " +
                  "fraction, so the fragment reconstructs a SHARP edge from the same coarse grid - the " +
-                 "SDF-font trick - and penumbra width becomes a runtime knob. Rounds off creases where " +
-                 "two shadow edges meet, so pick Visibility for foliage-like occluders.")]
+                 "SDF-font trick - and softness moves to VoxelOcclusionField.shadowEdgeVoxels, tunable " +
+                 "at runtime with no rebake. Rounds off creases where two shadow edges meet, so pick " +
+                 "Visibility for foliage-like occluders.")]
         public VoxelOcclusionField.ShadowEncoding shadowEncoding = VoxelOcclusionField.ShadowEncoding.SignedDistance;
 
         [Tooltip("Signed Distance only: the +/- voxel range the 8-bit channel spans. Caps how wide a " +
@@ -152,6 +169,41 @@ namespace Lotec.Lighting
             return steps.ToArray();
         }
 
+        static GraphicsFormat GetOcclusionFieldFormat(bool isSingleDir)
+        {
+            if (isSingleDir)
+                return GraphicsFormat.R8_UNorm;
+#if UNITY_EDITOR
+            // if (UnityEditor.EditorUserBuildSettings.activeBuildTarget == UnityEditor.BuildTarget.Android)
+            //     return GraphicsFormat.R4G4B4A4_UNormPack16;
+#endif
+            return GraphicsFormat.R8G8B8A8_UNorm;
+        }
+
+        static void SetPackedTextureData(Texture3D texture, NativeArray<float> readbackData, int voxelCount, GraphicsFormat format)
+        {
+            if (format == GraphicsFormat.R4G4B4A4_UNormPack16)
+            {
+                var packed = new ushort[voxelCount];
+                for (int voxel = 0; voxel < voxelCount; voxel++)
+                {
+                    int baseIndex = voxel * 4;
+                    ushort r = (ushort)Mathf.Clamp(Mathf.RoundToInt(readbackData[baseIndex + 0] * 15f), 0, 15);
+                    ushort g = (ushort)Mathf.Clamp(Mathf.RoundToInt(readbackData[baseIndex + 1] * 15f), 0, 15);
+                    ushort b = (ushort)Mathf.Clamp(Mathf.RoundToInt(readbackData[baseIndex + 2] * 15f), 0, 15);
+                    ushort a = (ushort)Mathf.Clamp(Mathf.RoundToInt(readbackData[baseIndex + 3] * 15f), 0, 15);
+                    packed[voxel] = (ushort)((r << 12) | (g << 8) | (b << 4) | a);
+                }
+                texture.SetPixelData(packed, 0);
+                return;
+            }
+
+            var packedRgba8 = new byte[voxelCount * 4];
+            for (int i = 0; i < voxelCount * 4; i++)
+                packedRgba8[i] = (byte)Mathf.Clamp(Mathf.RoundToInt(readbackData[i] * 255f), 0, 255);
+            texture.SetPixelData(packedRgba8, 0);
+        }
+
         public bool TryBake(
             VoxelVolume sourceVolume,
             out Texture3D[] resultTextures,
@@ -210,11 +262,11 @@ namespace Lotec.Lighting
                                           out uint[] cellStart, out uint[] triIndices);
 
             int numDirections = (int)directionCount;
-            bool isSingleDir = directionCount == OcclusionFieldBake.DirectionCount.Dir1Sun;
+            bool isSingleDir = directionCount == DirectionCount.Dir1Sun;
             int dirsPerBatch = isSingleDir ? 1 : 4;
             int textureCount = isSingleDir ? 1 : numDirections / 4;
 
-            GraphicsFormat textureFormat = OcclusionFieldBake.GetOcclusionFieldFormat(isSingleDir);
+            GraphicsFormat textureFormat = GetOcclusionFieldFormat(isSingleDir);
             if (!SystemInfo.IsFormatSupported(textureFormat, GraphicsFormatUsage.Sample))
             {
                 error = $"ExactOcclusionFieldBake: format {textureFormat} not supported for sampling on this platform";
@@ -369,7 +421,7 @@ namespace Lotec.Lighting
                         }
                         else
                         {
-                            OcclusionFieldBake.SetPackedTextureData(tex, readbackData, voxelCount, textureFormat);
+                            SetPackedTextureData(tex, readbackData, voxelCount, textureFormat);
                         }
                         tex.Apply(false);
 
