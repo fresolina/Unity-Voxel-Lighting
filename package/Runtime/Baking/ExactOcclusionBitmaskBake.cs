@@ -14,12 +14,13 @@ namespace Lotec.Lighting
     /// dilate are all direction-count agnostic. The only thing that differs from the field bake is
     /// the pack step: each direction's supersampled visibility is thresholded to a single bit rather
     /// than quantised to a byte, and the signed-distance re-encode is skipped (one bit has no room
-    /// for a distance, which is why the bitmask can never reach the field's edge sharpness).
+    /// for a distance, which is why the bitmask can never reach the field's edge sharpness - the
+    /// runtime reads it with a single point fetch and gets hard voxel-sized edges).
     ///
     /// Beyond dropping the SDF, this replaced an earlier sphere-trace bake that had none of:
     ///   - no leaking through sub-voxel geometry, because the hit test is exact;
-    ///   - dilation into solid voxels, so the runtime's 8-tap no longer pulls all-occluded bits from
-    ///     inside walls and darkens their base;
+    ///   - dilation into solid voxels, so the runtime's normal-offset fetch still reads something
+    ///     sensible when it lands inside geometry rather than an all-occluded black voxel;
     ///   - a supersampled threshold, which puts each bit's boundary at the statistically right place
     ///     instead of wherever the voxel centre happened to fall.
     /// </summary>
@@ -48,7 +49,8 @@ namespace Lotec.Lighting
         [Tooltip("EXTRA rays per direction, on top of the ray straight down the direction itself " +
                  "(which is always traced). This is the setting that matters here: the result is " +
                  "thresholded to one bit, so more rays only change WHERE that threshold falls - which " +
-                 "is exactly what the runtime's 8-tap reconstruction needs to be accurate.")]
+                 "decides each voxel's bit on the balance of its whole volume rather than on whether " +
+                 "one centre ray happened to clear the occluder.")]
         [Range(0, 64)]
         public int penumbraSamples = 8;
 
@@ -236,7 +238,7 @@ namespace Lotec.Lighting
                 occlusionFieldTraceCompute.SetBuffer(kDilate, s_outOcclusion, outBuffer);
 
                 // Two uints per voxel = 64 bits, one per direction. Bit i set means direction i is
-                // occluded - the convention VoxelOcclusion.hlsl's GetShadowBitTrilinear8Tap inverts.
+                // occluded - the convention VoxelOcclusion.hlsl's GetShadowBitPoint inverts.
                 var bits = new uint[voxelCount * 2];
                 var batchDirs = new Vector3[DirectionsPerBatch];
 

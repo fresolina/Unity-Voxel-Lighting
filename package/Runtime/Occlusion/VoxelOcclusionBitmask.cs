@@ -10,8 +10,9 @@ namespace Lotec.Lighting {
     /// Added automatically by the bitmask baker when it bakes. This component does NOT run its own
     /// update loop or claim any keyword: <see cref="BufferGiUpdater"/> is the sole driver - it calls
     /// <see cref="Bind"/> for the field whose ShadowMode is Bitmask. So there is no idle Update cost,
-    /// and it can coexist with the occlusion-field holder. The shader read is always the trilinear
-    /// 8-tap (the old per-voxel Point variant was a keyword path that buffer GI no longer selects).
+    /// and it can coexist with the occlusion-field holder. The shader read is a single point fetch:
+    /// the bitmask is the cheap shadow source, and one bit per direction has nothing to interpolate.
+    /// Soft or sub-voxel-sharp edges are the occlusion field's job, not this one's.
     /// </summary>
     [RequireComponent(typeof(VoxelVolume))]
     [AddComponentMenu("Lotec/Voxel Lighting/Binders/Voxel Occlusion Bitmask")]

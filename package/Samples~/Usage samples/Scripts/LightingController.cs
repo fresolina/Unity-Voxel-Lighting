@@ -50,7 +50,8 @@ namespace Lotec.Lighting.Samples {
         /// (first / default entry) with the volume shadow-source options. Selecting Baked turns on the
         /// fine field's baked shadow; any other entry turns it off and selects that shadow source.</summary>
         // Mirrors BufferGiUpdater.ShadowMode (the buffer-GI fine field is the sole shadow authority now).
-        // Bitmask is 8-tap-only under buffer GI, so the old Point/8-tap split is collapsed to one entry.
+        // Bitmask has a single read path under buffer GI (a point fetch), so the old Point/8-tap split
+        // is collapsed to one entry.
         public enum ShadowUiMode { Off, Baked, SDF, OcclusionField, Bitmask }
 
         static LightingController s_instance;
