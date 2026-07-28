@@ -266,6 +266,7 @@ namespace Lotec.Lighting {
         bool _hasLoggedMissingReferences;
         bool _warnedBakeAssetMismatch; // warn once per change, not per voxelize attempt
         bool _warnedBakedLightAlsoRealtime; // same, for a light that is both baked and a realtime local light
+        List<Light> _realtimeLightScratch;  // reused by that check; allocated on first use (bake-time only)
         // Progressive accumulation in SAMPLES (rays): _collectedSamples = total rays gathered since the last
         // change (0 = just changed), accumulated by samplesPerFrame each solve and capped at _maxSamples
         // (the ray budget). Quality depends on total rays, not frames - samplesPerFrame just spends the
@@ -1221,8 +1222,12 @@ namespace Lotec.Lighting {
             if (_warnedBakedLightAlsoRealtime) return;
             LocalLightsPublisher publisher = LocalLightsPublisher.Instance;
             if (publisher == null) return;
-            IReadOnlyList<Light> realtime = publisher.AdditionalLights;
-            if (realtime == null) return;
+            // The EFFECTIVE realtime set, not just the publisher's own list: the same clash is just as
+            // likely from a level's LocalLightsProvider. Gathered on demand rather than read off the
+            // publisher's last frame, because the editor bake path runs outside the Update order.
+            if (_realtimeLightScratch == null) _realtimeLightScratch = new List<Light>();
+            publisher.GatherLights(_realtimeLightScratch);
+            List<Light> realtime = _realtimeLightScratch;
             foreach (VoxelLights holder in _lightHolders) {
                 if (holder == null) continue;
                 IReadOnlyList<Light> baked = holder.Lights;
@@ -1234,7 +1239,8 @@ namespace Lotec.Lighting {
                         Debug.LogWarning(
                             $"Buffer GI: light '{baked[i].name}' is baked into the voxelization (listed on " +
                             $"'{holder.name}'s Voxel Lights) AND published as a realtime local light by " +
-                            $"'{publisher.name}'. It lights the scene twice - remove it from one of the two.",
+                            $"'{publisher.name}' (its own list or a level's LocalLightsProvider). It lights " +
+                            "the scene twice - remove it from one of the two.",
                             baked[i]);
                         return;
                     }

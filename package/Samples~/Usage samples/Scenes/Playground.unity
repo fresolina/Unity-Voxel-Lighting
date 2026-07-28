@@ -1540,6 +1540,38 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 515897427}
   m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!1 &557123395
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 557123396}
+  m_Layer: 0
+  m_Name: Candle
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &557123396
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 557123395}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 2.713, y: 1.75, z: -1.787}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children:
+  - {fileID: 1697248656}
+  m_Father: {fileID: 1127919669}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &601257321
 GameObject:
   m_ObjectHideFlags: 0
@@ -1662,6 +1694,7 @@ GameObject:
   m_Component:
   - component: {fileID: 606245552}
   - component: {fileID: 606245553}
+  - component: {fileID: 606245554}
   m_Layer: 0
   m_Name: Level Settings
   m_TagString: Untagged
@@ -1705,6 +1738,20 @@ MonoBehaviour:
   - {fileID: 11400000, guid: 040522d6556740f4ca5a6b8add213050, type: 2}
   - {fileID: 11400000, guid: 31ddce8a157c5794da1f9147fa30c0d7, type: 2}
   - {fileID: 11400000, guid: 3535aa9628d86b3498c73208146536f8, type: 2}
+--- !u!114 &606245554
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 606245551}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 684ef8550694ac842bc7e8d450d4308e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.LocalLightsProvider
+  _lights:
+  - {fileID: 1697248655}
 --- !u!1 &659102737
 GameObject:
   m_ObjectHideFlags: 0
@@ -2037,7 +2084,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: edaa74f877c4bd44dad252dfe0531010, type: 3}
-  m_Name:
+  m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelSdfField
   sdfTexture: {fileID: 11700000, guid: ae780469d95a1ed48ba496ba0dce3966, type: 2}
 --- !u!114 &772833390
@@ -2055,6 +2102,10 @@ MonoBehaviour:
   occlusionFieldTextures:
   - {fileID: 11700000, guid: f253887f4c3f8c241b21b5e134da95c3, type: 2}
   directionSet: {fileID: 11400000, guid: 9e83b1c05d2a4f7789ac4e6b1f30d8a2, type: 2}
+  shadowEncoding: 0
+  sdfRangeVoxels: 4
+  shadowEdgeVoxels: 1
+  blendDirections: 1
 --- !u!114 &772833391
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2069,7 +2120,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionBitmask
   occlusionBitmaskTexture: {fileID: 11700000, guid: f6ea547a7010c7f4abc701800abd4889, type: 2}
   directionSet: {fileID: 11400000, guid: d05a6f83e17b4c249f62b3a8c7e10d54, type: 2}
-  sampling: 0
 --- !u!114 &772833395
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2935,6 +2985,7 @@ Transform:
   - {fileID: 670863183}
   - {fileID: 197549244}
   - {fileID: 895003073}
+  - {fileID: 557123396}
   m_Father: {fileID: 896086981}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &1127919670
@@ -2970,6 +3021,10 @@ MonoBehaviour:
   occlusionFieldTextures:
   - {fileID: 11700000, guid: 1069c9bf2755a364f8f6760a99577d7e, type: 2}
   directionSet: {fileID: 11400000, guid: 7b4e2d19c6a84f3ba85d0e91f43c6a27, type: 2}
+  shadowEncoding: 0
+  sdfRangeVoxels: 4
+  shadowEdgeVoxels: 1
+  blendDirections: 1
 --- !u!114 &1127919672
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2984,7 +3039,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelOcclusionBitmask
   occlusionBitmaskTexture: {fileID: 11700000, guid: 6e0dac05ebcd3354e8823d73c4e17876, type: 2}
   directionSet: {fileID: 11400000, guid: 3c1f8a72b9d44e5490a1c7e6f2d80b31, type: 2}
-  sampling: 0
 --- !u!114 &1127919673
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2995,7 +3049,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: edaa74f877c4bd44dad252dfe0531010, type: 3}
-  m_Name:
+  m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelSdfField
   sdfTexture: {fileID: 11700000, guid: d6dcbc66995615d4893d7bce504d994b, type: 2}
 --- !u!114 &1127919675
@@ -4441,6 +4495,133 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1669524706}
   m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!1 &1697248653
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1697248656}
+  - component: {fileID: 1697248655}
+  - component: {fileID: 1697248654}
+  m_Layer: 0
+  m_Name: Point Light
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1697248654
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1697248653}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 474bcb49853aa07438625e644c072ee6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.UniversalAdditionalLightData
+  m_UsePipelineSettings: 1
+  m_AdditionalLightsShadowResolutionTier: 2
+  m_CustomShadowLayers: 0
+  m_LightCookieSize: {x: 1, y: 1}
+  m_LightCookieOffset: {x: 0, y: 0}
+  m_SoftShadowQuality: 0
+  m_RenderingLayersMask:
+    serializedVersion: 0
+    m_Bits: 4294967295
+  m_ShadowRenderingLayersMask:
+    serializedVersion: 0
+    m_Bits: 4294967295
+  m_Version: 4
+  m_LightLayerMask: 1
+  m_ShadowLayerMask: 1
+  m_RenderingLayers: 1
+  m_ShadowRenderingLayers: 1
+--- !u!108 &1697248655
+Light:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1697248653}
+  m_Enabled: 0
+  serializedVersion: 13
+  m_Type: 2
+  m_Color: {r: 0.9748427, g: 0.7127681, b: 0.15634255, a: 1}
+  m_Intensity: 1
+  m_Range: 2
+  m_SpotAngle: 30
+  m_InnerSpotAngle: 21.80208
+  m_CookieSize2D: {x: 0.5, y: 0.5}
+  m_Shadows:
+    m_Type: 0
+    m_Resolution: -1
+    m_CustomResolution: -1
+    m_Strength: 1
+    m_Bias: 0.05
+    m_NormalBias: 0.4
+    m_NearPlane: 0.2
+    m_CullingMatrixOverride:
+      e00: 1
+      e01: 0
+      e02: 0
+      e03: 0
+      e10: 0
+      e11: 1
+      e12: 0
+      e13: 0
+      e20: 0
+      e21: 0
+      e22: 1
+      e23: 0
+      e30: 0
+      e31: 0
+      e32: 0
+      e33: 1
+    m_UseCullingMatrixOverride: 0
+  m_Cookie: {fileID: 0}
+  m_DrawHalo: 0
+  m_Flare: {fileID: 0}
+  m_RenderMode: 0
+  m_CullingMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_RenderingLayerMask: 1
+  m_Lightmapping: 4
+  m_LightShadowCasterMode: 0
+  m_AreaSize: {x: 1, y: 1}
+  m_BounceIntensity: 1
+  m_ColorTemperature: 6570
+  m_UseColorTemperature: 0
+  m_BoundingSphereOverride: {x: 0, y: 0, z: 0, w: 0}
+  m_UseBoundingSphereOverride: 0
+  m_UseViewFrustumForShadowCasterCull: 1
+  m_ForceVisible: 0
+  m_ShapeRadius: 0
+  m_ShadowAngle: 0
+  m_LightUnit: 1
+  m_LuxAtDistance: 1
+  m_EnableSpotReflector: 1
+--- !u!4 &1697248656
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1697248653}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 557123396}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1816273533
 GameObject:
   m_ObjectHideFlags: 0
