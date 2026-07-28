@@ -23,30 +23,41 @@ namespace Lotec.Lighting {
 
         public int PointLightCount { get; private set; }
         public int SpotLightCount { get; private set; }
+        /// <summary>Supported lights the last <see cref="Collect"/> had to leave out because the
+        /// point/spot budget was already full. Non-zero means those lights light nothing at all, so the
+        /// caller should report it rather than let it pass as a shading bug.</summary>
+        public int DroppedLights { get; private set; }
         public readonly Vector4[] PointLightPositionRanges = new Vector4[MaxPointLights];
         public readonly Vector4[] PointLightColors = new Vector4[MaxPointLights];
         public readonly Vector4[] SpotLightPositionRanges = new Vector4[MaxSpotLights];
         public readonly Vector4[] SpotLightDirectionAngleScales = new Vector4[MaxSpotLights];
         public readonly Vector4[] SpotLightColorAngleOffsets = new Vector4[MaxSpotLights];
 
-        /// <summary>Fill the arrays from the supported point/spot lights in the list.</summary>
+        /// <summary>Fill the arrays from the supported point/spot lights in the list, in list order -
+        /// so the caller controls priority by ordering (see LocalLightsPublisher.GatherLights). Lights
+        /// past the budget are counted in <see cref="DroppedLights"/> rather than silently ignored.</summary>
         public void Collect(IReadOnlyList<Light> lights) {
             PointLightCount = 0;
             SpotLightCount = 0;
+            DroppedLights = 0;
 
             if (lights == null)
                 return;
 
             for (int i = 0; i < lights.Count; i++) {
                 Light light = lights[i];
-                if (IsSupportedPointLight(light) && PointLightCount < MaxPointLights) {
+                if (IsSupportedPointLight(light)) {
+                    // Deliberately no early break once both budgets fill: the rest of the list still has
+                    // to be walked to count what's being dropped, and these lists hold a handful of items.
+                    if (PointLightCount >= MaxPointLights) { DroppedLights++; continue; }
                     Vector3 position = light.transform.position;
                     PointLightPositionRanges[PointLightCount] = new Vector4(position.x, position.y, position.z, light.range);
                     // FinalColor, not color * intensity: see LightExtensions - the raw colour is sRGB and
                     // would light the scene in the wrong hue next to URP's own (already converted) lights.
                     PointLightColors[PointLightCount] = light.FinalColor();
                     PointLightCount++;
-                } else if (IsSupportedSpotLight(light) && SpotLightCount < MaxSpotLights) {
+                } else if (IsSupportedSpotLight(light)) {
+                    if (SpotLightCount >= MaxSpotLights) { DroppedLights++; continue; }
                     Vector3 position = light.transform.position;
                     Vector3 direction = light.transform.forward;
                     float outerCos = Mathf.Cos(light.spotAngle * Mathf.Deg2Rad * 0.5f);
@@ -61,9 +72,6 @@ namespace Lotec.Lighting {
                     SpotLightColorAngleOffsets[SpotLightCount] = new Vector4(color.x, color.y, color.z, angleOffset);
                     SpotLightCount++;
                 }
-
-                if (PointLightCount >= MaxPointLights && SpotLightCount >= MaxSpotLights)
-                    break;
             }
         }
 

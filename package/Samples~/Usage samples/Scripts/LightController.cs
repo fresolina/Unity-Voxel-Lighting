@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -7,25 +8,39 @@ namespace Lotec.Lighting.Samples {
     /// flashlight/candle, and digits 1-9 set the enabled light's intensity. This is input only and has
     /// no UI - the GI / <see cref="LightingManager"/> settings (and their panel) live in
     /// <see cref="LightingController"/>.
+    ///
+    /// The lights are resolved at RUNTIME rather than being pure serialized references. This controller
+    /// lives in the bootstrap scene, and a light that belongs to a LEVEL scene (the Playground's candle,
+    /// listed on that level's <see cref="LocalLightsProvider"/>) cannot be referenced from here - Unity
+    /// has no cross-scene references, so the field would just serialize as null. The serialized fields
+    /// are therefore optional overrides for same-scene lights, and anything still missing is looked up
+    /// once the level is loaded, and looked up again if that level is swapped for another.
     /// </summary>
     public class LightController : MonoBehaviour {
+        [Tooltip("Optional. Leave empty to resolve at runtime from the published local lights - " +
+                 "required for a light that lives in a level scene rather than this one.")]
         [SerializeField] Light _flashlight;
+        [Tooltip("Optional. Leave empty to resolve at runtime from the published local lights - " +
+                 "required for a light that lives in a level scene rather than this one.")]
         [SerializeField] Light _candle;
         [SerializeField] float _mouseRotationSpeed = 120f;
+
+        // How often to retry while a light is still missing. The lookup only runs while something is
+        // unresolved, but its fallback scans the scene, so it must not run every frame during the wait.
+        const float ResolveRetryInterval = 0.25f;
+
+        static readonly List<Light> s_publishedLights = new List<Light>();
 
         Light _sunLight;
         Keyboard _keyboard;
         Mouse _mouse;
         float _xRotation;
         float _yRotation;
+        float _nextResolveTime;
 
         void Awake() {
             InputSystem.onDeviceChange += HandleDeviceChange;
             RefreshInputDevices();
-        }
-
-        void OnValidate() {
-            EnsureSerializedReferences();
         }
 
         void Start() {
@@ -40,6 +55,8 @@ namespace Lotec.Lighting.Samples {
             if (LightingController.IsTextInputFocused || BufferGiDebugUi.IsTextInputFocused) {
                 return;
             }
+
+            EnsureLightsResolved();
 
             if (_keyboard.fKey.wasPressedThisFrame) {
                 ToggleFlashlight();
@@ -79,7 +96,37 @@ namespace Lotec.Lighting.Samples {
             RefreshInputDevices();
         }
 
-        void EnsureSerializedReferences() {
+        // Fill in whichever light isn't resolved yet. A destroyed light compares equal to null, so a
+        // level swap re-resolves by itself: the old candle dies with its scene and the next lookup finds
+        // the new one. Costs nothing once both are found.
+        void EnsureLightsResolved() {
+            if (_flashlight != null && _candle != null) {
+                return;
+            }
+
+            if (Time.unscaledTime < _nextResolveTime) {
+                return;
+            }
+
+            _nextResolveTime = Time.unscaledTime + ResolveRetryInterval;
+
+            // Ask the lighting system what it is actually PUBLISHING - the publisher's own list plus
+            // every loaded level's LocalLightsProvider. That is the set these keys are meant to drive,
+            // and unlike a scene scan it cannot pick up a baked light (a fireplace is a point light too,
+            // but it is voxelized into the GI and has no runtime switch).
+            LocalLightsPublisher publisher = LocalLightsPublisher.Instance;
+            if (publisher != null) {
+                publisher.GatherLights(s_publishedLights);
+                if (_flashlight == null) {
+                    _flashlight = FirstOfType(s_publishedLights, LightType.Spot);
+                }
+
+                if (_candle == null) {
+                    _candle = FirstOfType(s_publishedLights, LightType.Point);
+                }
+            }
+
+            // No publisher at all (a sample scene opened on its own): fall back to a scene scan.
             if (_flashlight == null) {
                 _flashlight = FindLight(LightType.Spot);
             }
@@ -90,23 +137,43 @@ namespace Lotec.Lighting.Samples {
         }
 
         void ToggleFlashlight() {
+            if (_flashlight == null) {
+                return;
+            }
+
             _flashlight.enabled = !_flashlight.enabled;
         }
 
         void ToggleCandle() {
+            if (_candle == null) {
+                return;
+            }
+
             _candle.enabled = !_candle.enabled;
         }
 
         void SetEnabledLightIntensity(float intensity) {
             float clampedIntensity = Mathf.Max(0f, intensity);
 
-            if (_flashlight.enabled) {
+            if (_flashlight != null && _flashlight.enabled) {
                 _flashlight.intensity = clampedIntensity;
             }
 
-            if (_candle.enabled) {
+            if (_candle != null && _candle.enabled) {
                 _candle.intensity = clampedIntensity;
             }
+        }
+
+        // The published lights include switched-OFF ones (a provider lists them whether they burn or
+        // not), which is exactly right here: the candle starts disabled and G is what turns it on.
+        static Light FirstOfType(List<Light> lights, LightType lightType) {
+            for (int i = 0; i < lights.Count; i++) {
+                if (lights[i] != null && lights[i].type == lightType) {
+                    return lights[i];
+                }
+            }
+
+            return null;
         }
 
         void SyncRotationFromSunLight() {
@@ -153,11 +220,14 @@ namespace Lotec.Lighting.Samples {
             return angle;
         }
 
+        // Last-resort scan, used only when there is no LocalLightsPublisher to ask. Includes inactive
+        // objects because the light this is looking for may well be switched off - that is the state F/G
+        // exist to change. Skips the sun, which CTRL+mouse owns.
         Light FindLight(LightType lightType) {
-            Light[] sceneLights = FindObjectsByType<Light>(FindObjectsInactive.Exclude);
+            Light[] sceneLights = FindObjectsByType<Light>(FindObjectsInactive.Include);
             for (int i = 0; i < sceneLights.Length; i++) {
                 Light candidate = sceneLights[i];
-                if (candidate == null || candidate.type != lightType || candidate == _sunLight) {
+                if (candidate == null || candidate.type != lightType) {
                     continue;
                 }
 
