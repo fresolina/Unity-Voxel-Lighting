@@ -60,7 +60,11 @@ namespace Lotec.Lighting.Editor {
             // same guarantee so the two bakes can't drift apart.
             RefreshBakeBounds(gi, fields);
 
-            // Bake folder is scene-adjacent; derive it from any volume in the scene.
+            // Membership of the BAKED LIGHTS, onto each field volume's VoxelLights. Same reason as the
+            // bounds above - it is serialized authoring data the runtime depends on - but here the
+            // dependency is absolute: Light.lightmapBakeType does not exist in a player, so if this list
+            // isn't written now, nothing downstream can ever work out which lights are Baked.
+            int bakedLights = RefreshBakedLights(gi, fields);
             VoxelVolume folderVolume = gi.Volume != null ? gi.Volume : FindAnyDetailedVolume(fields);
             if (folderVolume == null) {
                 Debug.LogError("Buffer GI bake: need at least one VoxelVolume (the active volume or a detailed field with a VoxelVolume sibling) to resolve the save folder.", gi);
@@ -110,7 +114,61 @@ namespace Lotec.Lighting.Editor {
                 list.GetArrayElementAtIndex(i).objectReferenceValue = assets[i];
             }
             fieldsSo.ApplyModifiedProperties();
-            Debug.Log($"Buffer GI: baked {assets.Count} field voxelization asset(s) to '{folder}', assigned to '{fields.name}'.", gi);
+            Debug.Log($"Buffer GI: baked {assets.Count} field voxelization asset(s) to '{folder}', assigned to " +
+                      $"'{fields.name}'; bound {bakedLights} baked light(s) to their volumes' Voxel Lights.", gi);
+        }
+
+        // Fill each field volume's VoxelLights with the Baked/Mixed POINT lights inside its bounds,
+        // adding the component where it is missing (the other per-volume binders are auto-added by their
+        // bakers the same way). Returns how many lights were bound, for the bake log.
+        //
+        // The lights themselves are NOT stored in the bake assets - the runtime re-stamps them from these
+        // lists on every upload, which is what makes them switchable in a player. So this list is the
+        // whole handover from Editor to runtime, and it is written on every bake rather than only when
+        // empty: a light that was retyped, moved out of the volume or deleted has to leave it again.
+        static int RefreshBakedLights(BufferGiUpdater gi, BufferGiFields fields) {
+            Light[] candidates = Object.FindObjectsByType<Light>(FindObjectsInactive.Include);
+            var seen = new HashSet<VoxelVolume>();
+            int bound = FillVolumeLights(gi.Volume, candidates, seen);
+            foreach (MeshBounds field in fields.DetailedFields) {
+                if (field == null) continue;
+                bound += FillVolumeLights(field.GetComponent<VoxelVolume>(), candidates, seen);
+            }
+            // The coarse field only has a volume of its own in some setups; when it doesn't, its lights
+            // still arrive - the runtime injects every VoxelLights in the scene into BOTH fields.
+            if (fields.CoarseField != null)
+                bound += FillVolumeLights(fields.CoarseField.GetComponent<VoxelVolume>(), candidates, seen);
+            return bound;
+        }
+
+        static int FillVolumeLights(VoxelVolume vv, Light[] candidates, HashSet<VoxelVolume> seen) {
+            if (vv == null || !seen.Add(vv)) return 0;
+
+            var inside = new List<Light>();
+            Bounds bounds = vv.Bounds;
+            foreach (Light light in candidates) {
+                if (!LightEmissionBake.IsBakeCandidate(light)) continue;
+                // The voxel a light lands in is what gets stamped, so containment in the volume's padded
+                // box is exactly the right test - outside it there is no voxel to carry the light.
+                if (!bounds.Contains(light.transform.position)) continue;
+                inside.Add(light);
+            }
+
+            VoxelLights holder = vv.GetComponent<VoxelLights>();
+            if (holder == null) {
+                if (inside.Count == 0) return 0; // don't litter every volume with an empty component
+                holder = Undo.AddComponent<VoxelLights>(vv.gameObject);
+            }
+            var so = new SerializedObject(holder);
+            SerializedProperty list = so.FindProperty("_lights");
+            list.ClearArray();
+            for (int i = 0; i < inside.Count; i++) {
+                list.InsertArrayElementAtIndex(i);
+                list.GetArrayElementAtIndex(i).objectReferenceValue = inside[i];
+            }
+            so.ApplyModifiedProperties(); // records Undo
+            EditorUtility.SetDirty(holder);
+            return inside.Count;
         }
 
         // Re-derive (and persist) the bounds every capture path reads:

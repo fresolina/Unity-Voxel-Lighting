@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace Lotec.Lighting {
     /// <summary>
@@ -57,10 +58,19 @@ namespace Lotec.Lighting {
         }
 
         /// <summary>Whether a renderer participates in bounds and bakes/voxelization. One shared
-        /// predicate so bounds and bake content always agree.</summary>
+        /// predicate so bounds and bake content always agree.
+        ///
+        /// <b>Cast Shadows = Off is the opt-out.</b> Every field baked here IS a light-occlusion
+        /// structure (the SDF and occlusion fields are shadows; a voxel occupied in the buffer GI stops
+        /// GI rays), so a renderer that casts no shadow must not become solid in them either. That is
+        /// what lets a VFX card - a fire, a glow, a decal quad - sit inside the volume without walling
+        /// it off: it neither blocks light nor stretches the bounds. Anything meant to occlude keeps
+        /// the default On.</summary>
         public static bool IsBakeEligible(Renderer renderer) {
             GameObject gameObject = renderer.gameObject;
-            return gameObject.activeInHierarchy && gameObject.isStatic;
+            return gameObject.activeInHierarchy
+                && gameObject.isStatic
+                && renderer.shadowCastingMode != ShadowCastingMode.Off;
         }
     }
 }

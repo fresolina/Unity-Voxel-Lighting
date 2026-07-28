@@ -173,4 +173,16 @@ uint BgiSurfaceAirDist(uint word) {
     return (word >> 16) & 0xffu;
 }
 
+// Flags in bits 24-31 (the reserved block). EMISSIVE marks a voxel that is a LIGHT rather than a
+// surface: a Unity Light set to Baked inside the field is voxelized into one emissive voxel (see
+// LightEmissionBake). It radiates in EVERY direction - a point light has no face - so the gather
+// skips the front-face test a real surface takes. Anything that rewrites the surface word (i.e.
+// CSBuildSurface) must carry these bits across.
+#define BGI_SURFACE_FLAGS_MASK 0xff000000u
+#define BGI_SURFACE_FLAG_EMISSIVE 0x01000000u
+
+bool BgiSurfaceIsEmissive(uint word) {
+    return (word & BGI_SURFACE_FLAG_EMISSIVE) != 0u;
+}
+
 #endif // LOTEC_BUFFER_GI_FIELD_INCLUDED

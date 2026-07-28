@@ -22,6 +22,9 @@ namespace Lotec.Lighting {
         public bool bakedNormals;  // normal source the bake used (mesh vs gradient+thicken)
         public Vector3 origin;     // grid mapping this field was rasterized against (world min)
         public Vector3 size;       // grid mapping this field was rasterized against (world size)
+        // NOTE: baked LIGHTS are not stored here. They are re-stamped from the scene's VoxelLights lists
+        // every time this asset is uploaded, which is what lets one be switched off at runtime (and
+        // retuned without a re-bake); freezing them into `material` would rule both out.
         [HideInInspector] public uint[] material; // one field slice, VoxelCount words
         [HideInInspector] public uint[] surface;  // one field slice, VoxelCount words
     }
