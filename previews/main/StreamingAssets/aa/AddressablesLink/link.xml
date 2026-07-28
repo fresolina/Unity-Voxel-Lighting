@@ -5,6 +5,7 @@
   <assembly fullname="Lotec.Lighting, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
     <type fullname="Lotec.Lighting.BufferGiBakeAsset" preserve="all" />
     <type fullname="Lotec.Lighting.BufferGiFields" preserve="all" />
+    <type fullname="Lotec.Lighting.LocalLightsProvider" preserve="all" />
     <type fullname="Lotec.Lighting.MeshBounds" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelDirectionSet" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelOcclusionBitmask" preserve="all" />
