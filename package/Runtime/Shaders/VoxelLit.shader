@@ -13,6 +13,13 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
         _EmissionMap ("Emission Map", 2D) = "white" {}
         [HDR] _EmissionColor ("Emission Color", Color) = (1,1,1,1)
         [ToggleOff(_RECEIVE_LOCAL_SHADOWS_OFF)] _ReceiveLocalShadows ("Receive Local Shadows", Float) = 1.0
+        // Alpha cut (foliage). URP's own property names on purpose: the buffer-GI voxelizer reads
+        // _AlphaClip / _Cutoff off the scene material (BufferGiUpdater.GetMaterialVoxelProps), so a
+        // cutout material leaves its voxels EMPTY - leaves don't occupy or block GI rays - with no
+        // extra plumbing. _Cull defaults to Back; foliage cards want Off (two-sided).
+        [Toggle(_ALPHATEST_ON)] _AlphaClip ("Alpha Clip", Float) = 0.0
+        _Cutoff ("Alpha Cutoff", Range(0,1)) = 0.5
+        [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull", Float) = 2
     }
 
     SubShader
@@ -23,6 +30,8 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
         {
             Name "ForwardLit"
             Tags { "LightMode" = "UniversalForward" }
+
+            Cull [_Cull]
 
             HLSLPROGRAM
             // 4.5 (SM5.0) required: the buffer GI reads StructuredBuffers in the fragment stage
@@ -35,6 +44,10 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             #pragma shader_feature_local _RECEIVE_LOCAL_SHADOWS_OFF
             // Per-material: emissive contribution (the [Toggle] _Emission property).
             #pragma shader_feature_local _EMISSION_ON
+            // Per-material: alpha cut. A keyword, never a uniform branch - clip() takes the WHOLE
+            // kernel off early-Z (the depth write moves behind the fragment), and this shader is
+            // occupancy/early-Z bound, so opaque materials must not compile the discard in at all.
+            #pragma shader_feature_local_fragment _ALPHATEST_ON
 
             // URP
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
@@ -79,6 +92,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
                 half4 _EmissionColor;
                 half _ReceiveLocalShadows;
+                half _Cutoff;
             CBUFFER_END
 
             // Scene-wide exposure as a LINEAR multiplier - exp2(EV) precomputed on the CPU by
@@ -155,11 +169,19 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
 
             half4 frag(v2f IN) : SV_Target
             {
+                // Base map first, so the alpha cut can kill the fragment before any lighting,
+                // normal-map or GI work is done for it.
+                half4 baseTex = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv);
+                #if defined(_ALPHATEST_ON)
+                    // Foliage cutout. Same alpha as URP Lit (base color x base map), so a material
+                    // authored for URP's cutout surface type cuts identically here.
+                    clip(baseTex.a * _BaseColor.a - _Cutoff);
+                #endif
+
                 Light light = GetMainLight();
                 half3 N = GetNormal(IN);
 
-                half3 texAlbedo = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).rgb;
-                half3 albedo = _BaseColor.rgb * texAlbedo;
+                half3 albedo = _BaseColor.rgb * baseTex.rgb;
 
                 // Main light. Under the buffer GI, BgiSampleFaceAoShadow is the SOLE authority for the
                 // main-light sun shadow (Off = no shadow, Baked = baked value, Sdf = SDF raymarch) and
@@ -223,7 +245,12 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     lit += (half)((ign - 0.5) * (1.0 / 255.0));
                 #endif
 
-                return half4(lit, _BaseColor.a);
+                // Opaque pass (no Blend, RenderType=Opaque): the output alpha is never used for
+                // blending, it just lands in the target's alpha channel - which the XR compositor
+                // and alpha-reading post-FX do look at. So write 1, never _BaseColor.a: under
+                // _ALPHATEST_ON that value is a live cutoff input the author tunes, and leaking it
+                // into the eye buffer would make a cut adjustment silently change compositing.
+                return half4(lit, 1.0h);
             }
             ENDHLSL
         }
