@@ -205,6 +205,24 @@ namespace Lotec.Lighting {
         // Field bounds the current voxelization used; SyncBakeInputs re-voxelizes when they change
         // (same-volume geometry edit / reassigned coarse field), so display/solve tweaks don't.
         Vector3 _bakedFineOrigin, _bakedFineSize, _bakedCoarseOrigin, _bakedCoarseSize;
+        // The VoxelLights holders the baked-light injection reads. Scene-wide (the coarse field spans
+        // every detailed volume, so it has to carry their lights too); refreshed on a volume switch and
+        // on every voxelize.
+        readonly List<VoxelLights> _lightHolders = new List<VoxelLights>();
+        // On/off + colour/intensity of those lights as last INJECTED. A change re-dispatches the inject
+        // instead of re-voxelizing, which is sound because albedo - hence occupancy and everything
+        // derived from it - is toggle-invariant by construction (see LightEmissionBake.Inject).
+        int _bakedLightState;
+#if UNITY_EDITOR
+        // Membership + positions as last VOXELIZED, plus the poll clock for it. Editor-only: unlike the
+        // state above, a light that was added or moved needs cells re-stamped that the inject cannot
+        // un-stamp, so it costs a full re-voxelization - an authoring action, and at runtime a light that
+        // moves is a realtime light, not a baked one. Sampled a few times a second (nothing raises an
+        // event for it, and the refresh is a scene-wide search) rather than every pumped editor frame.
+        const double BakedLightPollInterval = 0.5;
+        int _bakedLightLayout;
+        double _nextBakedLightPoll;
+#endif
         // 1-bit/voxel occupancy bitfield (uint packs 32 voxels): 4 KB per field, the hot solidity
         // data every DDA step / gate / fragment tap reads. Derived from _Material by CSBuildSurface.
         ComputeBuffer _occupancyBuffer;
@@ -233,6 +251,7 @@ namespace Lotec.Lighting {
         int _buildOccupancyKernel = -1;
         int _buildSurfaceKernel = -1;
         int _buildAirDistanceKernel = -1;
+        int _injectBakedLightsKernel = -1;
         // Air-distance relaxation passes at bake (one voxel of city-block reach each). MUST match
         // BGI_MAX_AIR_DIST in BufferGiField.hlsl so the whole capped field converges.
         const int AirDistancePasses = 5;
@@ -246,6 +265,7 @@ namespace Lotec.Lighting {
 #endif
         bool _hasLoggedMissingReferences;
         bool _warnedBakeAssetMismatch; // warn once per change, not per voxelize attempt
+        bool _warnedBakedLightAlsoRealtime; // same, for a light that is both baked and a realtime local light
         // Progressive accumulation in SAMPLES (rays): _collectedSamples = total rays gathered since the last
         // change (0 = just changed), accumulated by samplesPerFrame each solve and capped at _maxSamples
         // (the ray budget). Quality depends on total rays, not frames - samplesPerFrame just spends the
@@ -592,6 +612,7 @@ namespace Lotec.Lighting {
                 // is the active volume itself). Null for a fine-only, runtime-voxelized level.
                 _fields = BufferGiFields.Find(active);
                 _hasLoggedMissingReferences = false;
+                _warnedBakedLightAlsoRealtime = false; // new level: re-check its baked lights against the realtime set
                 if (warmSwitch) {
                     _materialBaked = false;
                     _resetFineField = true; // clear + re-fill the fine field for the new bounds
@@ -627,6 +648,9 @@ namespace Lotec.Lighting {
             if (!_materialBaked) {
                 Voxelize();
             }
+            // Baked lights switched on/off (or retuned) since the last inject. Deliberately after the
+            // voxelize and before the solve gate, so a switch reaches the field in the same frame.
+            SyncBakedLightState();
             if (_resetAllFields) {
                 // Cold start (fresh buffers, or this component was just re-enabled by a GI-method
                 // toggle): zero every field so the solve refills from black instead of stale/undefined
@@ -809,6 +833,7 @@ namespace Lotec.Lighting {
             _buildOccupancyKernel = _computeShader.FindKernel("CSBuildOccupancy");
             _buildSurfaceKernel = _computeShader.FindKernel("CSBuildSurface");
             _buildAirDistanceKernel = _computeShader.FindKernel("CSBuildAirDistance");
+            _injectBakedLightsKernel = _computeShader.FindKernel("CSInjectBakedLights");
 
             // uint material, uint2 radiance/irradiance. Sized for all fields (concatenated slices).
             _materialBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));
@@ -836,6 +861,21 @@ namespace Lotec.Lighting {
             bool changed = _bakedNormals != _bakedNormalsBaked
                 || !NearlyEqual(_bakedFineOrigin, GridOrigin) || !NearlyEqual(_bakedFineSize, GridSize)
                 || !NearlyEqual(_bakedCoarseOrigin, CoarseOrigin) || !NearlyEqual(_bakedCoarseSize, CoarseSize);
+#if UNITY_EDITOR
+            // The baked lights' LAYOUT (which lights there are, and where) is a voxelization input too,
+            // and nothing raises an event when one is added, moved or removed - so poll a cheap hash of
+            // it while authoring. Edit mode only, because this forces the whole voxelization again: the
+            // inject can stamp a light's new cell but never un-stamp the one it left behind. Switching a
+            // light on or off, or retuning it, needs none of that - SyncBakedLightState covers those, at
+            // runtime too. Re-collecting here is also how a VoxelLights added since the last voxelize
+            // (or a light dragged into an existing list) gets noticed at all.
+            if (!changed && !Application.isPlaying
+                && UnityEditor.EditorApplication.timeSinceStartup >= _nextBakedLightPoll) {
+                _nextBakedLightPoll = UnityEditor.EditorApplication.timeSinceStartup + BakedLightPollInterval;
+                LightEmissionBake.CollectHolders(_lightHolders);
+                changed = LightEmissionBake.LayoutHash(_lightHolders) != _bakedLightLayout;
+            }
+#endif
             if (changed) {
                 _materialBaked = false;
                 _warnedBakeAssetMismatch = false; // inputs changed: re-evaluate (and re-report) the bake match
@@ -886,6 +926,9 @@ namespace Lotec.Lighting {
         // derive passes.
         public void Voxelize() {
             if (_voxelizeShader == null || _materialBuffer == null) return;
+            // Refresh the baked-light holders before either path stamps them: a level may have loaded, or
+            // the bake button may have just filled a list.
+            LightEmissionBake.CollectHolders(_lightHolders);
             if (TryLoadBakeAssets()) return;
             VoxelizeScene();
         }
@@ -927,6 +970,11 @@ namespace Lotec.Lighting {
             if (coarse != null) CopyFieldSlice(coarse, CoarseField * VoxelCount);
             _materialBuffer.SetData(_uploadMaterial);
             _surfaceBuffer.SetData(_uploadSurface); // mesh-mode normals; derive rebuilds the rest
+            // The assets carry GEOMETRY only - the baked lights are re-stamped here, live, from the
+            // scene's VoxelLights lists. That is what lets a player switch one off (and an author retune
+            // one without re-baking); freezing them into the asset would rule out both, and would make a
+            // light that moved since the bake burn in two places at once.
+            InjectBakedLightsAllFields();
             RunDerivePasses();
             return true;
         }
@@ -1068,6 +1116,8 @@ namespace Lotec.Lighting {
             Graphics.ExecuteCommandBuffer(cmd);
             cmd.Release();
             RenderTexture.ReleaseTemporary(dummy);
+            // No baked-light injection: the asset this capture reads back stores GEOMETRY only, and the
+            // lights are stamped on top of it every time it is uploaded (see TryLoadBakeAssets).
         }
 
         // GPU 3-axis rasterization of the volume's mesh geometry into each field's material slice.
@@ -1114,7 +1164,82 @@ namespace Lotec.Lighting {
             cmd.Release();
             RenderTexture.ReleaseTemporary(dummy);
 
+            // Baked lights become emissive voxels in each field, after the raster (geometry must not
+            // overwrite a light voxel) and before the derive passes (which turn _Material into the
+            // occupancy bitfield, so the light voxel comes out solid + emissive like any other emitter).
+            InjectBakedLightsAllFields();
+
             RunDerivePasses();
+        }
+
+        // Stamp the VoxelLights' baked point lights into BOTH fields, each against its own grid: a light
+        // inside a detailed volume has to burn in the coarse field too, or it would wink out the moment
+        // the camera leaves the detailed box. Each inject drops whatever falls outside its grid.
+        void InjectBakedLightsAllFields() {
+            InjectBakedLights(GridOrigin, VoxelSize, FineField * VoxelCount);
+            if (HasCoarse) InjectBakedLights(CoarseOrigin, CoarseVoxelSize, CoarseField * VoxelCount);
+        }
+
+        // Stamp the baked point lights inside this field's grid into its material slice as emissive
+        // voxels (see LightEmissionBake). One dispatch per 16 lit voxels.
+        void InjectBakedLights(Vector3 origin, Vector3 voxelSize, int fieldOffset) {
+            if (_injectBakedLightsKernel < 0 || _materialBuffer == null || _surfaceBuffer == null) return;
+            // The kernel's BgiSlot index math reads the grid constants, and the editor capture path
+            // (CaptureFieldToAsset) never goes through Update - so bind them here rather than assume.
+            BindGridConstantsToCompute();
+            _computeShader.SetInt(s_fieldOffset, fieldOffset);
+            LightEmissionBake.Inject(_computeShader, _injectBakedLightsKernel,
+                _materialBuffer, _surfaceBuffer, _lightHolders, origin, voxelSize, Grid);
+        }
+
+        // The runtime light switch. Re-inject when a baked light's on/off state (or colour/intensity)
+        // changed: only the EMISSION byte of its voxel depends on that - LightEmissionBake stamps the
+        // albedo from every listed light, switched on or not - so the occupancy bitfield and the surface
+        // + air-distance fields built from it are already correct and no derive pass has to rerun. The
+        // whole cost is one 64-thread dispatch per field, plus re-solving the field.
+        //
+        // Polled rather than event-driven: nothing raises an event when a Light component is ticked off,
+        // and this walks a handful of serialized references, so checking every frame is cheaper than the
+        // machinery needed to avoid checking.
+        void SyncBakedLightState() {
+            if (!_materialBaked) return;
+            int state = LightEmissionBake.StateHash(_lightHolders);
+            if (state == _bakedLightState) return;
+            _bakedLightState = state;
+            InjectBakedLightsAllFields();
+            // Spend the ray budget again. The solve is a progressive average, so without this a settled
+            // field would go on displaying the light that was just switched off - and an idle one would
+            // never even re-read the new emission. Same reset a moved sun takes.
+            _collectedSamples = 0;
+        }
+
+        // A light that is BOTH baked into the voxelization and published as a realtime local light is
+        // counted twice: its emissive voxel lights the room through the solve while the fragment path
+        // adds the same light again directly. Report it once - it is an authoring mistake, and which of
+        // the two lists to drop it from is not a call this component can make.
+        void WarnIfBakedLightAlsoRealtime() {
+            if (_warnedBakedLightAlsoRealtime) return;
+            LocalLightsPublisher publisher = LocalLightsPublisher.Instance;
+            if (publisher == null) return;
+            IReadOnlyList<Light> realtime = publisher.AdditionalLights;
+            if (realtime == null) return;
+            foreach (VoxelLights holder in _lightHolders) {
+                if (holder == null) continue;
+                IReadOnlyList<Light> baked = holder.Lights;
+                for (int i = 0; i < baked.Count; i++) {
+                    if (baked[i] == null) continue;
+                    for (int j = 0; j < realtime.Count; j++) {
+                        if (realtime[j] != baked[i]) continue;
+                        _warnedBakedLightAlsoRealtime = true;
+                        Debug.LogWarning(
+                            $"Buffer GI: light '{baked[i].name}' is baked into the voxelization (listed on " +
+                            $"'{holder.name}'s Voxel Lights) AND published as a realtime local light by " +
+                            $"'{publisher.name}'. It lights the scene twice - remove it from one of the two.",
+                            baked[i]);
+                        return;
+                    }
+                }
+            }
         }
 
         // Bake-time derive passes (both fields; un-voxelized coarse slice packs to zeros):
@@ -1131,7 +1256,17 @@ namespace Lotec.Lighting {
             _bakedNormalsBaked = _bakedNormals;
             _bakedFineOrigin = GridOrigin; _bakedFineSize = GridSize;
             _bakedCoarseOrigin = CoarseOrigin; _bakedCoarseSize = CoarseSize;
+            // The baked lights were just injected, so record their state: without this the per-frame
+            // switch check would immediately re-inject what this voxelization already stamped.
+            _bakedLightState = LightEmissionBake.StateHash(_lightHolders);
+#if UNITY_EDITOR
+            _bakedLightLayout = LightEmissionBake.LayoutHash(_lightHolders);
+#endif
+            WarnIfBakedLightAlsoRealtime();
             _materialBaked = true;
+            // A fresh voxelization invalidates the solved field (new geometry, or a baked light that
+            // moved/changed): spend the ray budget again, or a settled solve would idle on the old one.
+            _collectedSamples = 0;
         }
 
         // Pack one field's _Material occupancy into the 1-bit/voxel _Occupancy bitfield (1024 words,
@@ -1169,9 +1304,10 @@ namespace Lotec.Lighting {
         // Rasterize a volume's geometry into one field's slice. The voxelize shader reads the grid +
         // field offset as globals (BgiWorldToGrid / BgiSlot), so set them before the draws.
         void VoxelizeFieldInto(CommandBuffer cmd, Transform root, Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset) {
-            // Same eligibility as the volume bounds / SDF bake (active + static): inactive meshes
-            // must not light the scene, and non-static ones wouldn't track movement anyway (the
-            // voxelization only reruns on a re-bake).
+            // Same eligibility as the volume bounds / SDF bake (active + static + casts shadows):
+            // inactive meshes must not light the scene, non-static ones wouldn't track movement anyway
+            // (the voxelization only reruns on a re-bake), and a Cast Shadows = Off renderer is a VFX
+            // card that must not become a solid occluder (see MeshBounds.IsBakeEligible).
             MeshRenderer[] renderers = root.GetComponentsInChildren<MeshRenderer>();
             cmd.SetGlobalVector(s_gridOrigin, origin);
             cmd.SetGlobalVector(s_gridSize, size);
@@ -1258,8 +1394,9 @@ namespace Lotec.Lighting {
             emission8 = EncodeEmission8(emission);
         }
 
-        // Matches DecodeEmissionIntensityFrom8Bit in Math.hlsl (log2 encoding, max 1024).
-        static float EncodeEmission8(float intensity) {
+        // Matches DecodeEmissionIntensityFrom8Bit in Math.hlsl (log2 encoding, max 1024). Internal so
+        // LightEmissionBake encodes baked lights into the same packed material word.
+        internal static float EncodeEmission8(float intensity) {
             float clamped = Mathf.Clamp(intensity, 0f, EmissionIntensityMax);
             float encoded = Mathf.Log(1f + clamped, 2f) / Mathf.Log(1f + EmissionIntensityMax, 2f);
             return Mathf.Clamp01(Mathf.Round(encoded * 255f) / 255f);
@@ -1331,6 +1468,9 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
             _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            // Surface flags: the blur reads them only for SOLID voxels, to let a baked-light voxel take
+            // the air path instead of being zeroed into a hole (CSBlur).
+            _computeShader.SetBuffer(_blurKernel, s_surface, _surfaceBuffer);
             // Solid voxels' texture alpha = their baked sun visibility (radiance.w), so the fragment's
             // shadow tap isn't washed to lit by a constant near surfaces (see CSBlur).
             _computeShader.SetBuffer(_blurKernel, s_radiance, _radianceBuffer);

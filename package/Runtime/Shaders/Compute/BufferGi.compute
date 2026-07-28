@@ -16,12 +16,15 @@
 #pragma kernel CSBlur
 #pragma kernel CSInitFineFromCoarse
 #pragma kernel CSAverageLuminance
+#pragma kernel CSInjectBakedLights
 #pragma kernel CSBuildOccupancy
 #pragma kernel CSBuildSurface
 #pragma kernel CSBuildAirDistance
 
 #define MAX_POINT_LIGHTS 4
 #define MAX_SPOT_LIGHTS 4
+// Baked lights injected per CSInjectBakedLights dispatch (C# batches longer lists).
+#define MAX_BAKED_LIGHTS 16
 
 #include "../Includes/BufferGiField.hlsl"
 #include "../Includes/Math.hlsl"
@@ -36,6 +39,10 @@ RWStructuredBuffer<uint2> _IrradianceBlur; // spatially blurred irradiance, samp
 RWTexture3D<float4> _BgiIrradianceTexWrite;
 RWStructuredBuffer<uint>  _LuminanceResult; // [0] = encoded log-luminance sum, [1] = sample count (auto-exposure)
 StructuredBuffer<uint>    _Material;      // albedo/emission (voxelized by BufferGiVoxelize.shader); inject-only cold data
+// The same buffer as _Material, aliased as a UAV and bound ONLY by CSInjectBakedLights (which stamps
+// the Baked lights into the raster's output). Kept a separate declaration so _Material stays a
+// read-only SRV for CSInject, the hot per-frame reader.
+RWStructuredBuffer<uint>  _MaterialWrite;
 // Occupancy as a 1-bit-per-voxel bitfield (uint packs 32 voxels): 4 KB per field, so the WHOLE
 // occupancy of both fields is L1-resident and one cache line covers 512 voxels. This is what every
 // solidity test reads - most importantly the DDA inner loop, which previously fetched 4 bytes of
@@ -103,6 +110,12 @@ uint   _SpotLightCount;
 float4 _SpotLightPositionRange[MAX_SPOT_LIGHTS];
 float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
 float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
+// Baked lights for CSInjectBakedLights (bake time, and again on a runtime switch; see
+// LightEmissionBake.cs). C# resolves the world position to a grid cell and merges lights sharing one,
+// so each entry here is one VOXEL.
+uint   _BakedLightCount;
+float4 _BakedLightCell[MAX_BAKED_LIGHTS];           // xyz = grid cell, already in range (w unused)
+float4 _BakedLightAlbedoEmission[MAX_BAKED_LIGHTS]; // rgb = hue (peak channel 1), a = 8-bit log emission
 
 // Worst-case ray reach: the volume's world-space diagonal.
 #define BGI_MAX_RAY_DIST (length(_BgiGridSize))
@@ -428,9 +441,14 @@ half3 GatherRayRadiance(int3 fromCell, float3 dir, half reachBoost)
     int3 hit;
     half3 result;
     if (MarchOccupancy(fromCell, dir, BGI_MAX_RAY_DIST, hit)) {
-        float3 hitNormal = SurfaceNormal(hit);
+        // One load of the hit's surface word covers both the normal and the flags (SurfaceNormal
+        // would have fetched exactly this), so the emissive test below is free.
+        uint hitSurface = _Surface[BgiSlot((uint3)hit)];
+        float3 hitNormal = BgiSurfaceNormal(hitSurface);
         float3 faceN = (dot(hitNormal, hitNormal) > 1e-6) ? hitNormal : float3(0, 1, 0); // ambiguous -> up (matches inject)
-        if (dot(dir, faceN) < 0.0) {
+        // A baked-LIGHT voxel is an omnidirectional emitter, not a surface: it has no lit face, so it
+        // skips the front/back test and reads back its radiance from whichever side the ray came.
+        if (BgiSurfaceIsEmissive(hitSurface) || dot(dir, faceN) < 0.0) {
             half3 rad; half w;
             BgiUnpackRgbH(_Radiance[BgiSlot((uint3)hit)], rad, w);
             // Distance-weighted reach fill (t = hit distance / grid diagonal, clamped 0..1). Applied
@@ -521,18 +539,28 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     int3 cell = (int3)c;
     uint slot = _FieldOffset + i;
     bool solid = BgiSolidBit(slot);
+    uint surf = _Surface[slot];
 
     // FAR-AIR GATHER SKIP: an air voxel more than a few cells from any surface is never sampled - the
     // fragment reads only the air layer ~1 voxel in front of surfaces, and CSBlur reaches one further.
     // Its omnidirectional probe would be pure cost, so skip the ray casts entirely (its stale value is
-    // never read). Threshold covers the fragment's read reach + the blur's, with margin.
-    if (!solid && BgiSurfaceAirDist(_Surface[slot]) > BGI_GATHER_MAX_AIR_DIST) return;
+    // never read). Threshold covers the fragment's read reach + the blur's, with margin. Keyed on the
+    // real occupancy bit: bits 16-23 only hold an air distance for genuinely-air voxels.
+    if (!solid && BgiSurfaceAirDist(surf) > BGI_GATHER_MAX_AIR_DIST) return;
 
-    // For a solid voxel, gather rays into the front hemisphere around the surface normal (so they
+    // A baked-LIGHT voxel is solid so that it can emit and occlude, but it is NOT a surface - it is a
+    // lamp hanging in the air. Gather it like the air around it (omnidirectional probe + a real sun
+    // visibility) so the displayed field carries a plausible value where it sits. Treating it as a
+    // surface instead leaves a hole: CSBlur zeroes every solid voxel, and the fragment's default read
+    // is a raw trilinear tap with NO occupancy gate, so that zero bleeds a dark blotch onto any wall
+    // the light sits near. CSBlur applies the same exception.
+    bool surfaceVoxel = solid && !BgiSurfaceIsEmissive(surf);
+
+    // For a surface voxel, gather rays into the front hemisphere around the surface normal (so they
     // leave the surface into the room and never read it back). Ambiguous normal -> up, matching inject.
     float3 normal = float3(0, 1, 0);
-    if (solid) {
-        normal = SurfaceNormal(cell);
+    if (surfaceVoxel) {
+        normal = BgiSurfaceNormal(surf); // same word already loaded above
         if (dot(normal, normal) < 1e-6) normal = float3(0, 1, 0);
     }
 
@@ -547,9 +575,9 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     [loop]
     for (uint r = 0u; r < sampleCount; r++) {
         float2 noise = GiSampleNoise(c, _FrameCount, r);
-        float3 dir = solid ? CosineSampleHemisphere(normal, noise) // surface: front hemisphere
-                           : GetRandomDirectionFromNoise2(noise);  // air: omnidirectional probe
-        incoming += GatherRayRadiance(cell, dir, solid ? 1.0h : (half)_ReachBoost);
+        float3 dir = surfaceVoxel ? CosineSampleHemisphere(normal, noise) // surface: front hemisphere
+                                  : GetRandomDirectionFromNoise2(noise);  // air/light: omni probe
+        incoming += GatherRayRadiance(cell, dir, surfaceVoxel ? 1.0h : (half)_ReachBoost);
     }
     incoming *= rcp((float)sampleCount); // this frame's estimate = mean of sampleCount samples
 
@@ -569,7 +597,7 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     // A single centre ray yields one BIT per voxel, which no downstream filter can turn back into a
     // sub-voxel edge - that is the Baked mode's blockiness. See _BgiSunShadowMode for the estimators.
     half sunVis = 1.0h;
-    if (!solid) {
+    if (!surfaceVoxel) {
         if (_BgiSunShadowMode == BGI_SUNSHADOW_TEMPORAL)
             sunVis = lerp(oldSun, SunVisibilitySample(cell, _FrameCount), (half)weight);
         else
@@ -599,7 +627,12 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
     uint i = id.x;
     if (i >= BGI_COUNT) return;
 
-    if (BgiSolidBit(_FieldOffset + i)) {
+    // Baked-LIGHT voxels are solid but are NOT surfaces (see CSGather): they fall through to the AIR
+    // path below. Zeroing one here punches a black hole into the mirror texture exactly where a light
+    // sits, and the fragment's default read is a raw trilinear tap with NO occupancy gate - so that
+    // hole bleeds a dark blotch onto any wall the light is near. The _Surface load sits inside the
+    // solid branch, so the air majority never pays for it.
+    if (BgiSolidBit(_FieldOffset + i) && !BgiSurfaceIsEmissive(_Surface[_FieldOffset + i])) {
         _IrradianceBlur[_FieldOffset + i] = uint2(0u, 0u);
         // Solid voxels carry NO irradiance (rgb = 0), but their ALPHA must be the surface's own baked
         // sun visibility (radiance.w), NOT a constant 1.0. The fragment's shadow tap sits ~1 voxel into
@@ -752,6 +785,38 @@ void CSAverageLuminance(uint3 id : SV_DispatchThreadID)
 }
 
 // ----------------------------------------------------------
+// INJECT BAKED LIGHTS: stamp each Unity Light listed on a VoxelLights into the voxel it sits in, as
+// an emissive material - the light's hue as albedo, its intensity as the log-encoded emission
+// (converted to a voxel RADIANCE by C#, see LightEmissionBake.cs), plus the EMISSIVE surface flag so
+// the gather reads it from every side. Because it writes _Material, CSBuildOccupancy then makes the
+// voxel SOLID and everything downstream - inject, the DDA, the bounce - treats it exactly like an
+// emissive surface. One thread per voxel to light: C# has already mapped positions to cells and
+// summed lights that share one.
+//
+// Dispatched at bake (after the mesh raster, BEFORE the derive passes) and AGAIN on its own whenever
+// a baked light is switched on or off. The bare re-dispatch is safe because this kernel changes
+// nothing the derive passes consume: the albedo is stamped from every LISTED light whether it is
+// switched on or not, so occupancy - and the surface + air-distance fields built from it - is the
+// same either way, and only the emission byte tracks the switches.
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSInjectBakedLights(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= _BakedLightCount) return;
+
+    uint slot = BgiSlot((uint3)_BakedLightCell[i].xyz);
+    float4 albedoEmission = _BakedLightAlbedoEmission[i];
+    _MaterialWrite[slot] = BgiPackMaterial(albedoEmission.rgb, albedoEmission.a);
+    // ADD the flag rather than write the word: a switch re-dispatch is not followed by a
+    // CSBuildSurface, so a plain write would wipe the openness that pass computed. Nothing else has
+    // to be seeded here - a zero normal already decodes to a valid direction, and the flag makes the
+    // gather ignore it anyway (it only feeds inject's own direct/bounce term). C# merged co-located
+    // lights, so there is exactly one thread per slot and no read-modify-write race.
+    _Surface[slot] |= BGI_SURFACE_FLAG_EMISSIVE;
+}
+
+// ----------------------------------------------------------
 // BUILD OCCUPANCY (bake-time, right after voxelize): derive the per-field occupancy BITFIELD from
 // the voxelized _Material - one thread packs the 32 voxels of one word, written unconditionally so
 // no prior clear is needed. Dispatched per field via _FieldOffset (word-aligned: BGI_COUNT % 32 == 0).
@@ -825,15 +890,18 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
     }
 
     int3 cell = (int3)BgiCoord(i);
+    uint word = _Surface[slot];
     float3 n;
     if (_ComputeGradientNormals != 0u) {
         n = OccupancyNormal(cell);                   // reads the completed _Occupancy bitfield
         if (dot(n, n) < 1e-6) n = float3(0, 1, 0);   // ambiguous -> up (matches the old inject fallback)
     } else {
-        n = BgiSurfaceNormal(_Surface[slot]);        // mesh mode: normal already written by the voxelizer
+        n = BgiSurfaceNormal(word);                  // mesh mode: normal already written by the voxelizer
     }
     half openness = BgiComputeOpenness(cell, n);
-    _Surface[slot] = BgiPackSurfaceNormal(n) | BgiPackOpenness(openness); // normal (0-15) + AO (16-23)
+    // normal (0-15) + AO (16-23), carrying the flag bits (24-31) across - the baked-light injection
+    // ran before this pass and its EMISSIVE flag must survive the rewrite.
+    _Surface[slot] = BgiPackSurfaceNormal(n) | BgiPackOpenness(openness) | (word & BGI_SURFACE_FLAGS_MASK);
 }
 
 // ----------------------------------------------------------

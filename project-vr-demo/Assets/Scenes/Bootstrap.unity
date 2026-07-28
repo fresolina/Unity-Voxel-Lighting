@@ -23,7 +23,7 @@ RenderSettings:
   m_AmbientSkyColor: {r: 0.6872353, g: 1.1616935, b: 1.8364779, a: 1}
   m_AmbientEquatorColor: {r: 0.114, g: 0.125, b: 0.133, a: 1}
   m_AmbientGroundColor: {r: 0.047, g: 0.043, b: 0.035, a: 1}
-  m_AmbientIntensity: 2
+  m_AmbientIntensity: 1
   m_AmbientMode: 0
   m_SubtractiveShadowColor: {r: 0.42, g: 0.478, b: 0.627, a: 1}
   m_SkyboxMaterial: {fileID: 10304, guid: 0000000000000000f000000000000000, type: 0}
@@ -505,7 +505,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.BufferGiUpdater
   _maxSamples: 500
-  _samplesPerFrame: 1
+  _samplesPerFrame: 10
   _confidenceCurve: 2
   _continuousGi: 0
   _giFireflyClamp: 8
@@ -515,11 +515,16 @@ MonoBehaviour:
   _aoStrength: 0
   _fineShadow: 1
   _coarseShadow: 1
-  _ssboRead: 1
+  _sunShadowSampling: 1
+  _sunShadowSamples: 4
+  _bakedShadowSharpness: 2
+  _blurSunVisibility: 0
+  _shadowNormalOffset: 1
+  _ssboRead: 0
   _exposureControl:
     _tonemap: 2
     _exposure: 0
-    _auto: 0
+    _auto: 1
     _min: -2
     _max: 2
     _adaptationSpeed: 2
