@@ -203,7 +203,11 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     // Indirect lit (buffer GI) modulated by the buffer's OWN baked AO (bgiAo, resolved
                     // above together with the sun shadow). No SDF AO here - the buffer GI carries its
                     // own openness, so this path no longer samples the SDF texture at all.
-                    lit += albedo * BgiGatherIndirect(IN.positionWS, N) * bgiAo;
+                    // Geometric normal, not N, for the same reason as the face read above: it only picks
+                    // the voxel layer to read, and the grid knows nothing about normal maps. Feeding it
+                    // the per-texel N made the sampled layer jump within a single flat face, which
+                    // pushed the tap back into the dark solid cell in blotches.
+                    lit += albedo * BgiGatherIndirect(IN.positionWS, GetGeometricNormal(IN)) * bgiAo;
                 #elif defined(GI_UNITY)
                     // (SampleSH is fp32 in URP; narrowed once so the add stays in fp16.)
                     // A/B baseline: Unity's built-in indirect diffuse (ambient / light probes via
