@@ -62,42 +62,70 @@ inline half GetLocalLightRangeAttenuation(float distSq, float rangeSq) {
     return distanceAtten * rangeFade * rangeFade;
 }
 
+// GEOMETRIC GATE. N.L uses the normal-MAPPED normal, as every renderer does - but on a surface whose
+// real (vertex) normal points away from the light, a normal map can still tilt individual texels back
+// toward it and light them at full strength. In a shadow-mapped pipeline that never shows, because
+// such a surface is occluded by itself and its shadow term is 0. Nothing here provides that: the voxel
+// sun shadow is POSITIONAL (it answers "does sunlight reach this point", and next to a back-facing
+// wall it does), the SDF source fails open when no march budget is published, and VoxelLit never
+// samples URP's shadow map. So gate direct light by the geometric N.L as well.
+//
+// It matters most exactly where it looks worst: with a near-overhead sun every vertical wall sits at
+// |N.L| ~ 0.09, a hair off the terminator, so a brick normal map swings whole mortar lines to lit and
+// a black wall grows white sparkles.
+//
+// Ramped rather than a hard step: a step facets the terminator on low-poly curved geometry, since the
+// vertex normal is only piecewise-linear across a triangle. 8 = full light once the geometric normal
+// is ~7 degrees past the terminator, which is under the tilt any real normal map applies.
+#define VOXEL_GEOMETRIC_GATE_SHARPNESS 8.0h
+
+inline half GetGeometricGate(half3 geoNormal, float3 lightDir) {
+    return saturate(dot(geoNormal, (half3)lightDir) * VOXEL_GEOMETRIC_GATE_SHARPNESS);
+}
+
 // `lightDir` is unit length in every caller; kept float3 because it is also what the SDF march
 // steps along, where a half direction's ~1e-3 relative error would drift the ray by centimetres
 // over a room-scale distance. The N.L term itself runs in fp16.
-inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, float3 lightDir, half3 lightColor, half attenuation) {
+// `geoNormal` is the interpolated VERTEX normal (never the normal map) - see GetGeometricGate.
+inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 geoNormal, half3 albedo, float3 lightDir, half3 lightColor, half attenuation) {
     half ndotl = saturate(dot(normal, (half3)lightDir));
     if (ndotl <= 0.0h)
         return 0.0h;
+    half gate = GetGeometricGate(geoNormal, lightDir);
+    if (gate <= 0.0h)
+        return 0.0h; // fully back-facing: skip the shadow march too
 
     half shadow = GetShadow(worldPos, lightDir, normal);
-    return albedo * lightColor * (ndotl * shadow * attenuation);
+    return albedo * lightColor * (ndotl * gate * shadow * attenuation);
 }
 
-inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 albedo, float3 lightDir, half3 lightColor, half attenuation, float shadowDistance) {
+inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 geoNormal, half3 albedo, float3 lightDir, half3 lightColor, half attenuation, float shadowDistance) {
     half ndotl = saturate(dot(normal, (half3)lightDir));
     if (ndotl <= 0.0h)
+        return 0.0h;
+    half gate = GetGeometricGate(geoNormal, lightDir);
+    if (gate <= 0.0h)
         return 0.0h;
 
     half shadow = GetShadow(worldPos, lightDir, normal, shadowDistance);
-    return albedo * lightColor * (ndotl * shadow * attenuation);
+    return albedo * lightColor * (ndotl * gate * shadow * attenuation);
 }
 
-inline half3 GetMainDirectLighting(Light light, float3 worldPos, half3 normal, half3 albedo) {
-    return GetDirectLighting(worldPos, normal, albedo, light.direction, light.color, 1.0h);
+inline half3 GetMainDirectLighting(Light light, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo) {
+    return GetDirectLighting(worldPos, normal, geoNormal, albedo, light.direction, light.color, 1.0h);
 }
 
 // Main directional light with an externally-resolved shadow term - used by the buffer-GI path, which
 // computes the baked sun visibility together with the baked AO in a single face read
 // (BgiSampleFaceAoShadow) and passes it in here, so the shadow is not resolved again via GetShadow.
-inline half3 GetMainDirectLightingShadow(Light light, float3 worldPos, half3 normal, half3 albedo, half shadow) {
+inline half3 GetMainDirectLightingShadow(Light light, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo, half shadow) {
     half ndotl = saturate(dot(normal, (half3)light.direction)); // URP hands back a unit direction
     if (ndotl <= 0.0h)
         return 0.0h;
-    return albedo * light.color * (ndotl * shadow);
+    return albedo * light.color * (ndotl * GetGeometricGate(geoNormal, light.direction) * shadow);
 }
 
-inline half3 GetPointLightDirect(float3 worldPos, half3 normal, half3 albedo) {
+inline half3 GetPointLightDirect(float3 worldPos, half3 normal, half3 geoNormal, half3 albedo) {
     half3 totalLight = 0.0h;
     uint pointLightCount = min(_PointLightCount, (uint)MAX_POINT_LIGHTS);
 
@@ -117,13 +145,13 @@ inline half3 GetPointLightDirect(float3 worldPos, half3 normal, half3 albedo) {
         float distanceToLight = surfaceDistSq * invDistance;
         float3 lightDir = toLight * invDistance; // already unit - GetDirectLighting does not re-normalize
         half attenuation = GetLocalLightRangeAttenuation(surfaceDistSq, rangeSq);
-        totalLight += GetDirectLighting(worldPos, normal, albedo, lightDir, (half3)_PointLightColor[lightIndex].rgb, attenuation, distanceToLight);
+        totalLight += GetDirectLighting(worldPos, normal, geoNormal, albedo, lightDir, (half3)_PointLightColor[lightIndex].rgb, attenuation, distanceToLight);
     }
 
     return totalLight;
 }
 
-inline half3 GetSpotLightDirect(float3 worldPos, half3 normal, half3 albedo) {
+inline half3 GetSpotLightDirect(float3 worldPos, half3 normal, half3 geoNormal, half3 albedo) {
     half3 totalLight = 0.0h;
     uint spotLightCount = min(_SpotLightCount, (uint)MAX_SPOT_LIGHTS);
 
@@ -151,7 +179,7 @@ inline half3 GetSpotLightDirect(float3 worldPos, half3 normal, half3 albedo) {
             continue;
 
         half attenuation = GetLocalLightRangeAttenuation(surfaceDistSq, rangeSq) * (coneAttenuation * coneAttenuation);
-        totalLight += GetDirectLighting(worldPos, normal, albedo, lightDir, (half3)colorAngleOffset.rgb, attenuation, distanceToLight);
+        totalLight += GetDirectLighting(worldPos, normal, geoNormal, albedo, lightDir, (half3)colorAngleOffset.rgb, attenuation, distanceToLight);
     }
 
     return totalLight;
