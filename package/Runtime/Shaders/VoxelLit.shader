@@ -180,6 +180,11 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
 
                 Light light = GetMainLight();
                 half3 N = GetNormal(IN);
+                // Vertex normal, kept alongside the shading normal: the voxel lookups need it (the grid
+                // knows nothing about normal maps) and so does the geometric gate on direct light, which
+                // stops a normal map from lighting texels on a surface that geometrically faces away
+                // from the light (see GetGeometricGate).
+                half3 geoN = GetGeometricNormal(IN);
 
                 half3 albedo = _BaseColor.rgb * baseTex.rgb;
 
@@ -191,13 +196,13 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 #if defined(GI_VOXEL_BUFFER)
                     half bgiAo, bgiShadow;
                     // Geometric normal, not N: this is a voxel-grid lookup, not a shading term.
-                    BgiSampleFaceAoShadow(IN.positionWS, GetGeometricNormal(IN), light.direction, bgiAo, bgiShadow);
-                    half3 lit = GetMainDirectLightingShadow(light, IN.positionWS, N, albedo, bgiShadow);
+                    BgiSampleFaceAoShadow(IN.positionWS, geoN, light.direction, bgiAo, bgiShadow);
+                    half3 lit = GetMainDirectLightingShadow(light, IN.positionWS, N, geoN, albedo, bgiShadow);
                 #else
-                    half3 lit = GetMainDirectLighting(light, IN.positionWS, N, albedo);
+                    half3 lit = GetMainDirectLighting(light, IN.positionWS, N, geoN, albedo);
                 #endif
-                lit += GetPointLightDirect(IN.positionWS, N, albedo);
-                lit += GetSpotLightDirect(IN.positionWS, N, albedo);
+                lit += GetPointLightDirect(IN.positionWS, N, geoN, albedo);
+                lit += GetSpotLightDirect(IN.positionWS, N, geoN, albedo);
 
                 #if defined(GI_VOXEL_BUFFER)
                     // Indirect lit (buffer GI) modulated by the buffer's OWN baked AO (bgiAo, resolved
