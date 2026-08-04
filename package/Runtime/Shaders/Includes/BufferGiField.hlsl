@@ -118,7 +118,7 @@ void BgiUnpackRgbH(uint2 p, out half3 c, out half w) {
 // --- Per-voxel SURFACE word (32 bits/voxel), baked at voxelize/build time, read once per hit ---
 // bits  0-15 : octahedral surface normal, 8 bits/axis (~1-2 deg - plenty for a voxel GI normal)
 // bits 16-23 : SOLID -> openness / static AO;  AIR -> distance to the nearest solid (voxels, capped)
-// bits 24-31 : reserved (flags: thin/ambiguous, two-sided, emissive, boundary - later phase)
+// bits 24-31 : flags - bit 24 EMISSIVE, bit 25 TWO-SIDED (see below); 26-31 still reserved
 // The two bit-16..23 meanings never collide - a voxel is either solid or air - so readers pick by the
 // occupancy bit. Split from occupancy (the hot 1-bit/voxel bitfield) so this cold 4 B word is touched
 // only per ray-hit / per voxel, never in the DDA loop.
@@ -180,9 +180,92 @@ uint BgiSurfaceAirDist(uint word) {
 // CSBuildSurface) must carry these bits across.
 #define BGI_SURFACE_FLAGS_MASK 0xff000000u
 #define BGI_SURFACE_FLAG_EMISSIVE 0x01000000u
+// TWO-SIDED: this voxel received triangles facing OPPOSITE ways - a wall, floor slab or railing
+// thinner than a voxel, so both of its faces landed in this one cell. The stored normal is whichever
+// side the voxelizer wrote last; the other side's normal is its negation, which is why marking the
+// condition costs one bit and no second normal. Set by BufferGiVoxelize (InterlockedOr - the two
+// faces' fragments race for the cell), carried across the derive passes by BGI_SURFACE_FLAGS_MASK,
+// and baked, since it is a property of the geometry rather than of the runtime mode.
+#define BGI_SURFACE_FLAG_TWOSIDED 0x02000000u
 
 bool BgiSurfaceIsEmissive(uint word) {
     return (word & BGI_SURFACE_FLAG_EMISSIVE) != 0u;
+}
+
+bool BgiSurfaceIsTwoSided(uint word) {
+    return (word & BGI_SURFACE_FLAG_TWOSIDED) != 0u;
+}
+
+// --- Directional radiance slots (see RadianceDirections in BufferGiUpdater) ---
+// How many directions of outgoing radiance each voxel stores: 1 (Single), 2 (TwoSided) or 6 (Cube).
+// Published as a plain uniform by both BindGridConstantsToCompute and SetGlobals.
+int _BgiRadianceDirs;
+
+// Clamped accessor. An unbound uniform reads 0, and a stride of 0 would collapse every voxel onto
+// slot 0 - silent, total corruption of the field rather than an obvious failure. 1 degrades to the
+// original single-slot layout instead, which is always a valid interpretation of the buffer.
+uint BgiRadianceDirs() {
+    return max((uint)_BgiRadianceDirs, 1u);
+}
+
+// Index of a voxel's radiance for one of its FACES. THE ONLY PLACE THAT KNOWS THE MODE - every
+// reader and writer of _Radiance goes through it, so the modes can't drift apart across call sites.
+//
+// A slot is always identified by the OUTWARD NORMAL of the face it serves. That one convention keeps
+// every call site sign-safe:
+//   inject   : writing the face with outward normal f            -> faceN = f
+//   gather   : a ray traveling `dir` crossed the face opposing it -> faceN = -dir
+//   fragment : the shading surface's own outward normal           -> faceN = N
+// `faceN` need not be normalized. `n` is the voxel's stored surface normal (unused when Single).
+//
+// The stride is 1 or 2 and NEVER 6, in any mode - including Cube. Outgoing radiance is a property of
+// real geometry, and the voxelizer stores one normal per cell; the only second face we can describe
+// is its negation, when the cell is a sub-voxel wall. Six outgoing faces would need a per-face
+// coverage mask from the rasterizer, which does not exist. Cube's six directions are on the INCIDENT
+// irradiance instead (below), where a hemisphere is well defined for every voxel.
+//
+// Single   -> the one slot.
+// TwoSided -> front/back in the voxel's OWN normal basis: a face agreeing with the stored normal is
+//             front (slot 0), the opposing face is back (slot 1). A thin wall's back normal is just
+//             -n, which is why this needs a flag and not a second stored normal. Cube uses this too.
+uint BgiRadianceSlot(uint voxelSlot, float3 faceN, float3 n) {
+    uint dirs = BgiRadianceDirs();
+    uint base_ = voxelSlot * dirs;
+    if (dirs == 1u) return base_;
+    return base_ + (dot(faceN, n) >= 0.0 ? 0u : 1u);
+}
+
+// First slot of a voxel's radiance run. The run is contiguous, so clears walk base..base+dirs.
+uint BgiRadianceBase(uint voxelSlot) {
+    return voxelSlot * BgiRadianceDirs();
+}
+
+// --- Directional INCIDENT irradiance (the ambient cube) ---
+// A SECOND, independent stride: 1 normally, 6 in Cube mode. Unlike outgoing radiance - which is a
+// property of real geometry and so is capped at the one normal the voxelizer stored plus its
+// negation - the irradiance arriving from a hemisphere is well defined for EVERY voxel, air or
+// solid. That is what Cube makes directional, and why the two strides are not the same number.
+// Buckets are cosine lobes about the six world axes: bucket k holds the average radiance arriving
+// over the hemisphere around axis k, weighted by cos. A surface with normal n reconstructs its
+// irradiance as sum(n_k^2 * bucket_k) over the 3 axes in n's hemisphere - the standard ambient-cube
+// evaluation, whose weights sum to exactly 1.
+int _BgiIrradianceDirs;
+
+uint BgiIrradianceDirs() {
+    return max((uint)_BgiIrradianceDirs, 1u);
+}
+
+uint BgiIrradianceBase(uint voxelSlot) {
+    return voxelSlot * BgiIrradianceDirs();
+}
+
+// Texel of a bucket in the mirror texture. The six buckets are STACKED ALONG Z (the texture is
+// Grid x Grid x Grid*dirs), so a bucket is just a Z offset - see CreateIrradianceTexture for why one
+// stacked texture rather than six bindings, and why no border padding is needed.
+// stacked texture rather than six bindings, and why no border padding is needed. Compute-side only:
+// the fragment samples with normalized uvw, so it builds the slab offset in that space instead.
+uint3 BgiTexCoord(uint3 c, uint bucket) {
+    return uint3(c.x, c.y, c.z + bucket * BGI_GRID);
 }
 
 #endif // LOTEC_BUFFER_GI_FIELD_INCLUDED

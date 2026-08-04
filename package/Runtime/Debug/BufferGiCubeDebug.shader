@@ -151,8 +151,10 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                 } else if (mode == 4u) {
                     // Sun visibility: the baked voxel sun-shadow the solve stashes in the radiance's
                     // w channel (solid voxels only). White = lit, black = shadowed from the sun.
+                    // FRONT face's slot - a two-sided voxel has a second visibility for its back face
+                    // that this view cannot show, since one cube can only carry one colour.
                     float w;
-                    BgiUnpackRgb(_DbgRadiance[idx], col, w);
+                    BgiUnpackRgb(_DbgRadiance[BgiRadianceBase(idx)], col, w);
                     col = w.xxx;
                     show = DbgSolid(idx);
                 } else if (mode == 5u) {
@@ -163,8 +165,28 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
                     show = !DbgSolid(idx) && adist < BGI_MAX_AIR_DIST;
                     col = ((float)adist / (float)BGI_MAX_AIR_DIST).xxx;
                 } else {
+                    // Both fields carry MULTIPLE values per voxel now (see RadianceDirections): the
+                    // radiance run is 1 or 2 faces, the irradiance run 1 or 6 direction buckets. A
+                    // plain [idx] would read some other voxel's slot entirely - which showed up as
+                    // these two views going completely empty while occupancy still worked.
                     float w;
-                    BgiUnpackRgb(mode == 1u ? _DbgIrradiance[idx] : _DbgRadiance[idx], col, w);
+                    if (mode == 1u) {
+                        // Irradiance: the direction-less mean over the buckets, which is what the
+                        // single-bucket field always held - so the view reads the same in every mode.
+                        uint ibase = BgiIrradianceBase(idx);
+                        uint idirs = BgiIrradianceDirs();
+                        float3 acc = 0;
+                        [loop]
+                        for (uint b = 0u; b < idirs; b++) {
+                            float3 bc; float bw;
+                            BgiUnpackRgb(_DbgIrradiance[ibase + b], bc, bw);
+                            acc += bc;
+                        }
+                        col = acc / (float)idirs;
+                    } else {
+                        // Radiance: the front face (the stored normal's side).
+                        BgiUnpackRgb(_DbgRadiance[BgiRadianceBase(idx)], col, w);
+                    }
                     float lum = dot(col, float3(0.2126, 0.7152, 0.0722)) * _DbgIntensity;
                     show = lum >= _DbgMinLum;
                 }

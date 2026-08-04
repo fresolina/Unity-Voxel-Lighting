@@ -82,6 +82,12 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                     // Bake the surface normal per voxel; the runtime reads it instead of the occupancy
                     // gradient, so walls need NOT be thickened (hollow 1-voxel shells keep correct
                     // normals). Multiple triangles per voxel: last-write-wins (fine for flat surfaces).
+                    // Two-sidedness is NOT detected here. Comparing against the normal already in the
+                    // cell would need a read-modify-write, and the two faces' fragments race for the
+                    // same voxel - a masked store can interleave and mix two normals into a third,
+                    // garbage one. CSBuildSurface derives it instead, from occupancy (a solid voxel
+                    // with air on BOTH sides along its normal), which is race-free, order-independent
+                    // and tests the condition that actually matters rather than triangle bookkeeping.
                     if (dot(i.wn, i.wn) > 1e-6)
                         _SurfaceWrite[BgiSlot((uint3)c)] = BgiPackSurfaceNormal(normalize(i.wn));
                 #else

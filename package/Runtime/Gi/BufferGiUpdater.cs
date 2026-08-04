@@ -64,6 +64,25 @@ namespace Lotec.Lighting {
         // either rays (Supersampled) or frames (Temporal) to make it a real area fraction.
         public enum SunShadowSampling { Centre = 0, Supersampled = 1, Temporal = 2 }
 
+        // How many DIRECTIONS of outgoing radiance each solid voxel stores (matches _BgiRadianceDirs).
+        // A voxel is one cell, but the geometry inside it can face more than one way: any wall, floor
+        // slab or railing thinner than a voxel puts BOTH its faces in the same cell, and the voxelizer
+        // resolves that with last-write-wins (BufferGiVoxelize, mesh-normal mode). One stored normal +
+        // one radiance then means one side is right and the other reads the wrong value - or, today,
+        // gets rejected by the gather's front/back test and falls back to the (black) ambient floor.
+        //   Single (1)   : one radiance per voxel - the original behaviour, cheapest, thin walls wrong.
+        //   TwoSided (2) : front + back, in the voxel's OWN normal basis. The back normal of a thin wall
+        //                  is just -n, so this needs no second normal, only a flag. Fixes opposite-facing
+        //                  pairs (the thin-wall case) for one extra buffer and NO fragment cost.
+        //   Cube (6)     : the six world axes (an "ambient cube"). Also fixes PERPENDICULAR faces sharing
+        //                  a cell - arcade bases, arch springings - and makes the field directional, so
+        //                  the fragment can blend the 3 faces of its hemisphere instead of picking one.
+        //                  Costs 6x the radiance storage, a wider read stride, and 3 taps instead of 1.
+        // Neither fixes SPATIAL ambiguity: two surfaces facing the SAME way in one cell still collide,
+        // and everything still reports at the cell centre. That is bounded by voxel size, not direction
+        // count - raising the resolution or moving to surface storage is the only cure for it.
+        public enum RadianceDirections { Single = 1, TwoSided = 2, Cube = 6 }
+
         public static BufferGiUpdater Instance { get; private set; }
 
         [Header("Solve")]
@@ -154,6 +173,14 @@ namespace Lotec.Lighting {
                  "irradiance texture (keyword BGI_SSBO_READ). Off (default) = one hardware-trilinear " +
                  "texture tap, much cheaper on Adreno/Quest. On = the SSBO gather, kept for comparison.")]
         [SerializeField] bool _ssboRead;
+        [Tooltip("Directions of outgoing radiance stored per solid voxel - what a voxel can say about " +
+                 "geometry that faces more than one way inside it.\n " +
+                 "Single: one value; a wall thinner than a voxel gets one side right and the other dark.\n " +
+                 "TwoSided: front + back of the voxel's own normal. Fixes thin walls; no fragment cost.\n " +
+                 "Cube: the six world axes. Also fixes perpendicular faces sharing a cell and makes the " +
+                 "field directional, at 6x the radiance storage and 3 texture taps instead of 1.\n " +
+                 "Changing this reallocates and restarts the accumulation.")]
+        [SerializeField] RadianceDirections _radianceDirections = RadianceDirections.Single;
 
         [Header("Lighting")]
         [Tooltip("Display transform (exposure + tonemap operator), with optional auto-exposure. " +
@@ -199,6 +226,9 @@ namespace Lotec.Lighting {
         ComputeBuffer _materialBuffer;
         ComputeBuffer _radianceBuffer;
         ComputeBuffer _irradianceBuffer;
+        // Back-face incident irradiance for two-sided (sub-voxel wall) solid voxels - see _IrradianceBack
+        // in BufferGi.compute. Same size as _irradianceBuffer; only two-sided surfaces ever touch it.
+        ComputeBuffer _irradianceBackBuffer;
         ComputeBuffer _irradianceBlurBuffer;
         ComputeBuffer _surfaceBuffer; // per-voxel surface word (normal + reserved bits); always present
         bool _bakedNormalsBaked;      // the normal source the current bake used (for rebake-on-toggle)
@@ -246,6 +276,10 @@ namespace Lotec.Lighting {
         int _blurKernel = -1;
         RenderTexture _irradianceTex;          // fine field's blurred irradiance as a Texture3D (default read source)
         RenderTexture _irradianceTexCoarse;    // coarse field's blurred irradiance as a Texture3D
+        // Radiance slots per voxel the CURRENT _radianceBuffer was allocated with. Compared against
+        // RadianceSlots each frame (SyncRadianceDirections) to catch an inspector/script mode change.
+        int _allocatedRadianceSlots;
+        int _allocatedIrradianceSlots;
         int _initFineKernel = -1;
         int _averageLuminanceKernel = -1;
         int _buildOccupancyKernel = -1;
@@ -379,6 +413,38 @@ namespace Lotec.Lighting {
             set => _ssboRead = value;
         }
 
+        /// <summary>Directions of outgoing radiance stored per solid voxel. Reallocates on change.</summary>
+        public RadianceDirections Directions {
+            get => _radianceDirections;
+            set {
+                if (_radianceDirections == value) return;
+                _radianceDirections = value;
+                _collectedSamples = 0; // the field's meaning changed; restart the progressive average
+            }
+        }
+
+
+        // The mode drives TWO independent strides, which is not obvious from the enum's name:
+        //
+        //   OUTGOING radiance (_Radiance) is a property of real geometry, and the voxelizer stores one
+        //   normal per cell (plus its negation when the cell is two-sided). So it can be 1 or 2 - never
+        //   6, because there is no way to know what the other four faces would even be without a
+        //   per-face coverage mask from the rasterizer.
+        //
+        //   INCIDENT irradiance (_Irradiance / _IrradianceBlur / the mirror texture) has no such limit:
+        //   the light arriving from a hemisphere is well defined for every voxel, air or solid. That is
+        //   what Cube makes directional, and what lets the fragment blend 3 buckets by n^2 instead of
+        //   reading one direction-less value.
+        //
+        // Hence Cube is a superset of TwoSided rather than a different branch: same 2-slot radiance,
+        // plus the 6-bucket irradiance.
+
+        /// <summary>Outgoing-radiance slots per voxel (1 or 2) - the stride of _Radiance.</summary>
+        public int RadianceSlots => _radianceDirections == RadianceDirections.Single ? 1 : 2;
+
+        /// <summary>Incident-irradiance buckets per voxel (1 or 6) - the stride of _Irradiance.</summary>
+        public int IrradianceSlots => _radianceDirections == RadianceDirections.Cube ? 6 : 1;
+
         /// <summary>Display-transform controller (exposure + tonemap), e.g. to toggle in-shader tonemap from a UI.</summary>
         public AutoExposure ExposureControl => _exposureControl;
 
@@ -407,6 +473,7 @@ namespace Lotec.Lighting {
         static readonly int s_radiance = Shader.PropertyToID("_Radiance");
         static readonly int s_irradiance = Shader.PropertyToID("_Irradiance");
         static readonly int s_irradianceBlur = Shader.PropertyToID("_IrradianceBlur");
+        static readonly int s_irradianceBack = Shader.PropertyToID("_IrradianceBack");
         static readonly int s_bgiIrradianceTexWrite = Shader.PropertyToID("_BgiIrradianceTexWrite");
         static readonly int s_bgiIrradianceTex = Shader.PropertyToID("_BgiIrradianceTex");
         static readonly int s_bgiIrradianceTexCoarse = Shader.PropertyToID("_BgiIrradianceTexCoarse");
@@ -437,6 +504,8 @@ namespace Lotec.Lighting {
         static readonly int s_samplesPerFrame = Shader.PropertyToID("_SamplesPerFrame");
         static readonly int s_giFireflyClamp = Shader.PropertyToID("_GiFireflyClamp");
         static readonly int s_reachBoost = Shader.PropertyToID("_ReachBoost");
+        static readonly int s_bgiRadianceDirs = Shader.PropertyToID("_BgiRadianceDirs");
+        static readonly int s_bgiIrradianceDirs = Shader.PropertyToID("_BgiIrradianceDirs");
         static readonly int s_sunShadowMode = Shader.PropertyToID("_BgiSunShadowMode");
         static readonly int s_sunShadowSamples = Shader.PropertyToID("_BgiSunShadowSamples");
         static readonly int s_blurSunVis = Shader.PropertyToID("_BgiBlurSunVis");
@@ -586,6 +655,16 @@ namespace Lotec.Lighting {
             ReleaseBuffers();
         }
 
+        // Radiance slots per voxel changed (inspector or script): _Radiance is sized by it, so the
+        // buffer has to come back at the new stride. Same shape as SyncGridResolution - release here,
+        // EnsureInitialized reallocates and requests the field clear. The stored values are not
+        // convertible between modes (different slot meanings), so the accumulation restarts too.
+        void SyncRadianceDirections() {
+            if (RadianceSlots == _allocatedRadianceSlots && IrradianceSlots == _allocatedIrradianceSlots) return;
+            ReleaseBuffers();
+            _collectedSamples = 0;
+        }
+
         // Publish the grid resolution constants to the compute shader (the shader's BgiIndex/BgiCoord/
         // occupancy math reads them). They only change when the grid does, but re-setting each frame is
         // cheap and keeps the shared _computeShader asset in sync regardless of dispatch ordering.
@@ -594,6 +673,10 @@ namespace Lotec.Lighting {
             _computeShader.SetInt(s_bgiGrid, _grid);
             _computeShader.SetInt(s_bgiGridLog2, _gridLog2);
             _computeShader.SetInt(s_bgiCount, _voxelCount);
+            // Radiance stride. Bound alongside the grid constants because BgiRadianceSlot's index math
+            // depends on it exactly the way BgiIndex depends on the grid.
+            _computeShader.SetInt(s_bgiRadianceDirs, _allocatedRadianceSlots);
+            _computeShader.SetInt(s_bgiIrradianceDirs, _allocatedIrradianceSlots);
         }
 
         void Update() {
@@ -642,6 +725,7 @@ namespace Lotec.Lighting {
             // realloc at the new size (overrides any warm switch above), since every buffer and the
             // shader index math depend on it.
             SyncGridResolution();
+            SyncRadianceDirections();
 
             SyncBakeInputs();
             EnsureInitialized();
@@ -756,6 +840,11 @@ namespace Lotec.Lighting {
             // w channel (bound below); Sdf marches the hi-res SDF per pixel (the _SdfHires global the
             // active volume already publishes - see VoxelVolume.ApplyShaderGlobals).
             Shader.SetGlobalBuffer(s_radiance, _radianceBuffer);
+            // Radiance stride for the fragment's slot select. A plain int uniform, NOT a keyword: the
+            // face read multiplies by it, and a keyword here would multiply the VoxelLit variant set
+            // (already GI_* x BGI_SSBO_READ x 4 tonemaps) for one scalar.
+            Shader.SetGlobalInt(s_bgiRadianceDirs, _allocatedRadianceSlots);
+            Shader.SetGlobalInt(s_bgiIrradianceDirs, _allocatedIrradianceSlots);
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
             // Fragment-side knobs for the Baked mode (BgiSampleShadowTexture). Both are pure read
@@ -838,9 +927,16 @@ namespace Lotec.Lighting {
 
             // uint material, uint2 radiance/irradiance. Sized for all fields (concatenated slices).
             _materialBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));
-            _radianceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
-            _irradianceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
-            _irradianceBlurBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
+            // Radiance is the one buffer with a per-voxel STRIDE: RadianceSlots directions per voxel
+            // (see RadianceDirections). Slot layout is voxelSlot * RadianceSlots + direction, so the
+            // directions of one voxel are contiguous and a slot select is one add - the shader side is
+            // BgiRadianceSlot in BufferGiField.hlsl, which is the only place that knows the mode.
+            _allocatedRadianceSlots = RadianceSlots;
+            _radianceBuffer = new ComputeBuffer(TotalVoxels * _allocatedRadianceSlots, sizeof(uint) * 2);
+            _allocatedIrradianceSlots = IrradianceSlots;
+            _irradianceBuffer = new ComputeBuffer(TotalVoxels * _allocatedIrradianceSlots, sizeof(uint) * 2);
+            _irradianceBackBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
+            _irradianceBlurBuffer = new ComputeBuffer(TotalVoxels * _allocatedIrradianceSlots, sizeof(uint) * 2);
             _surfaceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));      // 32-bit surface word/voxel
             _occupancyBuffer = new ComputeBuffer(TotalVoxels / 32, sizeof(uint)); // 1 bit/voxel
             // Each field's blurred irradiance mirrored into a Texture3D for the default trilinear read.
@@ -902,6 +998,7 @@ namespace Lotec.Lighting {
             if (_clearKernel < 0) return;
             _computeShader.SetBuffer(_clearKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_clearKernel, s_irradiance, _irradianceBuffer);
+            _computeShader.SetBuffer(_clearKernel, s_irradianceBack, _irradianceBackBuffer);
             _computeShader.SetBuffer(_clearKernel, s_irradianceBlur, _irradianceBlurBuffer);
             _computeShader.SetInt(s_fieldOffset, fieldOffset);
             _computeShader.Dispatch(_clearKernel, Groups, 1, 1);
@@ -918,6 +1015,7 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_initFineKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_initFineKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_initFineKernel, s_irradiance, _irradianceBuffer);
+            _computeShader.SetBuffer(_initFineKernel, s_irradianceBack, _irradianceBackBuffer);
             _computeShader.SetBuffer(_initFineKernel, s_irradianceBlur, _irradianceBlurBuffer);
             _computeShader.Dispatch(_initFineKernel, Groups, 1, 1);
         }
@@ -1452,6 +1550,7 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
             _computeShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
+            _computeShader.SetBuffer(_injectKernel, s_irradianceBack, _irradianceBackBuffer);
             _computeShader.SetBuffer(_injectKernel, s_surface, _surfaceBuffer);
             BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Inject);
             _computeShader.Dispatch(_injectKernel, Groups, 1, 1);
@@ -1463,6 +1562,7 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_gatherKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
+            _computeShader.SetBuffer(_gatherKernel, s_irradianceBack, _irradianceBackBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
             BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Gather);
             _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
@@ -1518,10 +1618,18 @@ namespace Lotec.Lighting {
 
         // Create a field's irradiance Texture3D (RGBA16F for reliable compute random-write + trilinear
         // sampling; can drop to RGB111110 later). Grid^3, bilinear/clamp.
+        //
+        // In Cube mode the six direction buckets are STACKED ALONG Z in this one texture
+        // (Grid x Grid x Grid*6) rather than living in six textures: six bindings would risk the
+        // per-stage sampler limit on mobile, on top of the WebGPU pipeline-layout surface.
+        // No border padding between slabs - the read clamps its slab-local Z to [0.5, Grid-0.5], so a
+        // trilinear footprint can never reach a neighbouring slab's texels with nonzero weight, and
+        // X/Y filtering stays inside the slab regardless. That clamp is also what wrapMode.Clamp
+        // already did at the volume's own Z extremes, so it costs nothing else.
         RenderTexture CreateIrradianceTexture(string name) {
             var desc = new RenderTextureDescriptor(Grid, Grid, RenderTextureFormat.ARGBHalf, 0) {
                 dimension = TextureDimension.Tex3D,
-                volumeDepth = Grid,
+                volumeDepth = Grid * IrradianceSlots,
                 enableRandomWrite = true,
                 msaaSamples = 1
             };
@@ -1538,12 +1646,14 @@ namespace Lotec.Lighting {
             _materialBuffer?.Release();
             _radianceBuffer?.Release();
             _irradianceBuffer?.Release();
+            _irradianceBackBuffer?.Release();
             _irradianceBlurBuffer?.Release();
             _surfaceBuffer?.Release();
             _occupancyBuffer?.Release();
             _materialBuffer = null;
             _radianceBuffer = null;
             _irradianceBuffer = null;
+            _irradianceBackBuffer = null;
             _irradianceBlurBuffer = null;
             _surfaceBuffer = null;
             _occupancyBuffer = null;
@@ -1551,6 +1661,8 @@ namespace Lotec.Lighting {
             if (_irradianceTexCoarse != null) { _irradianceTexCoarse.Release(); _irradianceTexCoarse = null; }
             _materialBaked = false;
             _resetFineField = false;
+            _allocatedRadianceSlots = 0; // no buffer -> no stride; forces EnsureInitialized to size it
+            _allocatedIrradianceSlots = 0;
             _collectedSamples = 0; // gather from scratch while the freshly-cleared field fills in
         }
     }

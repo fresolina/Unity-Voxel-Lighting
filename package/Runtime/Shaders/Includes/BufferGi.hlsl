@@ -1,12 +1,14 @@
 #ifndef LOTEC_BUFFER_GI_INCLUDED
 #define LOTEC_BUFFER_GI_INCLUDED
 
-// Fragment-side read for the buffer GI. Normal-oriented 9-tap per field: pick the face the surface
-// looks through (dominant normal axis), sample the 3x3 air layer ONE voxel in FRONT of the surface
-// (leak-free by construction - never touches voxels behind), and interpolate smoothly across the
-// face with a quadratic B-spline. Samples the FINE field, falls back to the COARSE field outside it
-// (blended at the fine edges). No raymarching, no SDF, all cache-resident. The companion solve is
-// BufferGi.compute; layout is BufferGiField.hlsl.
+// Fragment-side read for the buffer GI. Normal-oriented per field: pick the face the surface looks
+// through (dominant normal axis) and read the air layer ONE voxel in FRONT of the surface - leak-free
+// by construction, never touches voxels behind - interpolating only WITHIN that layer. Both read paths
+// now use that same geometry: the SSBO gather as an explicit 9-tap quadratic B-spline over the layer,
+// the default texture path as one hardware-trilinear tap snapped to the layer's voxel centres along
+// the normal axis. Samples the FINE field, falls back to the COARSE field outside it (blended at the
+// fine edges). No raymarching, no SDF, all cache-resident. The companion solve is BufferGi.compute
+// (which dilates irradiance into the first solid shell for the texture path); layout is BufferGiField.hlsl.
 
 // Everything here is scoped to the GI_VOXEL_BUFFER variant. VoxelLit includes this header
 // unconditionally but only calls into it under GI_VOXEL_BUFFER, so the other variants
@@ -89,7 +91,9 @@ void BgiSelectField(float3 worldPos, out bool insideFine, out float3 origin, out
 // wrote): ONE hardware trilinear tap, replacing the 4-8 StructuredBuffer face taps the SSBO Baked read
 // used. Offset ~1 voxel along the normal into the air layer in front (same as the GI texture read), so
 // the tap sits in the air voxels that actually carry sun-vis rather than the solid cell. Fine field
-// inside its box, coarse outside (its grid size = coarse voxel size * grid, as in BgiSampleFieldTexture).
+// inside its box, coarse outside (its grid size = coarse voxel size * grid - only the voxel size is
+// published). This keeps the tunable continuous offset rather than the GI tap's snap-to-layer: alpha
+// is a coverage signal the sharpening below reconstructs an edge from, and snapping would quantise it.
 // Returns 1 (lit) outside the sampled field, matching the "no info -> lit" face-read fallback.
 half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
 {
@@ -104,6 +108,12 @@ half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
     // air just above the floor - and at a grazing sun it doubles the along-surface displacement.
     float3 uvw = (worldPos + normal * vox * _BgiShadowNormalOffset - origin) / max(gridSize, 1e-6);
     if (any(uvw < 0.0) || any(uvw > 1.0)) return 1.0h; // outside the field -> lit (no baked info)
+    // In Cube the texture is six Z-stacked slabs, so a raw [0,1] z would sweep across all of them.
+    // Sun visibility is direction-less - CSBlur writes the same alpha into every slab - so fold into
+    // slab 0, clamping the slab-local z so the filter cannot reach slab 1's texels.
+    uint idirs = BgiIrradianceDirs();
+    if (idirs > 1u)
+        uvw.z = clamp(uvw.z, 0.5 / (float)BGI_GRID, 1.0 - 0.5 / (float)BGI_GRID) / (float)idirs;
     half a = insideFine
         ? (half)_BgiIrradianceTex.SampleLevel(sampler_BgiIrradianceTex, uvw, 0).a
         : (half)_BgiIrradianceTexCoarse.SampleLevel(sampler_BgiIrradianceTexCoarse, uvw, 0).a;
@@ -142,6 +152,10 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out 
     BgiSelectField(worldPos, insideFine, origin, voxelSize, baseOffset);
     int mode = insideFine ? _BgiShadowModeFine : _BgiShadowModeCoarse;
 
+    // Radiance carries more than one face per voxel, so a tap has to pick one - and the Baked shadow
+    // below switches source on it. Uniform, so this is a scalar branch, not per-pixel divergence.
+    bool directional = _BgiRadianceDirs > 1;
+
     // External per-pixel shadow sources - resolved directly here, independent of the face read below
     // (which then runs only for AO, or for the SSBO-read Baked path). Selected per BufferGI field and
     // NOT gated by the shadow-source keyword:
@@ -157,13 +171,27 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out 
     else if (mode == 3) shadow = saturate(GetOccFieldShadow(worldPos, normal));
     else if (mode == 4) shadow = saturate(GetBitmaskShadow(worldPos, normal));
 
-    // BAKED mode (1): on the default texture read path, resolve it as ONE hardware trilinear tap of the
-    // mirror texture's alpha (the air-layer sun visibility), NOT a StructuredBuffer face read - that's
-    // the whole point, since on Adreno the SSBO face taps dominate while a sampler tap is ~free. Under
-    // BGI_SSBO_READ (the A/B keyword, no mirror texture) it stays on the face-plane loop below.
+    // BAKED mode (1): one hardware trilinear tap of the mirror texture's alpha, NOT a StructuredBuffer
+    // face read - that's the whole point, since on Adreno the SSBO face taps dominate while a sampler
+    // tap is ~free. Under BGI_SSBO_READ (the A/B keyword) it stays on the face-plane loop below.
+    //
+    // EXCEPT when radiance is directional. That texture alpha is an AIR-voxel field: it stores the sun
+    // visibility of the space around a surface, and a trilinear tap of it blends across anything
+    // thinner than a voxel. At a corner of a sub-voxel wall the footprint reaches the SUNLIT EXTERIOR
+    // air, so an interior face reads "lit" and takes full direct sun - a hard bright seam along the
+    // join. The bake is not wrong (those cells measure 0.000); the filter is.
+    //
+    // The correct value already exists per FACE in _Radiance[].w, which the face loop below reads with
+    // the slot picked by the shading normal. It only ever taps SOLID voxels, so it cannot blend with
+    // exterior air at all, and each side of a thin wall gets its own visibility. Sun visibility at a
+    // point is a scalar, so per-face is the right granularity here - a directional (per-bucket) alpha
+    // would not be meaningful.
+    //
+    // Costs the 4 face taps the texture path exists to avoid, so it is scoped to the modes that
+    // actually carry a second face: Single keeps the single-tap read unchanged.
     bool bakedShadow = (mode == 1);
 #if !defined(BGI_SSBO_READ)
-    if (bakedShadow) {
+    if (bakedShadow && !directional) {
         shadow = BgiSampleShadowTexture(worldPos, normal, insideFine);
         bakedShadow = false; // resolved via texture; the face loop below is now AO-only
     }
@@ -202,10 +230,21 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out 
             uint slot = baseOffset + BgiIndex((uint3)c);
             if (!BgiSolidBit(slot)) continue; // skip air taps: don't let "off-surface" pull the result
             half wgt = (du == 0 ? 1.0h - fu : fu) * (dv == 0 ? 1.0h - fv : fv);
+            // One surface load covers both consumers. `directional` is a uniform compare, so in the
+            // default Single mode the load is skipped entirely unless AO wants it - the slot select
+            // costs the hot path nothing there.
+            bool needSurface = wantAo || directional;
+            uint sword = needSurface ? _Surface[slot] : 0u;
             if (wantAo)
-                opennessAcc += BgiSurfaceOpenness(_Surface[slot]) * wgt;
+                opennessAcc += BgiSurfaceOpenness(sword) * wgt;
             if (wantShadow) {
-                half3 rgb; half w; BgiUnpackRgbH(_Radiance[slot], rgb, w);
+                // Pick the face by the SHADING surface's own normal, so the two sides of a sub-voxel
+                // wall read their own sun visibility instead of sharing one. This is an SSBO read, so
+                // each of the 4 taps resolves independently - the mirror texture's single alpha per
+                // voxel cannot do this, which is why the SSBO path is the accurate one for thin walls.
+                uint radSlot = directional ? BgiRadianceSlot(slot, normal, BgiSurfaceNormal(sword))
+                                           : slot;
+                half3 rgb; half w; BgiUnpackRgbH(_Radiance[radSlot], rgb, w);
                 shadowAcc += w * wgt;
             }
             wsum += wgt;
@@ -281,8 +320,29 @@ half3 BgiSampleField(float3 worldPos, float3 normal, float3 origin, float3 voxel
             if (BgiSolidBit(idx)) continue;
 
             half w = wu * wV[dv + 1];
+            // Cube: reconstruct this tap for the shading normal from its 3 hemisphere buckets (n^2
+            // weights, summing to 1). Outside Cube it is the single stored value, so the common path
+            // is unchanged. The bucket triple is uniform across the 9 taps, but the compiler hoists
+            // that; the per-tap cost is the 3 loads, which are contiguous.
             half3 col; half n;
-            BgiUnpackRgbH(_Irradiance[idx], col, n);
+            uint idirs = BgiIrradianceDirs();
+            if (idirs == 1u) {
+                BgiUnpackRgbH(_Irradiance[idx], col, n);
+            } else {
+                uint ibase = idx * idirs;
+                float3 nn2 = normal * normal;
+                float3 accB = 0;
+                [unroll]
+                for (uint a = 0u; a < 3u; a++) {
+                    float d  = (a == 0u) ? normal.x : ((a == 1u) ? normal.y : normal.z);
+                    float w2 = (a == 0u) ? nn2.x    : ((a == 1u) ? nn2.y    : nn2.z);
+                    half3 bc; half bw;
+                    BgiUnpackRgbH(_Irradiance[ibase + a * 2u + (d >= 0.0 ? 1u : 0u)], bc, bw);
+                    accB += (float3)bc * w2;
+                    n = bw;
+                }
+                col = (half3)accB;
+            }
             acc += col * w;
             wsum += w;
         }
@@ -291,15 +351,59 @@ half3 BgiSampleField(float3 worldPos, float3 normal, float3 origin, float3 voxel
     return (wsum > 1e-3h) ? (acc / wsum) : 0.0h;
 }
 
-// One hardware-trilinear tap of a field's mirrored irradiance texture at a surface point. Offset ~1
-// voxel along the normal into the air layer in front (the SSBO gather reads the air voxel one step in
-// front) so the tap doesn't blend the dark solid cell and darken walls. gridSize maps world->[0,1] uvw.
+// One hardware-trilinear tap of a field's mirrored irradiance texture at a surface point, taken in
+// the SAME place the SSBO gather reads: the CENTRE of the air cell one step along the DOMINANT
+// normal axis. Snapping that one coordinate to a voxel centre puts zero trilinear weight on the
+// solid layer behind the surface, so the black CSBlur stores in solid voxels can no longer bleed
+// darkness onto walls - the free-form `worldPos + normal * voxelSize` offset this replaces only
+// moved a full cell for an axis-aligned face (0.71 at 45 degrees, less again with the per-axis
+// voxel size of a non-cubic volume), so its footprint kept straddling the solid cell. The two
+// in-plane coordinates stay continuous, so the tap still interpolates smoothly across the face.
+// Like the SSBO gather, the sampled plane jumps one cell where the dominant axis flips.
+// `normal` MUST be the geometric normal (see BgiSampleFaceAoShadow) - it picks the axis.
+// In-plane neighbours can still be solid at a concave corner; CSBlur dilates the first solid shell
+// with its air neighbours' irradiance so those taps read a plausible value instead of a hole.
 half3 BgiSampleFieldTexture(Texture3D<float4> tex, SamplerState smp, float3 worldPos, float3 normal,
-                            float3 origin, float3 gridSize, float3 voxelSize)
+                            float3 origin, float3 voxelSize)
 {
-    float3 uvw = (worldPos + normal * voxelSize - origin) / max(gridSize, 1e-6);
+    float3 g = (worldPos - origin) / max(voxelSize, 1e-6); // continuous grid coords
+    float3 aN = abs(normal);
+    // Dominant normal axis as a mask - same pick as BgiSampleField's stride selection.
+    float3 axis = (aN.x >= aN.y && aN.x >= aN.z) ? float3(1, 0, 0)
+                : (aN.y >= aN.z)                 ? float3(0, 1, 0)
+                                                 : float3(0, 0, 1);
+    float gN     = dot(g, axis);
+    float sgn    = dot(normal, axis) >= 0.0 ? 1.0 : -1.0;
+    float target = floor(gN) + sgn + 0.5; // centre of the air cell one step in front
+    g += axis * (target - gN);
+
+    // Voxel centre c+0.5 maps to (c+0.5)/GRID, which is exactly texel c's centre - no half-texel fixup.
+    float3 uvw = g * (1.0 / (float)BGI_GRID);
     if (any(uvw < 0.0) || any(uvw > 1.0)) return 0.0h;
-    return (half3)tex.SampleLevel(smp, uvw, 0).rgb;
+
+    uint idirs = BgiIrradianceDirs();
+    if (idirs == 1u) return (half3)tex.SampleLevel(smp, uvw, 0).rgb;
+
+    // CUBE: the ambient-cube evaluation - the 3 buckets in the normal's hemisphere, weighted by n^2
+    // (which sums to exactly 1). Smooth in the normal, so unlike the single-bucket read there is no
+    // hard switch as the dominant axis flips - the banding visible on column shafts goes away.
+    //
+    // The buckets are Z slabs of one texture. Slab-local Z is clamped to [0.5, GRID-0.5] so the
+    // trilinear footprint can never reach a neighbouring slab's texels with nonzero weight; that is
+    // also exactly what wrapMode.Clamp already did at the volume's own Z extremes.
+    float invSlabs = 1.0 / (float)idirs;
+    float zLocal = clamp(g.z, 0.5, (float)BGI_GRID - 0.5) * (1.0 / (float)BGI_GRID);
+    float3 n2 = normal * normal;
+    float3 acc = 0;
+    [unroll]
+    for (uint a = 0u; a < 3u; a++) {
+        float d  = (a == 0u) ? normal.x : ((a == 1u) ? normal.y : normal.z);
+        float w2 = (a == 0u) ? n2.x     : ((a == 1u) ? n2.y     : n2.z);
+        uint slab = a * 2u + (d >= 0.0 ? 1u : 0u);
+        float3 suvw = float3(uvw.x, uvw.y, ((float)slab + zLocal) * invSlabs);
+        acc += (float3)tex.SampleLevel(smp, suvw, 0).rgb * w2;
+    }
+    return (half3)acc;
 }
 
 // Raw buffer-GI irradiance at a surface point (NO AO - the caller multiplies in the merged AO from
@@ -315,12 +419,14 @@ half3 BgiGatherIndirect(float3 worldPos, float3 normal)
     result = BgiSampleField(worldPos, normal, origin, voxelSize, baseOff);
 #else
     // Default: one hardware-trilinear texture tap of the mirrored irradiance field (fine or coarse).
-    // Coarse grid size = its voxel size * grid resolution (only the coarse voxel size is published).
+    // origin/voxelSize come from BgiSelectField above - the tap works in grid units, so the field's
+    // world-space extent is never needed (which also drops the coarse box's voxelSize * GRID rebuild).
+    // A Texture3D can't be selected by a ternary, so the branch picks the sampler pair.
     result = insideFine
         ? BgiSampleFieldTexture(_BgiIrradianceTex, sampler_BgiIrradianceTex,
-                                worldPos, normal, _BgiGridOrigin, _BgiGridSize, _BgiVoxelSize)
+                                worldPos, normal, origin, voxelSize)
         : BgiSampleFieldTexture(_BgiIrradianceTexCoarse, sampler_BgiIrradianceTexCoarse,
-                                worldPos, normal, _BgiCoarseOrigin, _BgiCoarseVoxelSize * (float)BGI_GRID, _BgiCoarseVoxelSize);
+                                worldPos, normal, origin, voxelSize);
 #endif
 
     // Final safety net: guarantee finite, non-negative GI so the additive term can never darken a

@@ -30,13 +30,87 @@
 #include "../Includes/Math.hlsl"
 
 // --- Fields ---
-RWStructuredBuffer<uint2> _Radiance;    // outgoing radiance (fp16x3), stored in solid voxels
+// Radiance is the one field with a per-voxel STRIDE: _BgiRadianceDirs slots per voxel, contiguous.
+// Never index it directly - go through BgiRadianceSlot / BgiRadianceBase (BufferGiField.hlsl), which
+// are the only places that know the direction mode.
+RWStructuredBuffer<uint2> _Radiance;    // outgoing radiance (fp16x3) per face, stored in solid voxels
 RWStructuredBuffer<uint2> _Irradiance;  // accumulated incoming light (rgb) + sample count (w)
+// Incident irradiance on the BACK face of a two-sided (sub-voxel wall) solid voxel. _Irradiance holds
+// the front hemisphere's, gathered around the stored normal; a thin wall's other side faces the
+// opposite way and sees a completely different room, so it needs its own accumulator. Without this
+// the back face re-emits the FRONT's incident light and a sunlit slab glows on its shaded underside -
+// a worse leak than the darkening two-sidedness set out to fix. Only written/read for two-sided solid
+// voxels; air voxels and one-sided surfaces never touch it.
+RWStructuredBuffer<uint2> _IrradianceBack;
 RWStructuredBuffer<uint2> _IrradianceBlur; // spatially blurred irradiance, sampled by the fragment read
 // The current field's blurred irradiance, written by CSBlur (alongside _IrradianceBlur) so the fragment
 // reads it with a single hardware-trilinear tap instead of the 9-tap SSBO B-spline. C# binds this to the
 // field's Texture3D per blur dispatch (fine / coarse); write-only UAV store (no typed-load needed).
 RWTexture3D<float4> _BgiIrradianceTexWrite;
+// Zero every direction slot of one voxel. Air voxels and clears must wipe the whole run, not just
+// slot 0, or a stale back/side face survives a mode switch or a field reset.
+void BgiClearRadiance(uint voxelSlot) {
+    uint base_ = BgiRadianceBase(voxelSlot);
+    uint dirs = BgiRadianceDirs();
+    [loop]
+    for (uint s = 0u; s < dirs; s++) _Radiance[base_ + s] = uint2(0u, 0u);
+}
+
+// Zero every irradiance bucket of one voxel (1 outside Cube, 6 in it).
+void BgiClearIrradiance(uint voxelSlot) {
+    uint base_ = BgiIrradianceBase(voxelSlot);
+    uint dirs = BgiIrradianceDirs();
+    [loop]
+    for (uint b = 0u; b < dirs; b++) {
+        _Irradiance[base_ + b] = uint2(0u, 0u);
+        _IrradianceBlur[base_ + b] = uint2(0u, 0u);
+    }
+}
+
+// Incident irradiance at a voxel for a surface facing `n`, reconstructed from the cube buckets by
+// the standard n^2 ambient-cube weights (3 of 6 buckets, weights summing to 1). Outside Cube it is
+// just the single direction-less value, so callers need no mode branch of their own.
+half3 BgiGatheredIrradiance(uint voxelSlot, float3 n, out half sunOut) {
+    uint dirs = BgiIrradianceDirs();
+    if (dirs == 1u) {
+        half3 c; half w; BgiUnpackRgbH(_Irradiance[voxelSlot], c, w);
+        sunOut = w; return c;
+    }
+    uint base_ = voxelSlot * dirs;
+    float3 n2 = n * n;
+    float3 acc = 0; half sun = 1.0h;
+    [unroll]
+    for (uint a = 0u; a < 3u; a++) {
+        float d  = (a == 0u) ? n.x  : ((a == 1u) ? n.y  : n.z);
+        float w2 = (a == 0u) ? n2.x : ((a == 1u) ? n2.y : n2.z);
+        half3 c; half sw; BgiUnpackRgbH(_Irradiance[base_ + a * 2u + (d >= 0.0 ? 1u : 0u)], c, sw);
+        acc += (float3)c * w2;
+        sun = sw; // identical across buckets (CSGather writes the same visibility into each)
+    }
+    sunOut = sun;
+    return (half3)acc;
+}
+
+// Direction-less average over the buckets, for the consumers that have no surface normal: the air
+// probe's displayed value and the auto-exposure measurement. Equal weights, so it is the mean
+// radiance over the sphere - what the single-slot field always held.
+half3 BgiOmniIrradiance(uint voxelSlot, out half sunOut) {
+    uint dirs = BgiIrradianceDirs();
+    if (dirs == 1u) {
+        half3 c; half w; BgiUnpackRgbH(_Irradiance[voxelSlot], c, w);
+        sunOut = w; return c;
+    }
+    uint base_ = voxelSlot * dirs;
+    float3 acc = 0; half sun = 1.0h;
+    [unroll]
+    for (uint b = 0u; b < 6u; b++) {
+        half3 c; half sw; BgiUnpackRgbH(_Irradiance[base_ + b], c, sw);
+        acc += (float3)c; sun = sw;
+    }
+    sunOut = sun;
+    return (half3)(acc * (1.0 / 6.0));
+}
+
 RWStructuredBuffer<uint>  _LuminanceResult; // [0] = encoded log-luminance sum, [1] = sample count (auto-exposure)
 StructuredBuffer<uint>    _Material;      // albedo/emission (voxelized by BufferGiVoxelize.shader); inject-only cold data
 // The same buffer as _Material, aliased as a UAV and bound ONLY by CSInjectBakedLights (which stamps
@@ -328,7 +402,11 @@ half GetLocalLightRangeAttenuation(float distSq, float rangeSq)
 // `total` stays fp32 on purpose: it is the one accumulation fed by raw light-colour uniforms rather
 // than by the fp16-packed fields, so a bright light at close range could exceed 65504 here - and
 // SanitizeColor maps an Inf to BLACK, which would flash a voxel off instead of clamping it.
-float3 GetDirectLight(int3 cell, float3 normal, out half sunVis)
+// `radSlot` is this FACE's radiance slot (BgiRadianceSlot), needed only by the Temporal sun-shadow
+// estimator, which folds this frame's sample into the value that face stored last frame. Passing the
+// resolved slot rather than re-deriving it keeps the two sides of a thin wall from reading each
+// other's history - each face accumulates its own visibility.
+float3 GetDirectLight(int3 cell, float3 normal, uint radSlot, out half sunVis)
 {
     float3 voxelCenter = BgiVoxelCenter((uint3)cell);
     int3 hit;
@@ -358,7 +436,7 @@ float3 GetDirectLight(int3 cell, float3 normal, out half sunVis)
     float3 total = 0;
     if (_BgiSunShadowMode == BGI_SUNSHADOW_TEMPORAL) {
         half3 prevRgb; half prevSun;
-        BgiUnpackRgbH(_Radiance[BgiSlot((uint3)cell)], prevRgb, prevSun);
+        BgiUnpackRgbH(_Radiance[radSlot], prevRgb, prevSun);
         half sample = SunVisibilitySample(shadowStart, _FrameCount);
         // _EmaWeight is exactly 1 on the first frame after a change, so this starts AT the sample
         // rather than fading up from a black buffer.
@@ -448,9 +526,16 @@ half3 GatherRayRadiance(int3 fromCell, float3 dir, half reachBoost)
         float3 faceN = (dot(hitNormal, hitNormal) > 1e-6) ? hitNormal : float3(0, 1, 0); // ambiguous -> up (matches inject)
         // A baked-LIGHT voxel is an omnidirectional emitter, not a surface: it has no lit face, so it
         // skips the front/back test and reads back its radiance from whichever side the ray came.
-        if (BgiSurfaceIsEmissive(hitSurface) || dot(dir, faceN) < 0.0) {
+        //
+        // TWO-SIDED voxels also pass: a sub-voxel wall genuinely HAS a face here, it is just not the
+        // one the stored normal describes, and inject gave it its own slot. Rejecting it (the old
+        // behaviour, and still the behaviour for a real interior back-face) is what made thin walls
+        // read black on an arbitrary side. The slot select below picks the side by the face the ray
+        // crossed - outward normal -dir - so the dark underside can never return the lit top's value.
+        bool twoSided = _BgiRadianceDirs > 1 && BgiSurfaceIsTwoSided(hitSurface);
+        if (BgiSurfaceIsEmissive(hitSurface) || dot(dir, faceN) < 0.0 || twoSided) {
             half3 rad; half w;
-            BgiUnpackRgbH(_Radiance[BgiSlot((uint3)hit)], rad, w);
+            BgiUnpackRgbH(_Radiance[BgiRadianceSlot(BgiSlot((uint3)hit), -dir, faceN)], rad, w);
             // Distance-weighted reach fill (t = hit distance / grid diagonal, clamped 0..1). Applied
             // BEFORE the firefly clamp so a boosted-then-bright sample still can't spike.
             half t = (half)saturate(length(BgiVoxelCenter((uint3)hit) - BgiVoxelCenter((uint3)fromCell)) / BGI_MAX_RAY_DIST);
@@ -471,9 +556,9 @@ void CSClear(uint3 id : SV_DispatchThreadID)
 {
     uint i = id.x;
     if (i >= BGI_COUNT) return;
-    _Radiance[_FieldOffset + i] = uint2(0u, 0u);
-    _Irradiance[_FieldOffset + i] = uint2(0u, 0u);
-    _IrradianceBlur[_FieldOffset + i] = uint2(0u, 0u);
+    BgiClearRadiance(_FieldOffset + i);
+    BgiClearIrradiance(_FieldOffset + i); // all buckets of _Irradiance and _IrradianceBlur
+    _IrradianceBack[_FieldOffset + i] = uint2(0u, 0u);
 }
 
 // ----------------------------------------------------------
@@ -487,10 +572,11 @@ void CSInject(uint3 id : SV_DispatchThreadID)
 
     // Test the bitfield first so air voxels never touch the (cold) material buffer; only solid
     // voxels read their albedo/emission - inject is the sole consumer of _Material.
-    if (!BgiSolidBit(_FieldOffset + i)) { _Radiance[_FieldOffset + i] = uint2(0u, 0u); return; }
+    if (!BgiSolidBit(_FieldOffset + i)) { BgiClearRadiance(_FieldOffset + i); return; }
     uint mat = _Material[_FieldOffset + i];
 
     int3 cell = (int3)BgiCoord(i);
+    uint surfWord = _Surface[_FieldOffset + i];
     float3 normal = SurfaceNormal(cell);
     if (dot(normal, normal) < 1e-6) normal = float3(0, 1, 0); // ambiguous -> harmless up for direct/bounce
     half3 albedo = BgiAlbedo(mat);
@@ -506,19 +592,47 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     // F_ii self-illumination loop: energy the wall emits came back as "incident" and re-lit it. It
     // also restores directionality, so light from an opening propagates inward instead of averaging
     // flat against dark neighbours (helps cavern/indirect fill).
-    half3 bounce; half bw;
-    BgiUnpackRgbH(_Irradiance[_FieldOffset + i], bounce, bw);
+    // In Cube this reconstructs the FRONT face's share from the buckets (n^2 weights); outside it,
+    // it is the single stored value. Either way the back face below asks for its own direction, so
+    // the two sides of a thin wall no longer re-emit each other's incident light.
+    half bwSun;
+    half3 bounce = BgiGatheredIrradiance(_FieldOffset + i, normal, bwSun);
 
     // Clamp reflectance below 1: with albedo == 1 the bounce feedback is a lossless cavity that
     // diverges to Inf/NaN ("black plague"). Still cheap insurance for concave corners even though the
     // front-hemisphere gather removed the dominant self-term. Emission is unaffected (added separately).
     half3 safeAlbedo = min(albedo, 0.95h);
-    half sunVis;
-    float3 direct = GetDirectLight(cell, normal, sunVis);
-    half3 outgoing = SanitizeColor(emissive + (float3)safeAlbedo * (direct + (float3)bounce));
+
+    // FRONT face: the stored normal's side.
     // Stash the sun visibility in the radiance's spare w half - the fragment reads it as a cheap,
     // pre-marched voxel sun-shadow (interpolated across the surface face), no per-pixel ray needed.
-    _Radiance[_FieldOffset + i] = BgiPackRgb(outgoing, sunVis);
+    uint frontSlot = BgiRadianceSlot(_FieldOffset + i, normal, normal);
+    half sunVis;
+    float3 direct = GetDirectLight(cell, normal, frontSlot, sunVis);
+    half3 outgoing = SanitizeColor(emissive + (float3)safeAlbedo * (direct + (float3)bounce));
+    _Radiance[frontSlot] = BgiPackRgb(outgoing, sunVis);
+
+    // BACK face of a sub-voxel wall. Both of its faces share this cell, so without a second slot the
+    // gather's front/back test rejects everything arriving at the far side and falls back to the
+    // (black) ambient floor - a thin wall goes dark on whichever side the voxelizer happened not to
+    // store. Running the same computation with -normal gives that side its OWN direct light and its
+    // OWN sun-visibility ray (GetDirectLight steps its shadow start the other way), which is the part
+    // that actually differs: a sunlit floor slab's top is lit and its underside is not.
+    // Skipped in Single, where there is nowhere to put it.
+    if (_BgiRadianceDirs > 1 && BgiSurfaceIsTwoSided(surfWord)) {
+        float3 backN = -normal;
+        uint backSlot = BgiRadianceSlot(_FieldOffset + i, backN, normal);
+        half backSun;
+        float3 backDirect = GetDirectLight(cell, backN, backSlot, backSun);
+        // Same albedo and emission (one material per voxel), but its OWN incident irradiance: reusing
+        // the front's `bounce` here re-emits the lit side's light out of the dark side, which measured
+        // +150% in Sponza's lower gallery - the slab's underside glowing with the courtyard above it.
+        // CSGather fills _IrradianceBack with a back-hemisphere gather for exactly these voxels.
+        half3 backBounce; half backBw;
+        BgiUnpackRgbH(_IrradianceBack[_FieldOffset + i], backBounce, backBw);
+        half3 backOut = SanitizeColor(emissive + (float3)safeAlbedo * (backDirect + (float3)backBounce));
+        _Radiance[backSlot] = BgiPackRgb(backOut, backSun);
+    }
 }
 
 // ----------------------------------------------------------
@@ -570,22 +684,76 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     // The accumulator stays fp32 even though each sample is fp16: a sample can legitimately be near
     // the 60000 field ceiling, and summing several of those would overflow half before the divide.
     // The mean is back in fp16 range and SanitizeColor narrows it below.
+    bool cube = BgiIrradianceDirs() > 1u;
+    bool twoSided = surfaceVoxel && BgiRadianceDirs() > 1u && BgiSurfaceIsTwoSided(surf);
+    // A two-sided surface in CUBE mode gathers the FULL sphere, not the front hemisphere: its two
+    // faces look into different rooms and the buckets have to carry both, since the n^2
+    // reconstruction is what separates them again at read time. (Outside Cube the back hemisphere
+    // gets its own pass below instead.)
+    bool omniSample = !surfaceVoxel || (cube && twoSided);
+
     float3 incoming = 0;
+    // Cube buckets: cosine lobes about the six world axes. Accumulated with their own weight sums
+    // rather than a fixed divisor, because the sampling distribution differs between the omni probe
+    // and the cosine-hemisphere surface gather - dividing by the realised weight keeps both unbiased.
+    float3 bucket[6]; float bucketW[6];
+    if (cube) { [unroll] for (uint b = 0u; b < 6u; b++) { bucket[b] = 0.0; bucketW[b] = 0.0; } }
+
     uint sampleCount = max(_SamplesPerFrame, 1u);
     [loop]
     for (uint r = 0u; r < sampleCount; r++) {
         float2 noise = GiSampleNoise(c, _FrameCount, r);
-        float3 dir = surfaceVoxel ? CosineSampleHemisphere(normal, noise) // surface: front hemisphere
-                                  : GetRandomDirectionFromNoise2(noise);  // air/light: omni probe
-        incoming += GatherRayRadiance(cell, dir, surfaceVoxel ? 1.0h : (half)_ReachBoost);
+        float3 dir = omniSample ? GetRandomDirectionFromNoise2(noise)    // air/light/two-sided: omni
+                                : CosineSampleHemisphere(normal, noise); // surface: front hemisphere
+        float3 L = (float3)GatherRayRadiance(cell, dir, surfaceVoxel ? 1.0h : (half)_ReachBoost);
+        if (!cube) incoming += L; // the direction-less mean; Cube stores the buckets instead
+        else {
+            // Only the 3 axes in this direction's hemisphere get a positive cosine, so this is 3
+            // weighted adds per ray, not 6.
+            [unroll]
+            for (uint a = 0u; a < 3u; a++) {
+                float d = (a == 0u) ? dir.x : ((a == 1u) ? dir.y : dir.z);
+                uint b = a * 2u + (d >= 0.0 ? 1u : 0u);
+                float w = abs(d);
+                bucket[b] += L * w;
+                bucketW[b] += w;
+            }
+        }
     }
     incoming *= rcp((float)sampleCount); // this frame's estimate = mean of sampleCount samples
+
+    // BACK hemisphere for a sub-voxel wall. Its two faces look into different rooms, so the back face
+    // needs its own incident estimate - sharing the front's is what makes a sunlit slab glow on its
+    // shaded underside. Same ray count and the same physical (unboosted) weight as the front surface
+    // gather; only two-sided voxels pay for it. The noise is decorrelated from the front pass by
+    // offsetting the frame so the two hemispheres don't sample mirrored directions in lockstep.
+    // Not needed in Cube: the omni sample above already fed both hemispheres into the buckets, and
+    // the n^2 reconstruction separates them - _IrradianceBack is the 1-bucket fallback for that.
+    bool twoSidedSurface = twoSided && !cube;
+    if (twoSidedSurface) {
+        float3 backNormal = -normal;
+        float3 incomingBack = 0;
+        [loop]
+        for (uint rb = 0u; rb < sampleCount; rb++) {
+            float2 noise = GiSampleNoise(c, _FrameCount + 7919u, rb); // 7919: a prime, just a decorrelating offset
+            incomingBack += GatherRayRadiance(cell, CosineSampleHemisphere(backNormal, noise), 1.0h);
+        }
+        incomingBack *= rcp((float)sampleCount);
+
+        half3 oldBack; half oldBackW;
+        BgiUnpackRgbH(_IrradianceBack[_FieldOffset + i], oldBack, oldBackW);
+        half3 newBack = SanitizeColor(lerp((float3)oldBack, incomingBack, min(1.0, _EmaWeight)));
+        _IrradianceBack[_FieldOffset + i] = BgiPackRgb(newBack, 0.0);
+    }
 
     // Previous value, needed both by the irradiance progressive average below and (in Temporal mode)
     // by the sun visibility. Note oldSun was already being unpacked and discarded here, so reading it
     // costs nothing - which is why the temporal sun-shadow estimator is effectively free.
-    half3 oldC; half oldSun;
-    BgiUnpackRgbH(_Irradiance[_FieldOffset + i], oldC, oldSun);
+    // In Cube the per-bucket loop at the end reads each bucket's own previous value, so only the sun
+    // visibility is needed here (Temporal folds into last frame's) - oldC stays unused.
+    half3 oldC = 0.0h; half oldSun = 1.0h;
+    if (!cube) BgiUnpackRgbH(_Irradiance[_FieldOffset + i], oldC, oldSun);
+    else BgiOmniIrradiance(_FieldOffset + i, oldSun);
     float weight = min(1.0, _EmaWeight);
 
     // Baked SUN VISIBILITY for the air probe: shadow ray(s) toward the sun from this air voxel
@@ -610,8 +778,27 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     // window that shimmers forever). The first frame is ~weight 1 (noisy), but CSBlur's Confidence≈0
     // hides that warm-up. The w channel carries the baked sun visibility (above), not a sample count.
     // oldC / weight are read above, where the sun visibility also needs them.
-    half3 newC = SanitizeColor(lerp((float3)oldC, incoming, weight));
-    _Irradiance[_FieldOffset + i] = BgiPackRgb(newC, sunVis);
+    if (!cube) {
+        half3 newC = SanitizeColor(lerp((float3)oldC, incoming, weight));
+        _Irradiance[_FieldOffset + i] = BgiPackRgb(newC, sunVis);
+        return;
+    }
+
+    // CUBE: the same progressive average, per bucket. Each carries the sun visibility in its w so any
+    // bucket can answer the shadow read without a special case for which one is "the" slot.
+    //
+    // A bucket that got no weight this frame (no ray landed in its hemisphere - common at low
+    // samplesPerFrame, and permanent for the back hemisphere of a one-sided surface) must HOLD its
+    // previous value rather than fold in a zero, which would decay it to black over frames.
+    uint ibase = BgiIrradianceBase(_FieldOffset + i);
+    [unroll]
+    for (uint b = 0u; b < 6u; b++) {
+        half3 oldB; half oldBw;
+        BgiUnpackRgbH(_Irradiance[ibase + b], oldB, oldBw);
+        float3 est = (bucketW[b] > 1e-4) ? bucket[b] / bucketW[b] : (float3)oldB;
+        half3 newB = SanitizeColor(lerp((float3)oldB, est, weight));
+        _Irradiance[ibase + b] = BgiPackRgb(newB, sunVis);
+    }
 }
 
 // ----------------------------------------------------------
@@ -630,27 +817,141 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
     // Baked-LIGHT voxels are solid but are NOT surfaces (see CSGather): they fall through to the AIR
     // path below. Zeroing one here punches a black hole into the mirror texture exactly where a light
     // sits, and the fragment's default read is a raw trilinear tap with NO occupancy gate - so that
-    // hole bleeds a dark blotch onto any wall the light is near. The _Surface load sits inside the
-    // solid branch, so the air majority never pays for it.
-    if (BgiSolidBit(_FieldOffset + i) && !BgiSurfaceIsEmissive(_Surface[_FieldOffset + i])) {
-        _IrradianceBlur[_FieldOffset + i] = uint2(0u, 0u);
+    // hole bleeds a dark blotch onto any wall the light is near. Nested rather than one &&: the solid
+    // branch needs the surface word twice (emissive flag + normal), and keeping the load inside the
+    // occupancy test keeps the air majority from ever touching _Surface.
+    if (BgiSolidBit(_FieldOffset + i)) {
+    uint sword = _Surface[_FieldOffset + i];
+    if (!BgiSurfaceIsEmissive(sword)) {
+        // The SSBO read skips solids: keep every bucket zero.
+        {
+            uint zb = BgiIrradianceBase(_FieldOffset + i);
+            uint zd = BgiIrradianceDirs();
+            [loop]
+            for (uint z = 0u; z < zd; z++) _IrradianceBlur[zb + z] = uint2(0u, 0u);
+        }
         // Solid voxels carry NO irradiance (rgb = 0), but their ALPHA must be the surface's own baked
         // sun visibility (radiance.w), NOT a constant 1.0. The fragment's shadow tap sits ~1 voxel into
         // the air but its trilinear footprint still catches these solid cells; a constant 1.0 here washes
         // the shadow toward lit (the bug). Writing radiance.w keeps solid + air consistent so the tap
         // interpolates a correct sun visibility across the surface.
+        // Front face's sun visibility. The mirror texture has one alpha per voxel, so a two-sided
+        // voxel can only publish one of its two sides here; the stored normal's side is the one the
+        // texture's neighbours agree with, and the SSBO face read (which can pick per side) is the
+        // path that resolves the other one.
+        float3 sn0 = BgiSurfaceNormal(sword);
         half3 rgbIgnore; half solidSun;
-        BgiUnpackRgbH(_Radiance[_FieldOffset + i], rgbIgnore, solidSun);
-        _BgiIrradianceTexWrite[BgiCoord(i)] = float4(0.0, 0.0, 0.0, solidSun);
+        BgiUnpackRgbH(_Radiance[BgiRadianceSlot(_FieldOffset + i, sn0, sn0)], rgbIgnore, solidSun);
+
+        // DILATE the RGB into the first solid shell instead of writing black there. The texture read is
+        // a raw trilinear tap with no occupancy gate, so a black solid texel bleeds DARKNESS onto every
+        // wall whose footprint touches it. The fragment tap is snapped to the air layer's centres along
+        // the normal axis, so that layer is all this can affect - the IN-PLANE neighbours at a concave
+        // corner, which is exactly the case the SSBO gather handles by renormalising over its air taps.
+        // Filling the shell with its air neighbours' irradiance reconstructs the same value one tap.
+        // Same shape as OcclusionFieldTrace's CSDilate, and one shell suffices for its reason: the tap
+        // sits at an air-cell centre, so its footprint reaches at most one voxel into the solid.
+        //
+        // Safe in place, more strongly than CSDilate: this reads _Irradiance, which CSBlur never writes
+        // (it writes _IrradianceBlur and the mirror texture), so no thread can observe a partial write.
+        // 1/distance weights keep the face neighbours dominant over the diagonals, which limits how far
+        // a value can be pulled around a corner from the far side of a perpendicular wall.
+        //
+        // NOT confidence-eased, unlike the air path: that would need the previous texel back out of
+        // _BgiIrradianceTexWrite, and a storage texture is write-only under WebGPU. Safe to skip here -
+        // _Irradiance is already the temporally accumulated mean (so the shell doesn't shimmer) and the
+        // shell only ever carries minority in-plane weight, so at worst a concave corner brightens a
+        // frame ahead of the air around it during a light change.
+        // FRONT HEMISPHERE ONLY, by this voxel's own surface normal. A wall thinner than a voxel is a
+        // SINGLE solid shell with lit air on both sides; averaging all 26 neighbours hands the dark side
+        // the bright side's irradiance, i.e. light pulled straight through the wall. Measured on Sponza's
+        // lower arcade, the ungated average ran ~10% brighter than the SSBO reference there. Gating on
+        // dot(dir, normal) restricts the average to the air the front face actually sees, which is the
+        // same air the fragment's tap reads, so the shell now reconstructs that side and only that side.
+        // Every solid voxel has a normal (mesh normals under BGI_BAKED_NORMALS, else CSBuildSurface's
+        // occupancy gradient), so this is always available.
+        // A two-sided voxel serves two opposite faces from this ONE texel, so there is no hemisphere
+        // that is "in front" of it - gating by the stored normal would fill it with the air on
+        // whichever side the voxelizer happened to store and hand that to the other side, which is
+        // pulling light straight through the wall. Leave it black: after the plane-snap the shell
+        // only ever carries in-plane weight, so the cost is a little missing fill next to thin walls,
+        // against a wrong guess. (Cube resolves this properly; see RadianceDirections.)
+        uint idirs = BgiIrradianceDirs();
+        if (BgiRadianceDirs() > 1u && BgiSurfaceIsTwoSided(sword)) {
+            [unroll]
+            for (uint tb = 0u; tb < 6u; tb++) {
+                if (tb >= idirs) break;
+                _BgiIrradianceTexWrite[BgiTexCoord(BgiCoord(i), tb)] = float4(0.0, 0.0, 0.0, solidSun);
+            }
+            return;
+        }
+
+        float3 sn = BgiSurfaceNormal(sword);
+        int3 sc = (int3)BgiCoord(i);
+        // One accumulator per bucket; the WEIGHTS are shared, since a neighbour's distance and which
+        // hemisphere it is in do not depend on the bucket. So this stays a 26-neighbour walk, and the
+        // buckets of one neighbour are contiguous in memory - the extra reads are a burst, not a
+        // scatter. fp32 sums, same headroom reason as the air blur below.
+        float3 dsum[6], dsumAll[6];
+        [unroll] for (uint b0 = 0u; b0 < 6u; b0++) { dsum[b0] = 0.0; dsumAll[b0] = 0.0; }
+        float dwsum = 0.0;    // front hemisphere
+        float dwsumAll = 0.0; // ungated fallback, for a degenerate normal with no air in front
+        // Left rolled (like CSDilate): 27 unrolled iterations would bloat the kernel for a branch only
+        // the solid minority takes, and the loop is bandwidth-bound on the occupancy tests anyway.
+        for (int dz = -1; dz <= 1; dz++)
+        for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++) {
+            if ((dx | dy | dz) == 0) continue; // self
+            int3 nb = sc + int3(dx, dy, dz);
+            if (!BgiInBounds(nb)) continue;
+            uint nbSlot = BgiSlot((uint3)nb);
+            if (BgiSolidBit(nbSlot)) continue; // read ONLY air, write ONLY solid
+            float3 dir = float3(dx, dy, dz);
+            float w = rsqrt(dot(dir, dir)); // face 1, edge .71, corner .58
+            bool front = dot(dir, sn) > 0.0; // behind the surface: pulling this through is the leak
+            uint nbase = BgiIrradianceBase(nbSlot);
+            [unroll]
+            for (uint b = 0u; b < 6u; b++) {
+                if (b >= idirs) break;
+                half3 nc; half nsun;
+                BgiUnpackRgbH(_Irradiance[nbase + b], nc, nsun);
+                dsumAll[b] += (float3)nc * w;
+                if (front) dsum[b] += (float3)nc * w;
+            }
+            dwsumAll += w;
+            if (front) dwsum += w;
+        }
+        // Prefer the front hemisphere; fall back to all air neighbours if the normal points somewhere
+        // with none (rather than writing black, which is the dark bleed this whole branch exists to fix).
+        // Neither = deep interior. Stays black; nothing can ever sample it.
+        [unroll]
+        for (uint b1 = 0u; b1 < 6u; b1++) {
+            if (b1 >= idirs) break;
+            float3 dilated = (dwsum > 0.0) ? dsum[b1] / dwsum
+                           : (dwsumAll > 0.0) ? dsumAll[b1] / dwsumAll : 0.0;
+            _BgiIrradianceTexWrite[BgiTexCoord(BgiCoord(i), b1)] = float4(dilated, solidSun);
+        }
         return;
+    }
     }
 
     // The blur sums at most 7 fp16 taps and divides by the count - the running sum can reach 7x a
     // field value, so it is accumulated in fp32 for the same headroom reason as the gather.
     int3 c = (int3)BgiCoord(i);
-    half3 centerC; half centerSun;
-    BgiUnpackRgbH(_Irradiance[_FieldOffset + i], centerC, centerSun); // center rgb + baked sun vis (w)
-    float3 sum = (float3)centerC;
+    uint airDirs = BgiIrradianceDirs();
+    uint cbase = BgiIrradianceBase(_FieldOffset + i);
+    // Per bucket, but the gate and the weights are shared - which neighbour is air does not depend on
+    // direction - so this stays one 6-neighbour walk with a contiguous burst read per neighbour.
+    float3 sum[6];
+    [unroll] for (uint b0 = 0u; b0 < 6u; b0++) sum[b0] = 0.0;
+    half centerSun = 1.0h;
+    [unroll]
+    for (uint bc = 0u; bc < 6u; bc++) {
+        if (bc >= airDirs) break;
+        half3 cc; half cs; BgiUnpackRgbH(_Irradiance[cbase + bc], cc, cs);
+        sum[bc] = (float3)cc;
+        centerSun = cs; // identical across buckets
+    }
     float wsum = 1.0;
     float sunSum = centerSun; // baked sun visibility, gated-blurred alongside the irradiance
 
@@ -661,21 +962,42 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
     for (int k = 0; k < 6; k++) {
         int3 nb = c + axes[k];
         if (!BgiInBounds(nb)) continue;
-        if (BgiSolidBit(BgiSlot((uint3)nb))) continue; // gate: don't blur across surfaces
-        half3 nc; half nsun;
-        BgiUnpackRgbH(_Irradiance[BgiSlot((uint3)nb)], nc, nsun);
-        sum += (float3)nc;
-        sunSum += nsun;
+        uint nbVoxel = BgiSlot((uint3)nb);
+        if (BgiSolidBit(nbVoxel)) continue; // gate: don't blur across surfaces
+        uint nbase = BgiIrradianceBase(nbVoxel);
+        half nsun0 = 0.0h;
+        [unroll]
+        for (uint b = 0u; b < 6u; b++) {
+            if (b >= airDirs) break;
+            half3 nc; half nsun;
+            BgiUnpackRgbH(_Irradiance[nbase + b], nc, nsun);
+            sum[b] += (float3)nc;
+            nsun0 = nsun;
+        }
+        sunSum += nsun0;
         wsum += 1.0;
     }
 
     // Ease the displayed value from its previous state toward the freshly-blurred one by confidence,
     // so a light change fades in and completes exactly when the field has converged (confidence == 1).
-    half3 blurred = (half3)(sum / wsum);
-    half3 prevBlur; half pw;
-    BgiUnpackRgbH(_IrradianceBlur[_FieldOffset + i], prevBlur, pw);
-    half3 result = lerp(prevBlur, blurred, (half)_Confidence);
-    _IrradianceBlur[_FieldOffset + i] = BgiPackRgb(result, 0.0);
+    half3 result = 0.0h; // bucket 0, kept for the single-bucket texture write below
+    [unroll]
+    for (uint bw = 0u; bw < 6u; bw++) {
+        if (bw >= airDirs) break;
+        half3 blurred = (half3)(sum[bw] / wsum);
+        half3 prevBlur; half pw;
+        BgiUnpackRgbH(_IrradianceBlur[cbase + bw], prevBlur, pw);
+        half3 r = lerp(prevBlur, blurred, (half)_Confidence);
+        _IrradianceBlur[cbase + bw] = BgiPackRgb(r, 0.0);
+        if (bw == 0u) result = r;
+        // The mirror slab for this bucket. Alpha is direction-less, so every slab carries the same
+        // sun visibility and the fragment can read it from whichever bucket it already sampled.
+        if (airDirs > 1u) {
+            float sunSlab = _BgiBlurSunVis != 0 ? (sunSum / wsum) : (float)centerSun;
+            _BgiIrradianceTexWrite[BgiTexCoord(BgiCoord(i), bw)] = float4(r, sunSlab);
+        }
+    }
+    if (airDirs > 1u) return; // slabs already written above
     // Fused mirror: write the displayed irradiance into the field's Texture3D rgb (the fragment's 1-tap
     // GI read) and the sun visibility into its ALPHA (the fragment's 1-tap baked shadow).
     // The sun vis is NOT confidence-eased - it's deterministic, so it responds immediately to a sun move.
@@ -700,10 +1022,10 @@ void CSInitFineFromCoarse(uint3 id : SV_DispatchThreadID)
     if (i >= BGI_COUNT) return;
 
     uint fineSlot = BGI_FINE_OFFSET + i;
-    _Radiance[fineSlot] = uint2(0u, 0u);
+    BgiClearRadiance(fineSlot);
+    _IrradianceBack[fineSlot] = uint2(0u, 0u);
     if (BgiSolidBit(fineSlot)) { // irradiance lives only in air voxels
-        _Irradiance[fineSlot] = uint2(0u, 0u);
-        _IrradianceBlur[fineSlot] = uint2(0u, 0u);
+        BgiClearIrradiance(fineSlot);
         return;
     }
 
@@ -742,10 +1064,17 @@ void CSInitFineFromCoarse(uint3 id : SV_DispatchThreadID)
     }
 
     // Seed both: the blur is the displayed start value (the confidence ease departs from it), and the
-    // raw irradiance keeps the first inject's bounce read consistent with it.
+    // raw irradiance keeps the first inject's bounce read consistent with it. In Cube every bucket
+    // gets the same direction-less seed - it is a warm start that the first gathers refine, and the
+    // coarse field it comes from has no direction to offer anyway.
     uint2 packed = BgiPackRgb(seed, 0.0);
-    _Irradiance[fineSlot] = packed;
-    _IrradianceBlur[fineSlot] = packed;
+    uint fbase = BgiIrradianceBase(fineSlot);
+    uint fdirs = BgiIrradianceDirs();
+    [loop]
+    for (uint b = 0u; b < fdirs; b++) {
+        _Irradiance[fbase + b] = packed;
+        _IrradianceBlur[fbase + b] = packed;
+    }
 }
 
 // ----------------------------------------------------------
@@ -773,8 +1102,18 @@ void CSAverageLuminance(uint3 id : SV_DispatchThreadID)
     float cosAngle = dot(offset * invDist, _CameraForward);
     if (cosAngle < 0.0) return; // behind the camera
 
-    half3 irr; half w;
-    BgiUnpackRgbH(_IrradianceBlur[slot], irr, w);
+    // Exposure has no surface normal to ask about, so it measures the direction-less mean over the
+    // buckets - the same quantity the single-slot field always held, so auto-exposure behaves
+    // identically in every mode rather than drifting when the field becomes directional.
+    uint lbase = BgiIrradianceBase(slot);
+    uint ldirs = BgiIrradianceDirs();
+    float3 irrSum = 0;
+    [loop]
+    for (uint b = 0u; b < ldirs; b++) {
+        half3 bc; half bw; BgiUnpackRgbH(_IrradianceBlur[lbase + b], bc, bw);
+        irrSum += (float3)bc;
+    }
+    half3 irr = (half3)(irrSum / (float)ldirs);
     float lum = (float)GetRec709LuminanceH(irr) * cosAngle; // cosine-weight: off-axis voxels count less
     // The log encode stays fp32 and must: (logLum + 16) * 1024 reaches ~32768, where fp16's ulp is 16
     // - it would quantize the accumulated exposure estimate into visible steps.
@@ -899,9 +1238,43 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
         n = BgiSurfaceNormal(word);                  // mesh mode: normal already written by the voxelizer
     }
     half openness = BgiComputeOpenness(cell, n);
+
+    // TWO-SIDED: solid, with AIR on both sides along its own normal axis - i.e. a wall, slab or
+    // railing thinner than a voxel, whose two faces had to share this one cell. Derived from
+    // occupancy rather than from the voxelizer's triangles: race-free (the two faces' fragments
+    // contend for the cell during rasterization), independent of draw order, and it tests the
+    // condition that actually matters - whether there is a second side to serve at all. A cell with
+    // solid behind it has no back face to light, however many triangles landed in it.
+    // Out-of-grid counts as air, matching OccupancyNormal: a wall on the grid boundary is still thin.
+    // In gradient-normal mode the voxelizer thickens walls inward, so this correctly (almost) never
+    // fires there - the wall is no longer thin.
+    uint flags = word & BGI_SURFACE_FLAGS_MASK;
+    // A sub-voxel wall: AIR on both sides along the DOMINANT normal axis - the same face pick
+    // BgiRadianceSlot, BgiSampleField and the fragment's plane-snap all use.
+    //
+    // Deliberately strict on both counts, both learned the hard way:
+    //   * round(n) instead of the dominant axis gives a DIAGONAL step for an off-axis normal
+    //     (.6,.6,.5 rounds to 1,1,1), testing a corner neighbour rather than the face.
+    //   * scanning the whole back HEMISPHERE for air instead of the one opposite face over-flags
+    //     badly: for a normal like (.7,.7,0) the -Y neighbour counts, so an ordinary wall cell with
+    //     air below it gains a spurious "back face", injects a second radiance and leaks. Measured
+    //     5x too bright through a Sponza wall (0.33 against 0.06) before this was reverted.
+    // A cell with solid behind it has no second side to light, however thin the wall looks.
+    float3 an = abs(n);
+    int3 step = (an.x >= an.y && an.x >= an.z) ? int3(n.x >= 0.0 ? 1 : -1, 0, 0)
+              : (an.y >= an.z)                 ? int3(0, n.y >= 0.0 ? 1 : -1, 0)
+                                               : int3(0, 0, n.z >= 0.0 ? 1 : -1);
+    {
+        int3 front = cell + step, back = cell - step;
+        // Out of grid counts as air, matching OccupancyNormal: a wall on the boundary is still thin.
+        bool frontAir = !BgiInBounds(front) || !BgiSolidBit(BgiSlot((uint3)front));
+        bool backAir  = !BgiInBounds(back)  || !BgiSolidBit(BgiSlot((uint3)back));
+        if (frontAir && backAir) flags |= BGI_SURFACE_FLAG_TWOSIDED;
+    }
+
     // normal (0-15) + AO (16-23), carrying the flag bits (24-31) across - the baked-light injection
     // ran before this pass and its EMISSIVE flag must survive the rewrite.
-    _Surface[slot] = BgiPackSurfaceNormal(n) | BgiPackOpenness(openness) | (word & BGI_SURFACE_FLAGS_MASK);
+    _Surface[slot] = BgiPackSurfaceNormal(n) | BgiPackOpenness(openness) | flags;
 }
 
 // ----------------------------------------------------------

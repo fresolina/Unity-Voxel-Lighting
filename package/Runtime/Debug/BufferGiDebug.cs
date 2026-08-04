@@ -50,6 +50,8 @@ namespace Lotec.Lighting {
         static readonly int s_bgiGrid = Shader.PropertyToID("_BgiGrid");
         static readonly int s_bgiGridLog2 = Shader.PropertyToID("_BgiGridLog2");
         static readonly int s_bgiCount = Shader.PropertyToID("_BgiCount");
+        static readonly int s_bgiRadianceDirs = Shader.PropertyToID("_BgiRadianceDirs");
+        static readonly int s_bgiIrradianceDirs = Shader.PropertyToID("_BgiIrradianceDirs");
         static readonly int s_gridDims = Shader.PropertyToID("_DbgGridDims");
         static readonly int s_stride = Shader.PropertyToID("_DbgStride");
         static readonly int s_cubeFill = Shader.PropertyToID("_DbgCubeFill");
@@ -113,6 +115,11 @@ namespace Lotec.Lighting {
             _material.SetInt(s_bgiGrid, gi.Grid);
             _material.SetInt(s_bgiGridLog2, gi.GridLog2);
             _material.SetInt(s_bgiCount, gi.VoxelCount);
+            // Per-voxel STRIDES of the radiance and irradiance buffers (see RadianceDirections). Set on
+            // the material like the other grid constants rather than relying on the globals, so the
+            // view is correct even when the updater has not published them this frame.
+            _material.SetInt(s_bgiRadianceDirs, gi.RadianceSlots);
+            _material.SetInt(s_bgiIrradianceDirs, gi.IrradianceSlots);
             _material.SetVector(s_gridDims, new Vector4(g, g, g, 0f));
             _material.SetFloat(s_stride, s);
             _material.SetFloat(s_cubeFill, cubeFill);
