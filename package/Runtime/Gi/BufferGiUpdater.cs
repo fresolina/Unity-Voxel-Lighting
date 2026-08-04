@@ -418,22 +418,11 @@ namespace Lotec.Lighting {
             get => _radianceDirections;
             set {
                 if (_radianceDirections == value) return;
-                _radianceDirections = ValidateDirections(value);
+                _radianceDirections = value;
                 _collectedSamples = 0; // the field's meaning changed; restart the progressive average
             }
         }
 
-        // Cube's STORAGE is in place (6 irradiance buckets, the gather's cosine binning, the stacked
-        // mirror texture), but its consumers - CSBlur, the Texture3D write and the fragment read -
-        // still treat irradiance as one value per voxel. Selecting it would render garbage rather
-        // than fail visibly, so it is refused here until those land. Remove this together with them.
-        static RadianceDirections ValidateDirections(RadianceDirections value) {
-            if (value != RadianceDirections.Cube) return value;
-            Debug.LogWarning("BufferGiUpdater: RadianceDirections.Cube is not finished yet (the blur, " +
-                             "the mirror texture write and the fragment read still read a single " +
-                             "irradiance bucket). Falling back to TwoSided.");
-            return RadianceDirections.TwoSided;
-        }
 
         // The mode drives TWO independent strides, which is not obvious from the enum's name:
         //
@@ -671,8 +660,6 @@ namespace Lotec.Lighting {
         // EnsureInitialized reallocates and requests the field clear. The stored values are not
         // convertible between modes (different slot meanings), so the accumulation restarts too.
         void SyncRadianceDirections() {
-            // Also catches an inspector edit, which writes the field directly and bypasses the setter.
-            _radianceDirections = ValidateDirections(_radianceDirections);
             if (RadianceSlots == _allocatedRadianceSlots && IrradianceSlots == _allocatedIrradianceSlots) return;
             ReleaseBuffers();
             _collectedSamples = 0;

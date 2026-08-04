@@ -216,32 +216,23 @@ uint BgiRadianceDirs() {
 //   inject   : writing the face with outward normal f            -> faceN = f
 //   gather   : a ray traveling `dir` crossed the face opposing it -> faceN = -dir
 //   fragment : the shading surface's own outward normal           -> faceN = N
-// `faceN` need not be normalized. `n` is the voxel's stored surface normal (unused by Single/Cube).
+// `faceN` need not be normalized. `n` is the voxel's stored surface normal (unused when Single).
+//
+// The stride is 1 or 2 and NEVER 6, in any mode - including Cube. Outgoing radiance is a property of
+// real geometry, and the voxelizer stores one normal per cell; the only second face we can describe
+// is its negation, when the cell is a sub-voxel wall. Six outgoing faces would need a per-face
+// coverage mask from the rasterizer, which does not exist. Cube's six directions are on the INCIDENT
+// irradiance instead (below), where a hemisphere is well defined for every voxel.
 //
 // Single   -> the one slot.
 // TwoSided -> front/back in the voxel's OWN normal basis: a face agreeing with the stored normal is
 //             front (slot 0), the opposing face is back (slot 1). A thin wall's back normal is just
-//             -n, which is why this needs a flag and not a second stored normal.
-// Cube     -> the six world axes, by faceN's dominant axis and sign. A WORLD basis, unlike the other
-//             two - that is what lets neighbouring texels agree on what a slot means, and hence what
-//             lets Cube (and only Cube) be filtered across cells.
+//             -n, which is why this needs a flag and not a second stored normal. Cube uses this too.
 uint BgiRadianceSlot(uint voxelSlot, float3 faceN, float3 n) {
     uint dirs = BgiRadianceDirs();
     uint base_ = voxelSlot * dirs;
     if (dirs == 1u) return base_;
-    if (dirs == 2u) return base_ + (dot(faceN, n) >= 0.0 ? 0u : 1u);
-    float3 a = abs(faceN);
-    // 0/1 = -X/+X, 2/3 = -Y/+Y, 4/5 = -Z/+Z. Keep in sync with BgiCubeAxisSlot below.
-    uint axis = (a.x >= a.y && a.x >= a.z) ? 0u : ((a.y >= a.z) ? 1u : 2u);
-    float s = (axis == 0u) ? faceN.x : ((axis == 1u) ? faceN.y : faceN.z);
-    return base_ + axis * 2u + (s >= 0.0 ? 1u : 0u);
-}
-
-// Cube slot for an explicit signed axis (0..2 = X/Y/Z, positive = the +axis face). Used by the
-// fragment's 3-tap ambient-cube blend and by the solve's binning, both of which walk the axes
-// directly rather than deriving them from a direction vector.
-uint BgiCubeAxisSlot(uint voxelSlot, uint axis, bool positive) {
-    return voxelSlot * BgiRadianceDirs() + axis * 2u + (positive ? 1u : 0u);
+    return base_ + (dot(faceN, n) >= 0.0 ? 0u : 1u);
 }
 
 // First slot of a voxel's radiance run. The run is contiguous, so clears walk base..base+dirs.
@@ -268,20 +259,13 @@ uint BgiIrradianceBase(uint voxelSlot) {
     return voxelSlot * BgiIrradianceDirs();
 }
 
-// Slot for one signed axis: 0/1 = -X/+X, 2/3 = -Y/+Y, 4/5 = -Z/+Z (same order as the radiance cube
-// and as the texture's Z slabs). Collapses to the single slot when the field isn't directional.
-uint BgiIrradianceAxisSlot(uint voxelSlot, uint axis, bool positive) {
-    uint dirs = BgiIrradianceDirs();
-    if (dirs == 1u) return voxelSlot;
-    return voxelSlot * dirs + axis * 2u + (positive ? 1u : 0u);
-}
-
-// The 3 buckets in a normal's hemisphere, with their n^2 weights. Used by both the fragment read and
-// the solve's binning so the two can never disagree about what a bucket means.
-void BgiCubeWeights(float3 n, out uint3 axes, out bool3 positive, out float3 weights) {
-    axes = uint3(0u, 1u, 2u);
-    positive = bool3(n.x >= 0.0, n.y >= 0.0, n.z >= 0.0);
-    weights = n * n; // sums to 1 for a unit normal
+// Texel of a bucket in the mirror texture. The six buckets are STACKED ALONG Z (the texture is
+// Grid x Grid x Grid*dirs), so a bucket is just a Z offset - see CreateIrradianceTexture for why one
+// stacked texture rather than six bindings, and why no border padding is needed.
+// stacked texture rather than six bindings, and why no border padding is needed. Compute-side only:
+// the fragment samples with normalized uvw, so it builds the slab offset in that space instead.
+uint3 BgiTexCoord(uint3 c, uint bucket) {
+    return uint3(c.x, c.y, c.z + bucket * BGI_GRID);
 }
 
 #endif // LOTEC_BUFFER_GI_FIELD_INCLUDED
