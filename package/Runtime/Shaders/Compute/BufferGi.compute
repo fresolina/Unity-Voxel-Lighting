@@ -870,32 +870,36 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
         // same air the fragment's tap reads, so the shell now reconstructs that side and only that side.
         // Every solid voxel has a normal (mesh normals under BGI_BAKED_NORMALS, else CSBuildSurface's
         // occupancy gradient), so this is always available.
-        // A two-sided voxel serves two opposite faces from this ONE texel, so there is no hemisphere
-        // that is "in front" of it - gating by the stored normal would fill it with the air on
-        // whichever side the voxelizer happened to store and hand that to the other side, which is
-        // pulling light straight through the wall. Leave it black: after the plane-snap the shell
-        // only ever carries in-plane weight, so the cost is a little missing fill next to thin walls,
-        // against a wrong guess. (Cube resolves this properly; see RadianceDirections.)
+        // A two-sided voxel serves two opposite faces from this ONE texel, so with a single bucket
+        // there is no hemisphere that is "in front" of it - gating by the stored normal would fill it
+        // with the air on whichever side the voxelizer happened to store and hand that to the other
+        // side, which is pulling light straight through the wall. In SINGLE that is unfixable, so
+        // leave it black: after the plane-snap the shell only ever carries in-plane weight, so the
+        // cost is a little missing fill next to thin walls, against a wrong guess. (This is the
+        // "walls at least two voxels thick" assumption Single trades for its one-tap read.)
+        //
+        // CUBE has the missing degree of freedom and needs no such compromise: each bucket is filled
+        // from the air on ITS OWN side (below), so a sub-voxel wall's two faces get genuinely
+        // different values out of the same cell. Hence no early-out here in Cube.
         uint idirs = BgiIrradianceDirs();
-        if (BgiRadianceDirs() > 1u && BgiSurfaceIsTwoSided(sword)) {
-            [unroll]
-            for (uint tb = 0u; tb < 6u; tb++) {
-                if (tb >= idirs) break;
-                _BgiIrradianceTexWrite[BgiTexCoord(BgiCoord(i), tb)] = float4(0.0, 0.0, 0.0, solidSun);
-            }
+        bool perBucket = idirs > 1u;
+        if (!perBucket && BgiRadianceDirs() > 1u && BgiSurfaceIsTwoSided(sword)) {
+            _BgiIrradianceTexWrite[BgiTexCoord(BgiCoord(i), 0u)] = float4(0.0, 0.0, 0.0, solidSun);
             return;
         }
 
         float3 sn = BgiSurfaceNormal(sword);
         int3 sc = (int3)BgiCoord(i);
-        // One accumulator per bucket; the WEIGHTS are shared, since a neighbour's distance and which
-        // hemisphere it is in do not depend on the bucket. So this stays a 26-neighbour walk, and the
-        // buckets of one neighbour are contiguous in memory - the extra reads are a burst, not a
-        // scatter. fp32 sums, same headroom reason as the air blur below.
+        // One accumulator per bucket. In Cube the WEIGHTS are per bucket too (each bucket keeps its
+        // own side's air); in Single they are shared, since one value serves every direction. Either
+        // way this stays a 26-neighbour walk, and the buckets of one neighbour are contiguous in
+        // memory - the extra reads are a burst, not a scatter. fp32 sums, same headroom reason as the
+        // air blur below.
         float3 dsum[6], dsumAll[6];
-        [unroll] for (uint b0 = 0u; b0 < 6u; b0++) { dsum[b0] = 0.0; dsumAll[b0] = 0.0; }
-        float dwsum = 0.0;    // front hemisphere
-        float dwsumAll = 0.0; // ungated fallback, for a degenerate normal with no air in front
+        float dwsumB[6];
+        [unroll] for (uint b0 = 0u; b0 < 6u; b0++) { dsum[b0] = 0.0; dsumAll[b0] = 0.0; dwsumB[b0] = 0.0; }
+        float dwsum = 0.0;    // front hemisphere (Single)
+        float dwsumAll = 0.0; // ungated fallback, for a bucket/normal with no air on its side
         // Left rolled (like CSDilate): 27 unrolled iterations would bloat the kernel for a branch only
         // the solid minority takes, and the loop is bandwidth-bound on the occupancy tests anyway.
         for (int dz = -1; dz <= 1; dz++)
@@ -916,20 +920,54 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
                 half3 nc; half nsun;
                 BgiUnpackRgbH(_Irradiance[nbase + b], nc, nsun);
                 dsumAll[b] += (float3)nc * w;
-                if (front) dsum[b] += (float3)nc * w;
+                if (!perBucket) {
+                    if (front) dsum[b] += (float3)nc * w;
+                    continue;
+                }
+                // CUBE: this bucket takes only the air on its own side, COSINE-weighted about its axis
+                // (times the same 1/distance falloff). The cosine is |component| / |dir|, so the
+                // combined weight is |component| * w * w. A neighbour perpendicular to the bucket's
+                // axis gets exactly 0 - so the hemisphere cut costs no discontinuity, it just falls
+                // out of the weighting - and the face neighbour straight along the axis dominates.
+                float comp = (b >> 1u) == 0u ? dir.x : (((b >> 1u) == 1u) ? dir.y : dir.z);
+                bool positive = (b & 1u) != 0u;
+                if (positive ? (comp <= 0.0) : (comp >= 0.0)) continue; // other side (or perpendicular)
+                float wB = abs(comp) * w * w;
+                dsum[b] += (float3)nc * wB;
+                dwsumB[b] += wB;
             }
             dwsumAll += w;
             if (front) dwsum += w;
         }
-        // Prefer the front hemisphere; fall back to all air neighbours if the normal points somewhere
-        // with none (rather than writing black, which is the dark bleed this whole branch exists to fix).
+        // Prefer the bucket's own side (Cube) / the front hemisphere (Single); fall back to all air
+        // neighbours when there is none - a bucket facing into solid, or a degenerate normal - rather
+        // than writing black, which is the dark bleed this whole branch exists to fix.
         // Neither = deep interior. Stays black; nothing can ever sample it.
         [unroll]
         for (uint b1 = 0u; b1 < 6u; b1++) {
             if (b1 >= idirs) break;
-            float3 dilated = (dwsum > 0.0) ? dsum[b1] / dwsum
+            float own = perBucket ? dwsumB[b1] : dwsum;
+            float3 dilated = (own > 0.0) ? dsum[b1] / own
                            : (dwsumAll > 0.0) ? dsumAll[b1] / dwsumAll : 0.0;
-            _BgiIrradianceTexWrite[BgiTexCoord(BgiCoord(i), b1)] = float4(dilated, solidSun);
+
+            // ALPHA per slab, for a TWO-SIDED voxel in Cube: publish the sun visibility of the face
+            // pointing THIS way, so the two sides of a sub-voxel wall no longer share one number. That
+            // is what lets the fragment resolve the Baked shadow from the (smooth, hardware-filtered)
+            // texture instead of the blocky SSBO face read - the slab index carries the side.
+            //
+            // One-sided voxels keep the front value in every slab. Their back slot was never written
+            // (CSInject only writes it when two-sided) and so reads 0 = fully shadowed; handing that
+            // to a slab would darken any surface whose n^2 weighting touches it, for a face that does
+            // not physically exist. There is one real face here, so every direction reports it.
+            half bucketSun = solidSun;
+            if (perBucket && BgiSurfaceIsTwoSided(sword)) {
+                uint ax = b1 >> 1u;
+                float sgnB = (b1 & 1u) != 0u ? 1.0 : -1.0;
+                float3 bdir = float3(ax == 0u ? sgnB : 0.0, ax == 1u ? sgnB : 0.0, ax == 2u ? sgnB : 0.0);
+                half3 sunRgbIgnore;
+                BgiUnpackRgbH(_Radiance[BgiRadianceSlot(_FieldOffset + i, bdir, sn)], sunRgbIgnore, bucketSun);
+            }
+            _BgiIrradianceTexWrite[BgiTexCoord(BgiCoord(i), b1)] = float4(dilated, bucketSun);
         }
         return;
     }

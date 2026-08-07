@@ -244,13 +244,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 784264324}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.52018315, y: -0.16181515, z: 0.10111332, w: 0.83246714}
+  m_LocalRotation: {x: 0.5365257, y: -0.1377767, z: 0.0893024, w: 0.8277577}
   m_LocalPosition: {x: 0, y: 3.8, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 64, y: -22, z: 0}
+  m_LocalEulerAnglesHint: {x: 65.9, y: -18.9, z: 0}
 --- !u!114 &784264327
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -525,7 +525,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 88b9186d32883c34193ca41f4e040e69, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelLights
-  _lights: []
+  _lights:
+  - {fileID: 5680640232793201981}
 --- !u!4 &1716314053 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 6979930123611707373, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
@@ -546,30 +547,6 @@ PrefabInstance:
     - target: {fileID: 2177017109571719554, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
       propertyPath: m_IsActive
       value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 2362477631044920227, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
-      propertyPath: m_LocalScale.x
-      value: 0.37
-      objectReference: {fileID: 0}
-    - target: {fileID: 2362477631044920227, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
-      propertyPath: m_LocalScale.y
-      value: 0.50536585
-      objectReference: {fileID: 0}
-    - target: {fileID: 2362477631044920227, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
-      propertyPath: m_LocalScale.z
-      value: 0.37
-      objectReference: {fileID: 0}
-    - target: {fileID: 2362477631044920227, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
-      propertyPath: m_LocalPosition.y
-      value: 0.612
-      objectReference: {fileID: 0}
-    - target: {fileID: 2362477631044920227, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
-      propertyPath: m_LocalPosition.z
-      value: 0.06
-      objectReference: {fileID: 0}
-    - target: {fileID: 2362477631044920227, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
-      propertyPath: m_ConstrainProportionsScale
-      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 3434979164358014572, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
       propertyPath: m_IsActive
@@ -611,6 +588,11 @@ PrefabInstance:
       insertIndex: -1
       addedObject: {fileID: 1135085234}
   m_SourcePrefab: {fileID: 100100000, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
+--- !u!108 &5680640232793201981 stripped
+Light:
+  m_CorrespondingSourceObject: {fileID: 895828206248695039, guid: cd4f3baec631e624a8cffbabed3c9b7b, type: 3}
+  m_PrefabInstance: {fileID: 5680640232793201980}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
