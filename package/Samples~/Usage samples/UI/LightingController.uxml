@@ -29,11 +29,11 @@
                         <ui:DataBinding property="value" data-source-path="AoStrength" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:Slider>
-                <ui:Toggle name="ssbo-read-toggle" label="GI Read: SSBO (A/B)" tooltip="A/B: read GI from the original StructuredBuffer gather instead of the mirrored irradiance texture (keyword BGI_SSBO_READ). Off (default) = one hardware-trilinear texture tap, much cheaper on Adreno/Quest." class="setting-field">
+                <ui:EnumField label="Radiance Directions" value="Single" type="Lotec.Lighting.BufferGiUpdater+RadianceDirections, Lotec.Lighting" name="radiance-directions-enum" tooltip="Directions of radiance stored per voxel. Single: one value; a wall thinner than a voxel gets one side right and the other dark. Cube: the six world axes - fixes thin walls and perpendicular faces sharing a cell, and makes the baked sun shadow resolve per side, at 6x the irradiance storage and 3 texture taps instead of 1. Changing this restarts the accumulation." class="setting-field">
                     <Bindings>
-                        <ui:DataBinding property="value" data-source-path="SsboRead" binding-mode="TwoWay"/>
+                        <ui:DataBinding property="value" data-source-path="RadianceDirections" binding-mode="TwoWay"/>
                     </Bindings>
-                </ui:Toggle>
+                </ui:EnumField>
                 <ui:EnumField label="Shadow Mode" value="Baked" type="Lotec.Lighting.Samples.LightingController+ShadowUiMode, Assembly-CSharp" name="shadow-mode-enum" tooltip="Buffer-GI fine-field sun shadow. Off: none. Baked: pre-marched voxel visibility (soft, cheap). SDF: per-pixel raymarch (crisp). OcclusionField / Bitmask: the volume's baked occlusion source (needs its bake)." class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="ShadowMode" binding-mode="TwoWay"/>

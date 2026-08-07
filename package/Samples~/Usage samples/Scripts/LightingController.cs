@@ -15,10 +15,10 @@ using UnityEditor;
 namespace Lotec.Lighting.Samples {
     /// <summary>
     /// Runtime UI Toolkit panel for the GI / <see cref="LightingManager"/> settings (GI method,
-    /// samples/frame, shadow mode, AO, confidence, tonemap) plus the FPS / frame-time readout, and
-    /// the GI-related hotkeys (backquote cycles the lighting method; H - or the VR left-controller Menu
-    /// button - folds the panels). The actual
-    /// scene lights (sun, flashlight, candle) live in <see cref="LightController"/> and have no UI.
+    /// samples/frame, shadow mode, AO, confidence, radiance directions, tonemap) plus the FPS /
+    /// frame-time readout, and the GI-related hotkeys (backquote cycles the lighting method; H - or
+    /// the VR left-controller Menu button - folds the panels). The actual scene lights (sun,
+    /// flashlight, candle) live in <see cref="LightController"/> and have no UI.
     /// <para>VR: this renders as a screen Overlay today. To make it VR-accessible with no VR package,
     /// switch the shared PanelSettings render mode to World Space and position the "Lighting UI" root
     /// in the scene - the auto-generated panel collider then receives an XR ray interactor's pointer
@@ -87,7 +87,7 @@ namespace Lotec.Lighting.Samples {
         int _lastSamplesPerFrame;
         float _lastConfidenceCurve;
         float _lastAoStrength;
-        bool _lastSsboRead;
+        BufferGiUpdater.RadianceDirections _lastRadianceDirections;
         AutoExposure.TonemapMode _lastTonemap;
         bool _lastAutoExposure;
         Keyboard _keyboard;
@@ -315,11 +315,11 @@ namespace Lotec.Lighting.Samples {
             SliderInt samplesPerFrameSlider = root.Q<SliderInt>("samples-per-frame-slider");
             Slider confidenceCurveSlider = root.Q<Slider>("confidence-curve-slider");
             Slider aoStrengthSlider = root.Q<Slider>("ao-strength-slider");
-            Toggle ssboReadToggle = root.Q<Toggle>("ssbo-read-toggle");
+            EnumField radianceDirectionsField = root.Q<EnumField>("radiance-directions-enum");
             EnumField tonemapField = root.Q<EnumField>("tonemap-enum");
             Toggle autoExposureToggle = root.Q<Toggle>("auto-exposure-toggle");
 
-            if (giField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || ssboReadToggle == null || tonemapField == null || autoExposureToggle == null || !TryCacheFrameTimeLabels(root)) {
+            if (giField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || radianceDirectionsField == null || tonemapField == null || autoExposureToggle == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
@@ -328,9 +328,11 @@ namespace Lotec.Lighting.Samples {
             _boundRoot.dataSource = this;
 
             // Set the enum type from code: the UXML `type` string resolves ShadowUiMode (same
-            // Assembly-CSharp as this UXML) but not TonemapMode (in the Lotec.Lighting package
-            // assembly) at runtime, leaving the field empty. Init here guarantees the choices.
+            // Assembly-CSharp as this UXML) but not TonemapMode / RadianceDirections (in the
+            // Lotec.Lighting package assembly) at runtime, leaving the field empty. Init here
+            // guarantees the choices.
             tonemapField.Init(Tonemap);
+            radianceDirectionsField.Init(RadianceDirections);
 
             FoldoutHeader.Setup(root);
 
@@ -367,7 +369,7 @@ namespace Lotec.Lighting.Samples {
                 _boundRoot.Q<SliderInt>("samples-per-frame-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("confidence-curve-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("ao-strength-slider")?.ClearBindings();
-                _boundRoot.Q<Toggle>("ssbo-read-toggle")?.ClearBindings();
+                _boundRoot.Q<EnumField>("radiance-directions-enum")?.ClearBindings();
                 _boundRoot.Q<EnumField>("tonemap-enum")?.ClearBindings();
                 _boundRoot.Q<Toggle>("auto-exposure-toggle")?.ClearBindings();
                 _boundRoot.dataSource = null;
@@ -487,11 +489,13 @@ namespace Lotec.Lighting.Samples {
             }
         }
 
+        // Named to match the UXML data-source-path; the property TYPE is the package enum of the same
+        // name, which is why every use here is fully qualified.
         [CreateProperty]
-        bool SsboRead {
+        BufferGiUpdater.RadianceDirections RadianceDirections {
             get {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
-                return gi != null && gi.SsboRead;
+                return gi != null ? gi.Directions : BufferGiUpdater.RadianceDirections.Single;
             }
             set {
                 BufferGiUpdater gi = BufferGiUpdater.Instance;
@@ -499,7 +503,8 @@ namespace Lotec.Lighting.Samples {
                     return;
                 }
 
-                gi.SsboRead = value;
+                // Reallocates the radiance/irradiance buffers and restarts the progressive average.
+                gi.Directions = value;
                 RefreshUi(true);
             }
         }
@@ -652,7 +657,7 @@ namespace Lotec.Lighting.Samples {
             int samplesPerFrame = SamplesPerFrame;
             float confidenceCurve = ConfidenceCurve;
             float aoStrength = AoStrength;
-            bool ssboRead = SsboRead;
+            BufferGiUpdater.RadianceDirections radianceDirections = RadianceDirections;
             AutoExposure.TonemapMode tonemap = Tonemap;
             bool autoExposure = AutoExposureEnabled;
 
@@ -662,7 +667,7 @@ namespace Lotec.Lighting.Samples {
                 _lastSamplesPerFrame = samplesPerFrame;
                 _lastConfidenceCurve = confidenceCurve;
                 _lastAoStrength = aoStrength;
-                _lastSsboRead = ssboRead;
+                _lastRadianceDirections = radianceDirections;
                 _lastTonemap = tonemap;
                 _lastAutoExposure = autoExposure;
                 _hasBindingSnapshot = true;
@@ -674,7 +679,7 @@ namespace Lotec.Lighting.Samples {
             UpdateIntSnapshot(ref _lastSamplesPerFrame, samplesPerFrame, notifyChanges, nameof(SamplesPerFrame));
             UpdateFloatSnapshot(ref _lastConfidenceCurve, confidenceCurve, notifyChanges, nameof(ConfidenceCurve));
             UpdateFloatSnapshot(ref _lastAoStrength, aoStrength, notifyChanges, nameof(AoStrength));
-            UpdateBoolSnapshot(ref _lastSsboRead, ssboRead, notifyChanges, nameof(SsboRead));
+            UpdateEnumSnapshot(ref _lastRadianceDirections, radianceDirections, notifyChanges, nameof(RadianceDirections));
             UpdateEnumSnapshot(ref _lastTonemap, tonemap, notifyChanges, nameof(Tonemap));
             UpdateBoolSnapshot(ref _lastAutoExposure, autoExposure, notifyChanges, nameof(AutoExposureEnabled));
         }

@@ -197,7 +197,8 @@ bool BgiSurfaceIsTwoSided(uint word) {
 }
 
 // --- Directional radiance slots (see RadianceDirections in BufferGiUpdater) ---
-// How many directions of outgoing radiance each voxel stores: 1 (Single), 2 (TwoSided) or 6 (Cube).
+// How many directions of outgoing radiance each voxel stores: 1 (Single) or 2 (Cube - see below for
+// why Cube's SIX directions still only need two outgoing slots).
 // Published as a plain uniform by both BindGridConstantsToCompute and SetGlobals.
 int _BgiRadianceDirs;
 
@@ -224,10 +225,10 @@ uint BgiRadianceDirs() {
 // coverage mask from the rasterizer, which does not exist. Cube's six directions are on the INCIDENT
 // irradiance instead (below), where a hemisphere is well defined for every voxel.
 //
-// Single   -> the one slot.
-// TwoSided -> front/back in the voxel's OWN normal basis: a face agreeing with the stored normal is
-//             front (slot 0), the opposing face is back (slot 1). A thin wall's back normal is just
-//             -n, which is why this needs a flag and not a second stored normal. Cube uses this too.
+// Single -> the one slot.
+// Cube   -> front/back in the voxel's OWN normal basis: a face agreeing with the stored normal is
+//           front (slot 0), the opposing face is back (slot 1). A thin wall's back normal is just
+//           -n, which is why this needs a flag and not a second stored normal.
 // `surfaceWord` is the voxel's _Surface entry. It is required, not optional: only a TWO-SIDED voxel
 // actually HAS a second face, and CSInject only writes the back slot under that flag. A one-sided
 // voxel's back slot is left at the CSClear zero, which decodes as black radiance AND zero sun

@@ -520,7 +520,6 @@ MonoBehaviour:
   _bakedShadowSharpness: 2
   _blurSunVisibility: 0
   _shadowNormalOffset: 0.5
-  _ssboRead: 0
   _radianceDirections: 1
   _exposureControl:
     _tonemap: 2
