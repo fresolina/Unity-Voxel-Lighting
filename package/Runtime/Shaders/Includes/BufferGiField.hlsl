@@ -228,10 +228,18 @@ uint BgiRadianceDirs() {
 // TwoSided -> front/back in the voxel's OWN normal basis: a face agreeing with the stored normal is
 //             front (slot 0), the opposing face is back (slot 1). A thin wall's back normal is just
 //             -n, which is why this needs a flag and not a second stored normal. Cube uses this too.
-uint BgiRadianceSlot(uint voxelSlot, float3 faceN, float3 n) {
+// `surfaceWord` is the voxel's _Surface entry. It is required, not optional: only a TWO-SIDED voxel
+// actually HAS a second face, and CSInject only writes the back slot under that flag. A one-sided
+// voxel's back slot is left at the CSClear zero, which decodes as black radiance AND zero sun
+// visibility - so handing it out would answer "no light, fully shadowed" for a face that physically
+// exists. That bites in two places: a shading normal that happens to oppose the stored normal (dark
+// blotches on detailed geometry), and a ray reaching an emissive lamp voxel from behind, which would
+// make a baked light emit into one hemisphere only. Both collapse to the front slot here instead.
+uint BgiRadianceSlot(uint voxelSlot, float3 faceN, float3 n, uint surfaceWord) {
     uint dirs = BgiRadianceDirs();
     uint base_ = voxelSlot * dirs;
     if (dirs == 1u) return base_;
+    if (!BgiSurfaceIsTwoSided(surfaceWord)) return base_; // one real face - always the front slot
     return base_ + (dot(faceN, n) >= 0.0 ? 0u : 1u);
 }
 

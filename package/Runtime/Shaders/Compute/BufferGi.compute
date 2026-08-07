@@ -535,7 +535,7 @@ half3 GatherRayRadiance(int3 fromCell, float3 dir, half reachBoost)
         bool twoSided = _BgiRadianceDirs > 1 && BgiSurfaceIsTwoSided(hitSurface);
         if (BgiSurfaceIsEmissive(hitSurface) || dot(dir, faceN) < 0.0 || twoSided) {
             half3 rad; half w;
-            BgiUnpackRgbH(_Radiance[BgiRadianceSlot(BgiSlot((uint3)hit), -dir, faceN)], rad, w);
+            BgiUnpackRgbH(_Radiance[BgiRadianceSlot(BgiSlot((uint3)hit), -dir, faceN, hitSurface)], rad, w);
             // Distance-weighted reach fill (t = hit distance / grid diagonal, clamped 0..1). Applied
             // BEFORE the firefly clamp so a boosted-then-bright sample still can't spike.
             half t = (half)saturate(length(BgiVoxelCenter((uint3)hit) - BgiVoxelCenter((uint3)fromCell)) / BGI_MAX_RAY_DIST);
@@ -606,7 +606,7 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     // FRONT face: the stored normal's side.
     // Stash the sun visibility in the radiance's spare w half - the fragment reads it as a cheap,
     // pre-marched voxel sun-shadow (interpolated across the surface face), no per-pixel ray needed.
-    uint frontSlot = BgiRadianceSlot(_FieldOffset + i, normal, normal);
+    uint frontSlot = BgiRadianceSlot(_FieldOffset + i, normal, normal, surfWord);
     half sunVis;
     float3 direct = GetDirectLight(cell, normal, frontSlot, sunVis);
     half3 outgoing = SanitizeColor(emissive + (float3)safeAlbedo * (direct + (float3)bounce));
@@ -621,7 +621,7 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     // Skipped in Single, where there is nowhere to put it.
     if (_BgiRadianceDirs > 1 && BgiSurfaceIsTwoSided(surfWord)) {
         float3 backN = -normal;
-        uint backSlot = BgiRadianceSlot(_FieldOffset + i, backN, normal);
+        uint backSlot = BgiRadianceSlot(_FieldOffset + i, backN, normal, surfWord);
         half backSun;
         float3 backDirect = GetDirectLight(cell, backN, backSlot, backSun);
         // Same albedo and emission (one material per voxel), but its OWN incident irradiance: reusing
@@ -841,7 +841,7 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
         // path that resolves the other one.
         float3 sn0 = BgiSurfaceNormal(sword);
         half3 rgbIgnore; half solidSun;
-        BgiUnpackRgbH(_Radiance[BgiRadianceSlot(_FieldOffset + i, sn0, sn0)], rgbIgnore, solidSun);
+        BgiUnpackRgbH(_Radiance[BgiRadianceSlot(_FieldOffset + i, sn0, sn0, sword)], rgbIgnore, solidSun);
 
         // DILATE the RGB into the first solid shell instead of writing black there. The texture read is
         // a raw trilinear tap with no occupancy gate, so a black solid texel bleeds DARKNESS onto every
@@ -965,7 +965,7 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
                 float sgnB = (b1 & 1u) != 0u ? 1.0 : -1.0;
                 float3 bdir = float3(ax == 0u ? sgnB : 0.0, ax == 1u ? sgnB : 0.0, ax == 2u ? sgnB : 0.0);
                 half3 sunRgbIgnore;
-                BgiUnpackRgbH(_Radiance[BgiRadianceSlot(_FieldOffset + i, bdir, sn)], sunRgbIgnore, bucketSun);
+                BgiUnpackRgbH(_Radiance[BgiRadianceSlot(_FieldOffset + i, bdir, sn, sword)], sunRgbIgnore, bucketSun);
             }
             _BgiIrradianceTexWrite[BgiTexCoord(BgiCoord(i), b1)] = float4(dilated, bucketSun);
         }
