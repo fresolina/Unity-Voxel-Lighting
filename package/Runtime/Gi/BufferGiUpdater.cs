@@ -502,6 +502,7 @@ namespace Lotec.Lighting {
         static readonly int s_occupancy = Shader.PropertyToID("_Occupancy");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_samplesPerFrame = Shader.PropertyToID("_SamplesPerFrame");
+        static readonly int s_sampleBase = Shader.PropertyToID("_SampleBase");
         static readonly int s_giFireflyClamp = Shader.PropertyToID("_GiFireflyClamp");
         static readonly int s_reachBoost = Shader.PropertyToID("_ReachBoost");
         static readonly int s_bgiRadianceDirs = Shader.PropertyToID("_BgiRadianceDirs");
@@ -761,8 +762,13 @@ namespace Lotec.Lighting {
                 _collectedSamples = 0;
             }
             if (_collectedSamples < _maxSamples || _continuousGi) {
+                // Rays already gathered BEFORE this frame. The gather indexes its sample sequence by
+                // the ray ordinal (_SampleBase + rayIndex) rather than by the frame, so the same ray
+                // budget draws the same points however it is sliced across frames - which is what makes
+                // samplesPerFrame a pure convergence-RATE knob. Read before the increment.
+                int sampleBase = _collectedSamples;
                 _collectedSamples = Mathf.Min(_collectedSamples + Mathf.Max(1, _samplesPerFrame), _maxSamples);
-                DispatchSolve();
+                DispatchSolve(sampleBase);
             }
             StoreSunState();
 
@@ -1506,12 +1512,13 @@ namespace Lotec.Lighting {
             return Mathf.Clamp01(Mathf.Round(encoded * 255f) / 255f);
         }
 
-        void DispatchSolve() {
+        void DispatchSolve(int sampleBase) {
             if (_injectKernel < 0 || _gatherKernel < 0 || !_materialBaked) return;
 
             // Per-frame shared uniforms (same for every field).
             _computeShader.SetInt(s_frameCount, Time.frameCount);
             _computeShader.SetInt(s_samplesPerFrame, Mathf.Max(1, _samplesPerFrame));
+            _computeShader.SetInt(s_sampleBase, sampleBase);
             // Progressive gather weight (CSGather) + convergence confidence 0->1 (CSBlur, hides the
             // noisy warm-up). Both derive from _collectedSamples so they stay aligned.
             _computeShader.SetFloat(s_emaWeight, EmaWeight);
