@@ -70,18 +70,19 @@ namespace Lotec.Lighting {
         // resolves that with last-write-wins (BufferGiVoxelize, mesh-normal mode). One stored normal +
         // one radiance then means one side is right and the other reads the wrong value - or, today,
         // gets rejected by the gather's front/back test and falls back to the (black) ambient floor.
-        //   Single (1)   : one radiance per voxel - the original behaviour, cheapest, thin walls wrong.
-        //   TwoSided (2) : front + back, in the voxel's OWN normal basis. The back normal of a thin wall
-        //                  is just -n, so this needs no second normal, only a flag. Fixes opposite-facing
-        //                  pairs (the thin-wall case) for one extra buffer and NO fragment cost.
-        //   Cube (6)     : the six world axes (an "ambient cube"). Also fixes PERPENDICULAR faces sharing
-        //                  a cell - arcade bases, arch springings - and makes the field directional, so
-        //                  the fragment can blend the 3 faces of its hemisphere instead of picking one.
-        //                  Costs 6x the radiance storage, a wider read stride, and 3 taps instead of 1.
+        //   Single (1) : one radiance per voxel - the original behaviour, cheapest, thin walls wrong.
+        //   Cube (6)   : the six world axes (an "ambient cube"). Gives a thin wall's two faces their own
+        //                values, ALSO fixes PERPENDICULAR faces sharing a cell - arcade bases, arch
+        //                springings - and makes the field directional, so the fragment blends the 3 faces
+        //                of its hemisphere instead of picking one. That directionality is also what lets
+        //                the baked sun shadow stay a smooth texture tap on a sub-voxel wall (each slab
+        //                carries its own face's visibility), which is why there is no cheaper two-slot
+        //                mode in between: one existed, and its shadow staircased.
+        //                Costs 6x the irradiance storage, a wider read stride, and 3 taps instead of 1.
         // Neither fixes SPATIAL ambiguity: two surfaces facing the SAME way in one cell still collide,
         // and everything still reports at the cell centre. That is bounded by voxel size, not direction
         // count - raising the resolution or moving to surface storage is the only cure for it.
-        public enum RadianceDirections { Single = 1, TwoSided = 2, Cube = 6 }
+        public enum RadianceDirections { Single = 1, Cube = 6 }
 
         public static BufferGiUpdater Instance { get; private set; }
 
@@ -169,16 +170,13 @@ namespace Lotec.Lighting {
                  "surface. Lower if shadows look detached or over-reaching; raise if surfaces " +
                  "self-shadow.")]
         [Range(0.25f, 2f)][SerializeField] float _shadowNormalOffset = 1f;
-        [Tooltip("A/B: read the GI from the original StructuredBuffer gather instead of the mirrored " +
-                 "irradiance texture (keyword BGI_SSBO_READ). Off (default) = one hardware-trilinear " +
-                 "texture tap, much cheaper on Adreno/Quest. On = the SSBO gather, kept for comparison.")]
-        [SerializeField] bool _ssboRead;
-        [Tooltip("Directions of outgoing radiance stored per solid voxel - what a voxel can say about " +
-                 "geometry that faces more than one way inside it.\n " +
+        [Tooltip("Directions of radiance stored per voxel - what a voxel can say about geometry that " +
+                 "faces more than one way inside it.\n " +
                  "Single: one value; a wall thinner than a voxel gets one side right and the other dark.\n " +
-                 "TwoSided: front + back of the voxel's own normal. Fixes thin walls; no fragment cost.\n " +
-                 "Cube: the six world axes. Also fixes perpendicular faces sharing a cell and makes the " +
-                 "field directional, at 6x the radiance storage and 3 texture taps instead of 1.\n " +
+                 "Cube: the six world axes. Gives a thin wall's two faces their own values, fixes " +
+                 "perpendicular faces sharing a cell, and makes the field directional (so the baked sun " +
+                 "shadow also resolves per side), at 6x the irradiance storage and 3 texture taps " +
+                 "instead of 1.\n " +
                  "Changing this reallocates and restarts the accumulation.")]
         [SerializeField] RadianceDirections _radianceDirections = RadianceDirections.Single;
 
@@ -226,9 +224,6 @@ namespace Lotec.Lighting {
         ComputeBuffer _materialBuffer;
         ComputeBuffer _radianceBuffer;
         ComputeBuffer _irradianceBuffer;
-        // Back-face incident irradiance for two-sided (sub-voxel wall) solid voxels - see _IrradianceBack
-        // in BufferGi.compute. Same size as _irradianceBuffer; only two-sided surfaces ever touch it.
-        ComputeBuffer _irradianceBackBuffer;
         ComputeBuffer _irradianceBlurBuffer;
         ComputeBuffer _surfaceBuffer; // per-voxel surface word (normal + reserved bits); always present
         bool _bakedNormalsBaked;      // the normal source the current bake used (for rebake-on-toggle)
@@ -407,13 +402,7 @@ namespace Lotec.Lighting {
             }
         }
 
-        /// <summary>A/B: read GI from the SSBO gather (BGI_SSBO_READ) instead of the default texture tap.</summary>
-        public bool SsboRead {
-            get => _ssboRead;
-            set => _ssboRead = value;
-        }
-
-        /// <summary>Directions of outgoing radiance stored per solid voxel. Reallocates on change.</summary>
+        /// <summary>Directions of radiance stored per voxel. Reallocates on change.</summary>
         public RadianceDirections Directions {
             get => _radianceDirections;
             set {
@@ -436,8 +425,7 @@ namespace Lotec.Lighting {
         //   what Cube makes directional, and what lets the fragment blend 3 buckets by n^2 instead of
         //   reading one direction-less value.
         //
-        // Hence Cube is a superset of TwoSided rather than a different branch: same 2-slot radiance,
-        // plus the 6-bucket irradiance.
+        // Hence Cube is "6 directions" on the irradiance but only 2 slots of radiance.
 
         /// <summary>Outgoing-radiance slots per voxel (1 or 2) - the stride of _Radiance.</summary>
         public int RadianceSlots => _radianceDirections == RadianceDirections.Single ? 1 : 2;
@@ -473,7 +461,6 @@ namespace Lotec.Lighting {
         static readonly int s_radiance = Shader.PropertyToID("_Radiance");
         static readonly int s_irradiance = Shader.PropertyToID("_Irradiance");
         static readonly int s_irradianceBlur = Shader.PropertyToID("_IrradianceBlur");
-        static readonly int s_irradianceBack = Shader.PropertyToID("_IrradianceBack");
         static readonly int s_bgiIrradianceTexWrite = Shader.PropertyToID("_BgiIrradianceTexWrite");
         static readonly int s_bgiIrradianceTex = Shader.PropertyToID("_BgiIrradianceTex");
         static readonly int s_bgiIrradianceTexCoarse = Shader.PropertyToID("_BgiIrradianceTexCoarse");
@@ -524,8 +511,6 @@ namespace Lotec.Lighting {
         static readonly int s_aoStrength = Shader.PropertyToID("_BgiAoStrength");
         static readonly int s_shadowModeFine = Shader.PropertyToID("_BgiShadowModeFine");
         static readonly int s_shadowModeCoarse = Shader.PropertyToID("_BgiShadowModeCoarse");
-        // Fragment read source: default = mirrored-texture tap; this keyword flips to the SSBO gather for A/B.
-        const string SsboReadKeyword = "BGI_SSBO_READ";
         static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
         static readonly int s_cameraPosition = Shader.PropertyToID("_CameraPosition");
         static readonly int s_cameraForward = Shader.PropertyToID("_CameraForward");
@@ -825,12 +810,11 @@ namespace Lotec.Lighting {
             Shader.SetGlobalInt(s_bgiGrid, _grid);
             Shader.SetGlobalInt(s_bgiGridLog2, _gridLog2);
             Shader.SetGlobalInt(s_bgiCount, _voxelCount);
-            // Fragment solidity = the 8 KB bitfield; _Material is no longer bound to the lit shader.
+            // The only two buffers the lit shader reads, and only for the AO face plane: solidity from
+            // the 8 KB bitfield, openness from the surface word (bits 16-23). Everything else it needs
+            // arrives through the mirrored irradiance textures below.
             Shader.SetGlobalBuffer(s_occupancy, _occupancyBuffer);
-            // Surface word for the fragment's static AO (openness in bits 16-23).
             Shader.SetGlobalBuffer(s_surface, _surfaceBuffer);
-            // Fragment reads the occupancy-gated blurred field (always on).
-            Shader.SetGlobalBuffer(s_irradiance, _irradianceBlurBuffer);
             // Fine field bounds + coarse field bounds for the fragment read (hard fine/coarse switch).
             Shader.SetGlobalVector(s_gridOrigin, GridOrigin);
             Shader.SetGlobalVector(s_gridSize, GridSize);
@@ -842,14 +826,13 @@ namespace Lotec.Lighting {
             Light sun = RenderSettings.sun;
             Shader.SetGlobalFloat(s_intensity, sun != null ? sun.bounceIntensity : 1f);
             Shader.SetGlobalFloat(s_aoStrength, _aoStrength);
-            // Sun-shadow, per field. Baked reads the sun visibility the solve stashed in the radiance's
-            // w channel (bound below); Sdf marches the hi-res SDF per pixel (the _SdfHires global the
-            // active volume already publishes - see VoxelVolume.ApplyShaderGlobals).
-            Shader.SetGlobalBuffer(s_radiance, _radianceBuffer);
-            // Radiance stride for the fragment's slot select. A plain int uniform, NOT a keyword: the
-            // face read multiplies by it, and a keyword here would multiply the VoxelLit variant set
-            // (already GI_* x BGI_SSBO_READ x 4 tonemaps) for one scalar.
-            Shader.SetGlobalInt(s_bgiRadianceDirs, _allocatedRadianceSlots);
+            // Sun-shadow, per field. Baked taps the sun visibility CSBlur mirrored into the irradiance
+            // texture's alpha; Sdf marches the hi-res SDF per pixel (the _SdfHires global the active
+            // volume already publishes - see VoxelVolume.ApplyShaderGlobals).
+            // Irradiance stride (1 or 6) for the fragment's bucket select - both the GI tap and the
+            // baked-shadow alpha tap need it. A plain int uniform, NOT a keyword: a keyword here would
+            // multiply the VoxelLit variant set (already GI_* x 4 tonemaps) for one scalar. The
+            // RADIANCE stride is compute-side only, so it is not published here.
             Shader.SetGlobalInt(s_bgiIrradianceDirs, _allocatedIrradianceSlots);
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
@@ -858,11 +841,9 @@ namespace Lotec.Lighting {
             Shader.SetGlobalFloat(s_shadowSharpness, Mathf.Max(1f, _bakedShadowSharpness));
             Shader.SetGlobalFloat(s_shadowNormalOffset, Mathf.Clamp(_shadowNormalOffset, 0.25f, 2f));
             PublishOcclusionSources();
-            // Mirrored irradiance textures (the default fragment read source), one per field.
+            // Mirrored irradiance textures (the fragment read source), one per field.
             Shader.SetGlobalTexture(s_bgiIrradianceTex, _irradianceTex);
             Shader.SetGlobalTexture(s_bgiIrradianceTexCoarse, _irradianceTexCoarse);
-            if (_ssboRead) Shader.EnableKeyword(SsboReadKeyword);
-            else Shader.DisableKeyword(SsboReadKeyword);
             // The display transform (_ExposureLinear + the TONEMAP_* keyword) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value can't darken it.
         }
@@ -941,7 +922,6 @@ namespace Lotec.Lighting {
             _radianceBuffer = new ComputeBuffer(TotalVoxels * _allocatedRadianceSlots, sizeof(uint) * 2);
             _allocatedIrradianceSlots = IrradianceSlots;
             _irradianceBuffer = new ComputeBuffer(TotalVoxels * _allocatedIrradianceSlots, sizeof(uint) * 2);
-            _irradianceBackBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint) * 2);
             _irradianceBlurBuffer = new ComputeBuffer(TotalVoxels * _allocatedIrradianceSlots, sizeof(uint) * 2);
             _surfaceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));      // 32-bit surface word/voxel
             _occupancyBuffer = new ComputeBuffer(TotalVoxels / 32, sizeof(uint)); // 1 bit/voxel
@@ -1004,7 +984,6 @@ namespace Lotec.Lighting {
             if (_clearKernel < 0) return;
             _computeShader.SetBuffer(_clearKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_clearKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_clearKernel, s_irradianceBack, _irradianceBackBuffer);
             _computeShader.SetBuffer(_clearKernel, s_irradianceBlur, _irradianceBlurBuffer);
             _computeShader.SetInt(s_fieldOffset, fieldOffset);
             _computeShader.Dispatch(_clearKernel, Groups, 1, 1);
@@ -1021,7 +1000,6 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_initFineKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_initFineKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_initFineKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_initFineKernel, s_irradianceBack, _irradianceBackBuffer);
             _computeShader.SetBuffer(_initFineKernel, s_irradianceBlur, _irradianceBlurBuffer);
             _computeShader.Dispatch(_initFineKernel, Groups, 1, 1);
         }
@@ -1557,7 +1535,6 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
             _computeShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_injectKernel, s_irradianceBack, _irradianceBackBuffer);
             _computeShader.SetBuffer(_injectKernel, s_surface, _surfaceBuffer);
             BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Inject);
             _computeShader.Dispatch(_injectKernel, Groups, 1, 1);
@@ -1569,7 +1546,6 @@ namespace Lotec.Lighting {
             _computeShader.SetBuffer(_gatherKernel, s_occupancy, _occupancyBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_gatherKernel, s_irradianceBack, _irradianceBackBuffer);
             _computeShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
             BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Gather);
             _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
@@ -1653,14 +1629,12 @@ namespace Lotec.Lighting {
             _materialBuffer?.Release();
             _radianceBuffer?.Release();
             _irradianceBuffer?.Release();
-            _irradianceBackBuffer?.Release();
             _irradianceBlurBuffer?.Release();
             _surfaceBuffer?.Release();
             _occupancyBuffer?.Release();
             _materialBuffer = null;
             _radianceBuffer = null;
             _irradianceBuffer = null;
-            _irradianceBackBuffer = null;
             _irradianceBlurBuffer = null;
             _surfaceBuffer = null;
             _occupancyBuffer = null;

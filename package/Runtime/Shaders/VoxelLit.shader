@@ -67,11 +67,6 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // Mutually exclusive - the buffer GI updater enables its keyword; GiMethodSelector drives
             // the component-less GI_UNITY / GI_OFF.
             #pragma multi_compile GI_OFF GI_VOXEL_BUFFER GI_UNITY
-            // Buffer-GI fragment read source. DEFAULT (no keyword): one hardware-trilinear tap of the
-            // mirrored irradiance Texture3D - the fast path on Adreno/Quest (the GPU does the
-            // interpolation the SSBO gather recomputes in software). BGI_SSBO_READ flips back to the
-            // original 9-tap StructuredBuffer gather, kept as an on-device A/B baseline. Driven by BufferGiUpdater.
-            #pragma multi_compile __ BGI_SSBO_READ
             // Display transform, COMPILE-TIME (not a uniform branch). A fragment kernel's register
             // allocation covers every path it contains, so keeping all four options in one kernel sized
             // it for AgX's worst case (two 3x3 matrices, a degree-6 polynomial, log2/pow). That capped
