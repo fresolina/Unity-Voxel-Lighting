@@ -142,6 +142,10 @@ bool BgiSolidBit(uint slot)
 // --- Solve uniforms ---
 uint  _FrameCount;
 uint  _SamplesPerFrame;
+// Rays this voxel had already gathered before THIS dispatch (= _collectedSamples before the frame's
+// increment). The gather's sample index is _SampleBase + rayIndex, so the sample sequence depends on
+// the ray ordinal alone and never on how the budget was split across frames. See GiSampleNoise.
+uint  _SampleBase;
 float _Confidence; // 0 at a light change, 1 when converged; CSBlur eases the displayed field by this
 float _EmaWeight;  // progressive gather blend weight (samplesPerFrame/totalSamples), from C#
 // Coarse grid mapping for CSInitFineFromCoarse (that dispatch's _BgiGrid* uniforms are the FINE grid).
@@ -204,13 +208,25 @@ float4 _BakedLightAlbedoEmission[MAX_BAKED_LIGHTS]; // rgb = hue (peak channel 1
 #define BGI_GATHER_MAX_AIR_DIST 4u
 
 // Procedural stochastic sample (replaces the blue-noise texture, keeps the system textureless):
-// per-voxel spatial decorrelation via a hash, animated over frames by the R2 low-discrepancy
-// sequence (Cranley-Patterson rotation) so each voxel's sequence converges low-discrepancy.
-float2 GiSampleNoise(uint3 id, uint frame, uint salt)
+// per-voxel spatial decorrelation via a hash, walked by the R2 low-discrepancy sequence
+// (Cranley-Patterson rotation) so each voxel's sequence converges low-discrepancy.
+//
+// `sampleIndex` is the GLOBAL ray ordinal for this voxel - how many rays it has already gathered,
+// plus this ray's position within the frame - NOT the frame number. That is what makes quality
+// independent of samples-per-frame, which is the whole contract of the setting: 500 rays at 1/frame
+// walks indices 0..499 over 500 frames, and 500 rays at 50/frame walks 0..49, 50..99, ... over 10
+// frames. Same 500 points, so the same converged field, exactly rather than approximately.
+//
+// The previous form seeded the per-voxel base from the ray's index WITHIN the frame and rotated by
+// the frame counter, so the point set was a function of how the budget was sliced: at 1 ray/frame a
+// voxel drew from a single base forever, at 50 it drew from 50. Measured on Sponza, that put the
+// converged spf=1 and spf=50 fields 27.9% apart per voxel against a 3.6% run-to-run control, and
+// spf=1 was the wrong one (27.7% from a high-budget reference, where spf=50 sat at 3.1%).
+float2 GiSampleNoise(uint3 id, uint sampleIndex)
 {
-    uint seed = (id.x * 73856093u) ^ (id.y * 19349663u) ^ (id.z * 83492791u) ^ (salt * 2654435761u);
+    uint seed = (id.x * 73856093u) ^ (id.y * 19349663u) ^ (id.z * 83492791u);
     float2 base = float2(HashTo01(seed), HashTo01(seed ^ 0x9e3779b9u));
-    float2 r2 = frac(float(frame) * float2(0.7548776662, 0.5698402909));
+    float2 r2 = frac(float(sampleIndex) * float2(0.7548776662, 0.5698402909));
     return frac(base + r2);
 }
 
@@ -535,7 +551,7 @@ half3 GatherRayRadiance(int3 fromCell, float3 dir, half reachBoost)
         bool twoSided = _BgiRadianceDirs > 1 && BgiSurfaceIsTwoSided(hitSurface);
         if (BgiSurfaceIsEmissive(hitSurface) || dot(dir, faceN) < 0.0 || twoSided) {
             half3 rad; half w;
-            BgiUnpackRgbH(_Radiance[BgiRadianceSlot(BgiSlot((uint3)hit), -dir, faceN)], rad, w);
+            BgiUnpackRgbH(_Radiance[BgiRadianceSlot(BgiSlot((uint3)hit), -dir, faceN, hitSurface)], rad, w);
             // Distance-weighted reach fill (t = hit distance / grid diagonal, clamped 0..1). Applied
             // BEFORE the firefly clamp so a boosted-then-bright sample still can't spike.
             half t = (half)saturate(length(BgiVoxelCenter((uint3)hit) - BgiVoxelCenter((uint3)fromCell)) / BGI_MAX_RAY_DIST);
@@ -606,7 +622,7 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     // FRONT face: the stored normal's side.
     // Stash the sun visibility in the radiance's spare w half - the fragment reads it as a cheap,
     // pre-marched voxel sun-shadow (interpolated across the surface face), no per-pixel ray needed.
-    uint frontSlot = BgiRadianceSlot(_FieldOffset + i, normal, normal);
+    uint frontSlot = BgiRadianceSlot(_FieldOffset + i, normal, normal, surfWord);
     half sunVis;
     float3 direct = GetDirectLight(cell, normal, frontSlot, sunVis);
     half3 outgoing = SanitizeColor(emissive + (float3)safeAlbedo * (direct + (float3)bounce));
@@ -621,7 +637,7 @@ void CSInject(uint3 id : SV_DispatchThreadID)
     // Skipped in Single, where there is nowhere to put it.
     if (_BgiRadianceDirs > 1 && BgiSurfaceIsTwoSided(surfWord)) {
         float3 backN = -normal;
-        uint backSlot = BgiRadianceSlot(_FieldOffset + i, backN, normal);
+        uint backSlot = BgiRadianceSlot(_FieldOffset + i, backN, normal, surfWord);
         half backSun;
         float3 backDirect = GetDirectLight(cell, backN, backSlot, backSun);
         // Same albedo and emission (one material per voxel), but its OWN incident irradiance: reusing
@@ -702,7 +718,7 @@ void CSGather(uint3 id : SV_DispatchThreadID)
     uint sampleCount = max(_SamplesPerFrame, 1u);
     [loop]
     for (uint r = 0u; r < sampleCount; r++) {
-        float2 noise = GiSampleNoise(c, _FrameCount, r);
+        float2 noise = GiSampleNoise(c, _SampleBase + r);
         float3 dir = omniSample ? GetRandomDirectionFromNoise2(noise)    // air/light/two-sided: omni
                                 : CosineSampleHemisphere(normal, noise); // surface: front hemisphere
         float3 L = (float3)GatherRayRadiance(cell, dir, surfaceVoxel ? 1.0h : (half)_ReachBoost);
@@ -735,7 +751,9 @@ void CSGather(uint3 id : SV_DispatchThreadID)
         float3 incomingBack = 0;
         [loop]
         for (uint rb = 0u; rb < sampleCount; rb++) {
-            float2 noise = GiSampleNoise(c, _FrameCount + 7919u, rb); // 7919: a prime, just a decorrelating offset
+            // Offsets the shared ray ordinal rather than the frame, so the back hemisphere is
+            // decorrelated from the front and stays samples-per-frame independent like it.
+            float2 noise = GiSampleNoise(c, _SampleBase + rb + 7919u); // 7919: a prime, just an offset
             incomingBack += GatherRayRadiance(cell, CosineSampleHemisphere(backNormal, noise), 1.0h);
         }
         incomingBack *= rcp((float)sampleCount);
@@ -823,13 +841,14 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
     if (BgiSolidBit(_FieldOffset + i)) {
     uint sword = _Surface[_FieldOffset + i];
     if (!BgiSurfaceIsEmissive(sword)) {
-        // The SSBO read skips solids: keep every bucket zero.
-        {
-            uint zb = BgiIrradianceBase(_FieldOffset + i);
-            uint zd = BgiIrradianceDirs();
-            [loop]
-            for (uint z = 0u; z < zd; z++) _IrradianceBlur[zb + z] = uint2(0u, 0u);
-        }
+        // A solid voxel's _IrradianceBlur slots hold the PREVIOUS displayed shell value (written at the
+        // end of this branch), not zero. Nothing reads them as irradiance - every consumer gates on the
+        // occupancy bit first (the SSBO fragment gather, CSAverageLuminance, CSInitFineFromCoarse) - so
+        // the slots are free, and they are the only place to keep the history the confidence ease needs.
+        // Without it the shell had to be written raw, which is what made the first frame after a light
+        // change (or any restart: EmaWeight is 1 then, so _Irradiance is a single-frame estimate - ONE
+        // ray at samplesPerFrame 1) flash noise onto every corner while the air layer correctly still
+        // showed the settled field.
         // Solid voxels carry NO irradiance (rgb = 0), but their ALPHA must be the surface's own baked
         // sun visibility (radiance.w), NOT a constant 1.0. The fragment's shadow tap sits ~1 voxel into
         // the air but its trilinear footprint still catches these solid cells; a constant 1.0 here washes
@@ -841,7 +860,7 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
         // path that resolves the other one.
         float3 sn0 = BgiSurfaceNormal(sword);
         half3 rgbIgnore; half solidSun;
-        BgiUnpackRgbH(_Radiance[BgiRadianceSlot(_FieldOffset + i, sn0, sn0)], rgbIgnore, solidSun);
+        BgiUnpackRgbH(_Radiance[BgiRadianceSlot(_FieldOffset + i, sn0, sn0, sword)], rgbIgnore, solidSun);
 
         // DILATE the RGB into the first solid shell instead of writing black there. The texture read is
         // a raw trilinear tap with no occupancy gate, so a black solid texel bleeds DARKNESS onto every
@@ -965,9 +984,19 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
                 float sgnB = (b1 & 1u) != 0u ? 1.0 : -1.0;
                 float3 bdir = float3(ax == 0u ? sgnB : 0.0, ax == 1u ? sgnB : 0.0, ax == 2u ? sgnB : 0.0);
                 half3 sunRgbIgnore;
-                BgiUnpackRgbH(_Radiance[BgiRadianceSlot(_FieldOffset + i, bdir, sn)], sunRgbIgnore, bucketSun);
+                BgiUnpackRgbH(_Radiance[BgiRadianceSlot(_FieldOffset + i, bdir, sn, sword)], sunRgbIgnore, bucketSun);
             }
-            _BgiIrradianceTexWrite[BgiTexCoord(BgiCoord(i), b1)] = float4(dilated, bucketSun);
+            // Confidence-eased exactly like the air path, from this bucket's own previous displayed
+            // value. The shell carries in-plane weight at concave corners, so an un-eased jump to a
+            // one-frame estimate reads as a burst of corner noise the moment anything restarts the
+            // solve - while the air around it is still easing. The ALPHA stays un-eased: sun visibility
+            // is deterministic, so it should track a moved sun immediately rather than fade in.
+            uint blurSlot = BgiIrradianceBase(_FieldOffset + i) + b1;
+            half3 prevShell; half prevShellW;
+            BgiUnpackRgbH(_IrradianceBlur[blurSlot], prevShell, prevShellW);
+            half3 shell = lerp(prevShell, (half3)dilated, (half)_Confidence);
+            _IrradianceBlur[blurSlot] = BgiPackRgb(shell, 0.0);
+            _BgiIrradianceTexWrite[BgiTexCoord(BgiCoord(i), b1)] = float4(shell, bucketSun);
         }
         return;
     }

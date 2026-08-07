@@ -297,7 +297,7 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out 
                 // wall read their own sun visibility instead of sharing one. This is an SSBO read, so
                 // each of the 4 taps resolves independently - the mirror texture's single alpha per
                 // voxel cannot do this, which is why the SSBO path is the accurate one for thin walls.
-                uint radSlot = directional ? BgiRadianceSlot(slot, normal, BgiSurfaceNormal(sword))
+                uint radSlot = directional ? BgiRadianceSlot(slot, normal, BgiSurfaceNormal(sword), sword)
                                            : slot;
                 half3 rgb; half w; BgiUnpackRgbH(_Radiance[radSlot], rgb, w);
                 shadowAcc += w * wgt;
