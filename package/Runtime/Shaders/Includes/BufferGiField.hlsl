@@ -196,6 +196,37 @@ bool BgiSurfaceIsTwoSided(uint word) {
     return (word & BGI_SURFACE_FLAG_TWOSIDED) != 0u;
 }
 
+// SUN-RAY ORIGIN, bits 26-30: which of the 27 cells in this voxel's 3x3x3 neighbourhood CSInject
+// starts its shadow march from, as k = (dz+1)*9 + (dy+1)*3 + (dx+1). k == 13 is the voxel itself and
+// the range 0..26 fits in 5 bits. Chosen by BgiPickShadowOrigin, in CSBuildSurface - the same
+// bake-time pass that derives the normal, and the right place for it: picking the origin needs the
+// completed occupancy and a 26-neighbour search, both of which that pass already has in hand.
+//
+// It was previously chosen inside CSInject, which runs EVERY SOLVE FRAME, and the cost there is not
+// per-voxel but per-WAVE: a wave whose 64 threads contain one corner voxel executes the whole scan in
+// lockstep. Measured in Sponza, 6.1% of threads needed it but 37% of the working waves contained one.
+// Deciding once at bake makes the solve a table lookup.
+//
+// Nothing about the choice may depend on the LIGHT. A sun change only restarts the solve
+// (HasSunChanged resets the sample counter); the derive passes do not re-run, so a sun-scored origin
+// would be frozen at whatever the sun was during the bake and would strand corners on an occluded
+// start at other angles. Every other field in this word is geometry-only for the same reason.
+//
+// NOTE a zeroed word decodes to (-1,-1,-1), not self, so callers keep the "landed in solid -> use the
+// cell" guard. They need it anyway: the BACK face of a two-sided voxel negates the step.
+#define BGI_SURFACE_ORIGIN_SHIFT 26u
+#define BGI_SURFACE_ORIGIN_MASK 0x7c000000u
+
+uint BgiPackShadowOrigin(int3 step) {
+    uint k = (uint)((step.z + 1) * 9 + (step.y + 1) * 3 + (step.x + 1));
+    return k << BGI_SURFACE_ORIGIN_SHIFT;
+}
+
+int3 BgiShadowOriginStep(uint word) {
+    uint k = (word >> BGI_SURFACE_ORIGIN_SHIFT) & 31u;
+    return int3((int)(k % 3u) - 1, (int)((k / 3u) % 3u) - 1, (int)(k / 9u) - 1);
+}
+
 // --- Directional radiance slots (see RadianceDirections in BufferGiUpdater) ---
 // How many directions of outgoing radiance each voxel stores: 1 (Single) or 2 (Cube - see below for
 // why Cube's SIX directions still only need two outgoing slots).
