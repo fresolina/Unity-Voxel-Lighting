@@ -120,6 +120,20 @@ namespace Lotec.Lighting {
                  "thin walls keep correct normals. Off: thicken walls 2 voxels + bake the occupancy-" +
                  "gradient normal. Changing it re-bakes.")]
         [SerializeField] bool _bakedNormals = true;
+        [Tooltip("Grow every voxelized surface one voxel INWARD (opposite its normal), so a wall is " +
+                 "solid-backed instead of a 1-voxel hollow shell. Independent of the normal source " +
+                 "since they answer different questions - this is 'how much of the grid does the " +
+                 "surface occupy'.\n " +
+                 "Why turn it on: a sub-voxel occluder (curtain, banner, railing) occupies one cell " +
+                 "with lit air on BOTH sides, and the shell dilation fills that cell from both sides " +
+                 "at equal weight - so surfaces on the dark side read the lit side's light straight " +
+                 "through it. Thickening makes the occluder opaque in the grid and the leak stops.\n " +
+                 "Why not: ALL thin geometry gains bulk (measured +73% solid cells in Sponza), which " +
+                 "can close narrow gaps and read as bloating on foliage or railings.\n " +
+                 "REQUIRED when Baked Normals is off - the occupancy-gradient normal cancels to zero " +
+                 "on a hollow shell. Optional, and purely a leak control, when Baked Normals is on. " +
+                 "Changing it re-bakes.")]
+        [SerializeField] bool _thickenWalls;
         [Tooltip("Strength of the baked static ambient occlusion (0 = off). Darkens the GI in concave " +
                  "corners and near-contact gaps (e.g. under a hovering object) using each surface " +
                  "voxel's precomputed openness - restores contact shadowing the omnidirectional gather " +
@@ -227,6 +241,7 @@ namespace Lotec.Lighting {
         ComputeBuffer _irradianceBlurBuffer;
         ComputeBuffer _surfaceBuffer; // per-voxel surface word (normal + reserved bits); always present
         bool _bakedNormalsBaked;      // the normal source the current bake used (for rebake-on-toggle)
+        bool _thickenWallsBaked;      // thickening the current bake used (also a rebake-on-toggle input)
         // Field bounds the current voxelization used; SyncBakeInputs re-voxelizes when they change
         // (same-volume geometry edit / reassigned coarse field), so display/solve tweaks don't.
         Vector3 _bakedFineOrigin, _bakedFineSize, _bakedCoarseOrigin, _bakedCoarseSize;
@@ -252,6 +267,7 @@ namespace Lotec.Lighting {
         // data every DDA step / gate / fragment tap reads. Derived from _Material by CSBuildSurface.
         ComputeBuffer _occupancyBuffer;
         const string BakedNormalsKeyword = "BGI_BAKED_NORMALS";
+        const string ThickenKeyword = "BGI_THICKEN";
         bool _materialBaked;
         // The fine field's volume (the manager's active volume); its Bounds already carry the
         // volume's own border, so the fine grid uses them as-is.
@@ -942,6 +958,7 @@ namespace Lotec.Lighting {
         void SyncBakeInputs() {
             if (!_materialBaked) return;
             bool changed = _bakedNormals != _bakedNormalsBaked
+                || _thickenWalls != _thickenWallsBaked
                 || !NearlyEqual(_bakedFineOrigin, GridOrigin) || !NearlyEqual(_bakedFineSize, GridSize)
                 || !NearlyEqual(_bakedCoarseOrigin, CoarseOrigin) || !NearlyEqual(_bakedCoarseSize, CoarseSize);
 #if UNITY_EDITOR
@@ -1073,8 +1090,14 @@ namespace Lotec.Lighting {
             return a.version == BufferGiBakeAsset.Version && a.grid == Grid
                 && a.material != null && a.material.Length == VoxelCount
                 && a.surface != null && a.surface.Length == VoxelCount
-                && a.bakedNormals == _bakedNormals;
+                && a.bakedNormals == _bakedNormals
+                && a.thickened == ThickensWalls;
         }
+
+        /// <summary>Whether the voxelizer grows solids inward. Gradient normals force it on (they
+        /// cancel to zero on a hollow shell), so this - not the raw field - is the bake's identity and
+        /// what <see cref="ApplyVoxelizeKeywords"/> publishes.</summary>
+        public bool ThickensWalls => _thickenWalls || !_bakedNormals;
 
         // One-shot dump of WHY no disk bake matched, so a bundle/build discrepancy (unresolved
         // reference, empty arrays after serialization, bounds/normal drift) can be read straight from
@@ -1084,7 +1107,7 @@ namespace Lotec.Lighting {
             var sb = new System.Text.StringBuilder();
             string missing = fine == null ? "the active FINE volume" : "the COARSE field";
             sb.AppendLine($"Buffer GI: no matching disk bake for {missing}; voxelizing at runtime instead. Diagnostics:");
-            sb.AppendLine($"  expected: grid={Grid} version={BufferGiBakeAsset.Version} VoxelCount={VoxelCount} bakedNormals={_bakedNormals}");
+            sb.AppendLine($"  expected: grid={Grid} version={BufferGiBakeAsset.Version} VoxelCount={VoxelCount} bakedNormals={_bakedNormals} thickened={ThickensWalls}");
             sb.AppendLine($"  expected FINE   origin={GridOrigin.ToString("F4")} size={GridSize.ToString("F4")}");
             sb.AppendLine($"  HasCoarse={HasCoarse}" + (HasCoarse ? $" expected COARSE origin={CoarseOrigin.ToString("F4")} size={CoarseSize.ToString("F4")}" : ""));
             List<BufferGiBakeAsset> bakeAssets = BakeAssets;
@@ -1103,7 +1126,8 @@ namespace Lotec.Lighting {
                         $"  [{i}] '{a.name}' isCoarse={a.isCoarse} version={a.version} grid={a.grid} " +
                         $"material={(a.material == null ? "null" : a.material.Length.ToString())} " +
                         $"surface={(a.surface == null ? "null" : a.surface.Length.ToString())} " +
-                        $"bakedNormals={a.bakedNormals} origin={a.origin.ToString("F4")} size={a.size.ToString("F4")} " +
+                        $"bakedNormals={a.bakedNormals} thickened={a.thickened} " +
+                        $"origin={a.origin.ToString("F4")} size={a.size.ToString("F4")} " +
                         $"=> valid={BakeAssetValid(a)} boundsMatch={boundsMatch}");
                 }
             }
@@ -1142,6 +1166,7 @@ namespace Lotec.Lighting {
             asset.grid = Grid;
             asset.isCoarse = isCoarse;
             asset.bakedNormals = _bakedNormals;
+            asset.thickened = ThickensWalls;
             asset.origin = origin;
             asset.size = size;
             if (asset.material == null || asset.material.Length != VoxelCount) asset.material = new uint[VoxelCount];
@@ -1176,13 +1201,30 @@ namespace Lotec.Lighting {
         // buffer SetData only; rasterization then writes just this field's covered voxels). The other
         // field's transient content doesn't matter - capture reads back only this field's slice, and
         // the runtime reload reassembles both fields afterwards. Shared setup with VoxelizeScene.
+        // The voxelizer's two INDEPENDENT switches, applied together so the two rasterization entry
+        // points (disk bake and runtime voxelize) can never drift apart:
+        //   BGI_BAKED_NORMALS - exact mesh normals into _Surface; otherwise CSBuildSurface derives them
+        //                       from the occupancy gradient (_ComputeGradientNormals).
+        //   BGI_THICKEN       - grow each solid one voxel inward.
+        // Gradient normals REQUIRE thickening (the gradient cancels to zero on a hollow shell), so that
+        // combination is forced on here rather than left to the inspector: it is not a preference, it
+        // is the mode being self-consistent, and getting it wrong yields grey normals everywhere.
+        // Returns whether mesh normals are in use (the caller binds _SurfaceWrite only then).
+        bool ApplyVoxelizeKeywords() {
+            bool meshNormals = _bakedNormals;
+            bool thicken = ThickensWalls;
+            if (meshNormals) _voxelizeMaterial.EnableKeyword(BakedNormalsKeyword);
+            else _voxelizeMaterial.DisableKeyword(BakedNormalsKeyword);
+            if (thicken) _voxelizeMaterial.EnableKeyword(ThickenKeyword);
+            else _voxelizeMaterial.DisableKeyword(ThickenKeyword);
+            return meshNormals;
+        }
+
         void RasterizeFieldSlice(Transform root, Vector3 origin, Vector3 size, int fieldOffset) {
             if (_voxelizeMaterial == null) {
                 _voxelizeMaterial = new Material(_voxelizeShader) { hideFlags = HideFlags.HideAndDontSave };
             }
-            bool meshNormals = _bakedNormals;
-            if (meshNormals) _voxelizeMaterial.EnableKeyword(BakedNormalsKeyword);
-            else _voxelizeMaterial.DisableKeyword(BakedNormalsKeyword);
+            bool meshNormals = ApplyVoxelizeKeywords();
 
             if (_materialClear == null || _materialClear.Length != TotalVoxels) _materialClear = new uint[TotalVoxels];
             _materialBuffer.SetData(_materialClear);
@@ -1213,11 +1255,7 @@ namespace Lotec.Lighting {
             if (_voxelizeMaterial == null) {
                 _voxelizeMaterial = new Material(_voxelizeShader) { hideFlags = HideFlags.HideAndDontSave };
             }
-            // Mesh mode (_bakedNormals): the voxelizer writes exact mesh normals into _Surface and does
-            // NOT thicken. Gradient mode: it thickens, and CSBuildSurface computes the gradient normal.
-            bool meshNormals = _bakedNormals;
-            if (meshNormals) _voxelizeMaterial.EnableKeyword(BakedNormalsKeyword);
-            else _voxelizeMaterial.DisableKeyword(BakedNormalsKeyword);
+            bool meshNormals = ApplyVoxelizeKeywords();
 
             // Rasterization only writes covered voxels, so clear all field slices to empty first.
             if (_materialClear == null || _materialClear.Length != TotalVoxels) _materialClear = new uint[TotalVoxels];
@@ -1342,6 +1380,7 @@ namespace Lotec.Lighting {
             for (int f = 0; f < FieldCount; f++) BuildAirDistance(f * VoxelCount);
             // Snapshot the inputs this voxelization used, so SyncBakeInputs can tell when they change.
             _bakedNormalsBaked = _bakedNormals;
+            _thickenWallsBaked = _thickenWalls;
             _bakedFineOrigin = GridOrigin; _bakedFineSize = GridSize;
             _bakedCoarseOrigin = CoarseOrigin; _bakedCoarseSize = CoarseSize;
             // The baked lights were just injected, so record their state: without this the per-frame
