@@ -294,6 +294,11 @@ namespace Lotec.Lighting {
         // 1-bit/voxel occupancy bitfield (uint packs 32 voxels): 4 KB per field, the hot solidity
         // data every DDA step / gate / fragment tap reads. Derived from _Material by CSBuildSurface.
         ComputeBuffer _occupancyBuffer;
+        // Same 1-bit/voxel layout, but with each surfaced voxel's BACKING cell filled in. Bake-time
+        // scratch read by OccupancyNormal only - see _OccupancyThick in BufferGi.compute for why the
+        // gradient needs a backed wall that the real occupancy cannot supply.
+        ComputeBuffer _occupancyThickBuffer;
+        uint[] _occupancyClear;
         const string ThickenKeyword = "BGI_THICKEN";
         bool _materialBaked;
         // The fine field's volume (the manager's active volume); its Bounds already carry the
@@ -325,6 +330,7 @@ namespace Lotec.Lighting {
         int _initFineKernel = -1;
         int _averageLuminanceKernel = -1;
         int _buildOccupancyKernel = -1;
+        int _buildNormalOccupancyKernel = -1;
         int _buildSurfaceKernel = -1;
         int _buildAirDistanceKernel = -1;
         int _injectBakedLightsKernel = -1;
@@ -549,6 +555,7 @@ namespace Lotec.Lighting {
         static readonly int s_material = Shader.PropertyToID("_Material");
         static readonly int s_surface = Shader.PropertyToID("_Surface");
         static readonly int s_occupancy = Shader.PropertyToID("_Occupancy");
+        static readonly int s_occupancyThick = Shader.PropertyToID("_OccupancyThick");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_samplesPerFrame = Shader.PropertyToID("_SamplesPerFrame");
         static readonly int s_sampleBase = Shader.PropertyToID("_SampleBase");
@@ -1005,6 +1012,7 @@ namespace Lotec.Lighting {
             _initFineKernel = _computeShader.FindKernel("CSInitFineFromCoarse");
             _averageLuminanceKernel = _computeShader.FindKernel("CSAverageLuminance");
             _buildOccupancyKernel = _computeShader.FindKernel("CSBuildOccupancy");
+            _buildNormalOccupancyKernel = _computeShader.FindKernel("CSBuildNormalOccupancy");
             _buildSurfaceKernel = _computeShader.FindKernel("CSBuildSurface");
             _buildAirDistanceKernel = _computeShader.FindKernel("CSBuildAirDistance");
             _injectBakedLightsKernel = _computeShader.FindKernel("CSInjectBakedLights");
@@ -1022,6 +1030,7 @@ namespace Lotec.Lighting {
             _irradianceBlurBuffer = new ComputeBuffer(TotalVoxels * _allocatedIrradianceSlots, sizeof(uint) * 2);
             _surfaceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));      // 32-bit surface word/voxel
             _occupancyBuffer = new ComputeBuffer(TotalVoxels / 32, sizeof(uint)); // 1 bit/voxel
+            _occupancyThickBuffer = new ComputeBuffer(TotalVoxels / 32, sizeof(uint)); // ditto, bake-only
             // Each field's blurred irradiance mirrored into a Texture3D for the default trilinear read.
             _irradianceTex = CreateIrradianceTexture("BgiIrradianceTex");
             _irradianceTexCoarse = CreateIrradianceTexture("BgiIrradianceTexCoarse");
@@ -1439,6 +1448,12 @@ namespace Lotec.Lighting {
         // field, 3) relax the air-distance transform to convergence. Shared by both voxelize paths.
         void RunDerivePasses() {
             for (int f = 0; f < FieldCount; f++) BuildOccupancy(f * VoxelCount);
+            // Zero the normal-occupancy scratch once for ALL fields: its kernel only ORs bits in, and
+            // it is dispatched per field below.
+            int occWords = TotalVoxels / 32;
+            if (_occupancyClear == null || _occupancyClear.Length != occWords) _occupancyClear = new uint[occWords];
+            _occupancyThickBuffer.SetData(_occupancyClear);
+            for (int f = 0; f < FieldCount; f++) BuildNormalOccupancy(f * VoxelCount);
             for (int f = 0; f < FieldCount; f++) BuildSurface(f * VoxelCount);
             for (int f = 0; f < FieldCount; f++) BuildAirDistance(f * VoxelCount);
             // Snapshot the inputs this voxelization used, so SyncBakeInputs can tell when they change.
@@ -1468,12 +1483,26 @@ namespace Lotec.Lighting {
             _computeShader.Dispatch(_buildOccupancyKernel, Mathf.CeilToInt(VoxelCount / 32f / 64f), 1, 1);
         }
 
+        // Fill one field's _OccupancyThick: real solids + the cell behind each surfaced voxel, along
+        // the TRIANGLE normal the voxelizer left in _Surface. Must run after BuildOccupancy (it reads
+        // the finished bitfield) and before BuildSurface (which overwrites those normal bits). The
+        // buffer is zeroed once for all fields by the caller - the kernel only ORs bits in.
+        void BuildNormalOccupancy(int fieldOffset) {
+            if (_buildNormalOccupancyKernel < 0) return;
+            _computeShader.SetInt(s_fieldOffset, fieldOffset);
+            _computeShader.SetBuffer(_buildNormalOccupancyKernel, s_occupancy, _occupancyBuffer);
+            _computeShader.SetBuffer(_buildNormalOccupancyKernel, s_occupancyThick, _occupancyThickBuffer);
+            _computeShader.SetBuffer(_buildNormalOccupancyKernel, s_surface, _surfaceBuffer);
+            _computeShader.Dispatch(_buildNormalOccupancyKernel, Groups, 1, 1);
+        }
+
         // Fill one field's _Surface word (per voxel): the gradient normal (gradient mode; mesh mode
         // keeps the voxelizer's) + the static openness/AO (both modes). Future air-distance/flags too.
         void BuildSurface(int fieldOffset) {
             if (_buildSurfaceKernel < 0) return;
             _computeShader.SetInt(s_fieldOffset, fieldOffset);
             _computeShader.SetBuffer(_buildSurfaceKernel, s_occupancy, _occupancyBuffer);
+            _computeShader.SetBuffer(_buildSurfaceKernel, s_occupancyThick, _occupancyThickBuffer);
             _computeShader.SetBuffer(_buildSurfaceKernel, s_surface, _surfaceBuffer);
             _computeShader.Dispatch(_buildSurfaceKernel, Groups, 1, 1);
         }
@@ -1733,12 +1762,14 @@ namespace Lotec.Lighting {
             _irradianceBlurBuffer?.Release();
             _surfaceBuffer?.Release();
             _occupancyBuffer?.Release();
+            _occupancyThickBuffer?.Release();
             _materialBuffer = null;
             _radianceBuffer = null;
             _irradianceBuffer = null;
             _irradianceBlurBuffer = null;
             _surfaceBuffer = null;
             _occupancyBuffer = null;
+            _occupancyThickBuffer = null;
             if (_irradianceTex != null) { _irradianceTex.Release(); _irradianceTex = null; }
             if (_irradianceTexCoarse != null) { _irradianceTexCoarse.Release(); _irradianceTexCoarse = null; }
             _materialBaked = false;
