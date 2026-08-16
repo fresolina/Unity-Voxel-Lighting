@@ -14,19 +14,23 @@ namespace Lotec.Lighting {
     [PreferBinarySerialization]
     public class BufferGiBakeAsset : ScriptableObject {
         /// <summary>Bump when the stored layout changes; loaders reject other versions.</summary>
+        // 4: bakedNormals dropped - the voxelizer now always writes the triangle normal, and
+        // CSBuildSurface decides per voxel whether to use it. A v3 asset stores `surface` from a bake
+        // that may have had that write DISABLED (bakedNormals == false), so its sub-voxel cells carry
+        // no orientation at all and would silently fall back to the thin-axis convention. Nothing in
+        // the asset distinguishes that from a normal-bearing bake, so v3 must be re-baked, not adopted.
         // 3: thickening split out of bakedNormals into its own flag. A v2 asset cannot be reinterpreted,
         // because in v2 "bakedNormals == false" silently ALSO meant thickened - the material array it
         // stores already has the grown solids baked in, and nothing records that independently.
-        public const int Version = 3;
+        public const int Version = 4;
 
         public int version = Version;
         public int grid;
         public bool isCoarse;      // true = the coarse field slice, false = a fine/detailed field slice
-        public bool bakedNormals;  // normal source the bake used (mesh vs occupancy gradient)
-        // Whether the raster grew each solid one voxel inward. Independent of bakedNormals since v3, and
-        // a required part of the identity: thickening changes `material` itself, so an asset baked with
-        // it must never be loaded by an updater running without it (that would restore the very leak the
-        // setting exists to close, with no visible sign that the bake disagrees).
+        // Whether the raster grew each solid one voxel inward. A required part of the identity:
+        // thickening changes `material` itself, so an asset baked with it must never be loaded by an
+        // updater running without it (that would restore the very leak the setting exists to close,
+        // with no visible sign that the bake disagrees).
         public bool thickened;
         public Vector3 origin;     // grid mapping this field was rasterized against (world min)
         public Vector3 size;       // grid mapping this field was rasterized against (world size)

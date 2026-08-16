@@ -115,15 +115,11 @@ RWStructuredBuffer<uint>  _MaterialWrite;
 // solidity test reads - most importantly the DDA inner loop, which previously fetched 4 bytes of
 // _Material per stepped cell for a 1-bit answer. Derived from _Material by CSBuildOccupancy at bake.
 RWStructuredBuffer<uint>  _Occupancy;
-// Per-voxel surface word (normal in low 16 bits; see BufferGiField.hlsl). Written by CSBuildSurface
-// (gradient) or the voxelizer (mesh normals); read once per hit by the solve. RW so CSBuildSurface
-// can write it; the solve kernels only read it.
+// Per-voxel surface word (normal in low 16 bits; see BufferGiField.hlsl). The voxelizer seeds it with
+// the triangle normal; CSBuildSurface then rewrites it with the occupancy gradient (keeping the
+// triangle only where the gradient cancels) and adds openness, flags and the sun-ray origin. Read
+// once per hit by the solve. RW so CSBuildSurface can write it; the solve kernels only read it.
 RWStructuredBuffer<uint>  _Surface;
-
-// Build-mode uniform for CSBuildSurface: 1 = compute the occupancy-gradient normal into _Surface
-// (walls are thickened, so the gradient is unambiguous); 0 = mesh mode, the voxelizer already wrote
-// _Surface, so leave it. Set from C# per bake.
-uint _ComputeGradientNormals;
 
 // Solidity test for a concatenated-buffer slot (field offset already applied - slots are multiples
 // of BGI_COUNT per field, and BGI_COUNT is divisible by 32, so field slices stay word-aligned).
@@ -931,8 +927,8 @@ void CSBlur(uint3 id : SV_DispatchThreadID)
         // lower arcade, the ungated average ran ~10% brighter than the reference there. Gating on
         // dot(dir, normal) restricts the average to the air the front face actually sees, which is the
         // same air the fragment's tap reads, so the shell now reconstructs that side and only that side.
-        // Every solid voxel has a normal (mesh normals under BGI_BAKED_NORMALS, else CSBuildSurface's
-        // occupancy gradient), so this is always available.
+        // Every solid voxel has a normal (CSBuildSurface's occupancy gradient, or the voxelizer's
+        // triangle normal where that cancels), so this is always available.
         // A two-sided voxel serves two opposite faces from this ONE texel, so with SINGLE's one bucket
         // there is no hemisphere that is "in front" of it: the gate fills the texel with the air on
         // whichever side the voxelizer happened to store, and the other side reads it too. That is the
@@ -1312,10 +1308,10 @@ half BgiComputeOpenness(int3 cell, float3 n)
 
 // ----------------------------------------------------------
 // BUILD SURFACE (bake-time, after CSBuildOccupancy so it reads a complete _Occupancy): per SOLID
-// voxel, write the surface word = normal (bits 0-15) + static openness/AO (bits 16-23). GRADIENT mode
-// (_ComputeGradientNormals=1, walls thickened) computes the occupancy-gradient normal here, ONCE,
-// instead of every solve frame; MESH mode (=0) keeps the exact mesh normal the voxelizer already
-// wrote. Openness is computed in BOTH modes. Runs per voxel for the neighbour math.
+// voxel, write the surface word = normal (bits 0-15) + static openness/AO (bits 16-23) + flags and
+// the baked sun-ray origin (bits 24-30). The normal is the occupancy gradient, computed here ONCE
+// rather than every solve frame; the voxelizer's triangle normal is consulted only where that
+// gradient cancels. Runs per voxel for the neighbour math.
 // ----------------------------------------------------------
 [numthreads(64, 1, 1)]
 void CSBuildSurface(uint3 id : SV_DispatchThreadID)
@@ -1334,9 +1330,10 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
     int3 cell = (int3)BgiCoord(i);
     uint word = _Surface[slot];
 
-    // The occupancy gradient wherever it EXISTS, in both normal modes; the voxelizer's triangle normal
-    // is consulted only where the gradient cancels (the thin-cell branch below), because there it is
-    // the only record of orientation that exists.
+    // The occupancy gradient for ordinary (solid-backed) cells; the voxelizer's triangle normal for
+    // THIN ones, where the cell holds two faces and occupancy is symmetric by construction. This used
+    // to be selectable (a "_bakedNormals" toggle picking one source wholesale); the choice is made per
+    // voxel now, by which source can actually answer for that voxel.
     //
     // This word is read only by the SOLVER. The fragment takes its shading normal from vertex data
     // (geoN in VoxelLit) and never calls BgiSurfaceNormal at all; it touches _Surface solely for the
@@ -1353,41 +1350,49 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
     // cell - the value this file already documents as unreliable, observed flipping between bakes on a
     // curtain cell from (0.99,0,-0.13) to (0,1,0). Where the two disagree is exactly where the
     // reference is arbitrary, so the flip slaved a well-defined quantity to an ill-defined one. It
-    // also showed: with the flip the Normals debug view read wrong in mesh mode while the unflipped
-    // gradient read correctly in gradient mode - the same voxels, differing only by the flip.
+    // also showed: with the flip the Normals debug view read wrong where the triangle normal was
+    // stored and correctly where it was not - the same voxels, differing only by the flip.
     float3 n = OccupancyNormal(cell);
-    uint meshBits = word & 0xffffu; // 0 only when the voxelizer never wrote one (gradient mode)
-    if (dot(n, n) < 1e-6) {
-        // The gradient cancels exactly when the neighbourhood is SYMMETRIC: a sub-voxel wall with air
-        // on both sides (30.7% of Sponza's surface voxels at grid 32), or a fully enclosed interior.
-        //
-        // Here - and ONLY here - the voxelizer's MESH normal has to be used, because occupancy is
-        // mathematically silent about orientation for these cells: the geometry is symmetric, which is
-        // exactly why the gradient cancelled. The triangle normal is the only record of which side is
-        // out. An earlier revision picked a stable axis CONVENTION instead (first thin axis, positive
-        // direction) on the theory that either label would do; it does not. That is only true for
-        // naming the two radiance slots of a TWOSIDED voxel in Cube. In Single there is one slot, so a
-        // wall whose room side is negative got an inverted normal - N.L against the wrong hemisphere,
-        // the sun ray stepping to the far side's air, openness measuring the wrong way. It showed up
-        // as whole walls facing inwards in the Normals debug view.
-        //
-        // meshBits (above) is zero only when the voxelizer never wrote one - it binds _SurfaceWrite in
-        // mesh mode only. A written normal can never encode to zero: the octahedral pack maps -X to
-        // 0x8000, not 0. So this is a reliable "absent" test, not a value collision.
-        if (meshBits != 0u) {
-            n = BgiSurfaceNormal(word);
-        } else {
-            // Gradient mode: no triangle normal was ever stored, so orientation is unrecoverable. Fall
-            // back to a thin axis, which at least steps the sun ray into AIR (both sides are air by
-            // construction) rather than into solid the way the old (0,1,0) did on any non-floor.
-            bool thinX = BgiAirAt(cell + int3(1, 0, 0)) && BgiAirAt(cell - int3(1, 0, 0));
-            bool thinY = BgiAirAt(cell + int3(0, 1, 0)) && BgiAirAt(cell - int3(0, 1, 0));
-            bool thinZ = BgiAirAt(cell + int3(0, 0, 1)) && BgiAirAt(cell - int3(0, 0, 1));
-            n = thinX ? float3(1, 0, 0)
-              : thinY ? float3(0, 1, 0)
-              : thinZ ? float3(0, 0, 1)
-                      : float3(0, 1, 0); // fully enclosed: no face exists, and nothing ever reads it
-        }
+    // 0 only where the voxelizer never wrote a normal: a cell grown by BGI_THICKEN (it gets
+    // _MaterialWrite but no _SurfaceWrite) or one whose triangle had a degenerate normal.
+    // A written normal can never encode to zero - the octahedral pack maps -X to 0x8000, not 0 - so
+    // this is a reliable "absent" test, not a value collision.
+    uint meshBits = word & 0xffffu;
+
+    // THIN: air on BOTH sides along some axis, i.e. the cell has two faces to serve. Read from
+    // occupancy alone, deliberately:
+    //   * it must not depend on n, because it is about to DECIDE n (the TWOSIDED flag below is
+    //     derived from n, so gating on it would be circular - and it under-reports besides, testing
+    //     only the dominant axis: 5,693 thin cells against 4,015 flagged in Sponza at grid 32);
+    //   * strict per-axis, both sides air. NOT a back-hemisphere scan - that over-flags badly (for a
+    //     normal like (.7,.7,0) an ordinary wall cell with air below it gains a spurious second face)
+    //     and measured 5x too bright through a Sponza wall before it was reverted.
+    bool thinX = BgiAirAt(cell + int3(1, 0, 0)) && BgiAirAt(cell - int3(1, 0, 0));
+    bool thinY = BgiAirAt(cell + int3(0, 1, 0)) && BgiAirAt(cell - int3(0, 1, 0));
+    bool thinZ = BgiAirAt(cell + int3(0, 0, 1)) && BgiAirAt(cell - int3(0, 0, 1));
+    bool thin = thinX || thinY || thinZ;
+
+    if (thin && meshBits != 0u) {
+        // TWO-SIDED: the triangle normal is the ONLY record of which way this surface faces, so it
+        // wins here even when the gradient produced something. Occupancy cannot answer: the cell is
+        // symmetric along the thin axis by definition. Where the neighbourhood happens to be symmetric
+        // overall the gradient cancels anyway and there is nothing to override - but at a curtain's
+        // EDGE or CORNER it does not cancel, and what survives lies in the WALL PLANE rather than
+        // pointing out of the face. Measured on 2,451 of Sponza's 5,693 thin cells, mean 81.1 degrees
+        // off the triangle normal, 1,223 of them past 60. One baked normal feeds everything, so those
+        // cells had the sun-ray origin stepping sideways along the wall, N.L against a grazing
+        // hemisphere and openness measured across the surface instead of away from it - which is what
+        // made unthickened walls read dark in their corners.
+        n = BgiSurfaceNormal(word);
+    } else if (dot(n, n) < 1e-6) {
+        // Gradient cancelled and no triangle normal was stored (a BGI_THICKEN-grown cell, a degenerate
+        // triangle, or a fully enclosed interior), so orientation is unrecoverable. Fall back to a thin
+        // axis, which at least steps the sun ray into AIR (both sides are air by construction) rather
+        // than into solid the way the old constant (0,1,0) did on any non-floor.
+        n = thinX ? float3(1, 0, 0)
+          : thinY ? float3(0, 1, 0)
+          : thinZ ? float3(0, 0, 1)
+                  : float3(0, 1, 0); // fully enclosed: no face exists, and nothing ever reads it
     }
     half openness = BgiComputeOpenness(cell, n);
 
@@ -1398,8 +1403,8 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
     // condition that actually matters - whether there is a second side to serve at all. A cell with
     // solid behind it has no back face to light, however many triangles landed in it.
     // Out-of-grid counts as air, matching OccupancyNormal: a wall on the grid boundary is still thin.
-    // In gradient-normal mode the voxelizer thickens walls inward, so this correctly (almost) never
-    // fires there - the wall is no longer thin.
+    // With BGI_THICKEN on, the voxelizer grows walls inward, so this correctly (almost) never fires -
+    // the wall is no longer thin, and there is no second side left to serve.
     // Flags carried across from the voxelizer / the baked-light injection, MINUS the origin bits:
     // those are recomputed below from this pass's own normal and occupancy, so carrying a stale index
     // would pin the ray to a cell chosen by an earlier bake (or to (-1,-1,-1) from a zeroed word).
