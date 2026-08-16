@@ -23,8 +23,16 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
             #pragma target 4.5
             #pragma vertex vert
             #pragma fragment frag
-            // BGI_BAKED_NORMALS: bake a per-voxel oct normal instead of thickening the solid inward.
+            // BGI_BAKED_NORMALS: bake a per-voxel oct normal from the mesh (instead of leaving the
+            // runtime to derive one from the occupancy gradient).
             #pragma multi_compile _ BGI_BAKED_NORMALS
+            // BGI_THICKEN: grow each fragment's solid one voxel INWARD. INDEPENDENT of the normal
+            // source - the two used to be the same switch, which meant you could not have exact mesh
+            // normals AND a thickened (leak-blocking) solid. They answer different questions:
+            // BAKED_NORMALS is "where does this surface face", THICKEN is "how much of the grid does
+            // this surface occupy". Four combinations, all meaningful, and this shader runs at bake
+            // time only - the extra variants cost nothing at runtime.
+            #pragma multi_compile _ BGI_THICKEN
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Includes/BufferGiField.hlsl"
 
@@ -80,8 +88,10 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
 
                 #if defined(BGI_BAKED_NORMALS)
                     // Bake the surface normal per voxel; the runtime reads it instead of the occupancy
-                    // gradient, so walls need NOT be thickened (hollow 1-voxel shells keep correct
-                    // normals). Multiple triangles per voxel: last-write-wins (fine for flat surfaces).
+                    // gradient, so a hollow 1-voxel shell still keeps correct normals - thickening is
+                    // no longer REQUIRED for normals to work, though BGI_THICKEN may still be wanted
+                    // to stop light leaking through sub-voxel geometry (see below).
+                    // Multiple triangles per voxel: last-write-wins (fine for flat surfaces).
                     // Two-sidedness is NOT detected here. Comparing against the normal already in the
                     // cell would need a read-modify-write, and the two faces' fragments race for the
                     // same voxel - a masked store can interleave and mix two normals into a third,
@@ -90,13 +100,25 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                     // and tests the condition that actually matters rather than triangle bookkeeping.
                     if (dot(i.wn, i.wn) > 1e-6)
                         _SurfaceWrite[BgiSlot((uint3)c)] = BgiPackSurfaceNormal(normalize(i.wn));
-                #else
+                #endif
+
+                #if defined(BGI_THICKEN)
                     // Thicken one voxel INWARD (opposite the surface normal) so a wall is solid-backed
-                    // instead of a 1-voxel hollow shell. Without this, a surface voxel of a thick mesh
-                    // has air on BOTH the room side and the hollow interior, so the runtime occupancy-
-                    // gradient normal cancels to 0 (gray) instead of pointing into the room. Growing
-                    // INTO the geometry (never outward) can't close openings or move the visible face.
-                    // Caveat: a genuinely 1-voxel partition between two rooms grows 1 voxel into each.
+                    // instead of a 1-voxel hollow shell. Two independent reasons to want it:
+                    //   * GRADIENT normals need it. Without thickening, a surface voxel of a thick mesh
+                    //     has air on BOTH the room side and the hollow interior, so the occupancy-
+                    //     gradient normal cancels to 0 (gray) instead of pointing into the room. This is
+                    //     why it used to be bound to the normal source.
+                    //   * LEAK BLOCKING, in either normal mode. A sub-voxel occluder (curtain, banner,
+                    //     railing) occupies one cell with lit air on BOTH sides, and CSBlur's shell
+                    //     dilation then fills that cell's buckets from air on both sides at equal
+                    //     weight - so a surface on the dark side reads the lit side's light through it.
+                    //     Thickening makes the occluder opaque in the grid, and the dilation skips
+                    //     solid neighbours outright.
+                    // Growing INTO the geometry (never outward) can't close openings or move the
+                    // visible face. Caveat: a genuinely 1-voxel partition between two rooms grows 1
+                    // voxel into each, and ALL thin geometry gains bulk - measured +73% solid cells in
+                    // Sponza, which on foliage or railings can read as bloating.
                     if (dot(i.wn, i.wn) > 1e-6) {
                         int3 back = c - int3(round(normalize(i.wn)));
                         if (all(back >= 0) && all(back < (int)BGI_GRID))
