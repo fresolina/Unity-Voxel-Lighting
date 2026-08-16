@@ -26,6 +26,29 @@ float4 _SpotLightPositionRange[MAX_SPOT_LIGHTS];
 float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
 float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 
+// Analysis toggle: fade out ALL direct lighting (main + point + spot) at the fragment, leaving the
+// indirect term - and emission - to be viewed on their own. The point is A/B'ing the GI itself: with
+// direct in the frame, a change worth a few percent of indirect is buried under a term an order of
+// magnitude larger, and a leak through a thin wall is impossible to attribute to the bounce or the
+// sun. Applied to the summed direct term in VoxelLit, so it costs one multiply and NO extra shader
+// variant (unlike BGI_TAP_AXIS_SNAPPED, which needs a keyword because it is a whole second tap
+// implementation with its own register footprint - a scalar mute has no such cost).
+//
+// MUTE, not scale, so that the UNBOUND value is the safe one: an undeclared global reads 0 in HLSL,
+// and a "_DirectScale" would then multiply all direct lighting to BLACK in any project that never
+// publishes it. 0 = normal lighting, 1 = indirect only.
+//
+// The SOLVE is untouched - this is purely the fragment's own direct term. The GI still receives and
+// bounces the sun exactly as before, which is the whole point: what remains on screen is the bounce.
+// Auto-exposure is likewise unaffected, since it measures the GI field's air voxels (CSAverageLuminance)
+// and not the framebuffer - so an A/B pair taken with this on stays exposure-matched.
+float _VoxelDirectMute;
+
+// 1 = full direct lighting, 0 = fully muted. Clamped so an out-of-range publish cannot amplify.
+inline half VoxelDirectGain() {
+    return (half)saturate(1.0 - _VoxelDirectMute);
+}
+
 // Resolve the shadow term for a surface point: always the SDF raymarch. (The baked bitmask /
 // occlusion-field sources are buffer-GI-only now - selected per field by BgiSampleFaceAoShadow, not
 // here.) Under the buffer GI the main-light sun-shadow is resolved entirely by BgiSampleFaceAoShadow

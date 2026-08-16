@@ -84,6 +84,17 @@ namespace Lotec.Lighting {
         // count - raising the resolution or moving to surface storage is the only cure for it.
         public enum RadianceDirections { Single = 1, Cube = 6 }
 
+        /// <summary>
+        /// How the fragment filters its irradiance tap in SINGLE mode (no effect in Cube, which
+        /// already taps per axis). Both read the same one-value-per-voxel field - this is purely the
+        /// fetch, so switching costs no storage, no re-bake and no re-solve.
+        /// Fast: one hardware-trilinear tap at a continuous offset along the normal - the cheapest read
+        /// in the package, and the reason Single exists.
+        /// AxisSnapped: up to three taps, each snapped to the cell centre one step along its own axis
+        /// and weighted by n^2. See BgiSampleFieldTexture for what that buys.
+        /// </summary>
+        public enum SingleTapFilter { Fast = 0, AxisSnapped = 1 }
+
         public static BufferGiUpdater Instance { get; private set; }
 
         [Header("Solve")]
@@ -179,6 +190,31 @@ namespace Lotec.Lighting {
                  "instead of 1.\n " +
                  "Changing this reallocates and restarts the accumulation.")]
         [SerializeField] RadianceDirections _radianceDirections = RadianceDirections.Single;
+        [Tooltip("Single mode ONLY (Cube already taps per axis, and ignores this): how the fragment " +
+                 "FETCHES its irradiance. Same field, same storage - only the filter changes, so " +
+                 "switching is free and instant (no re-bake, no re-solve).\n " +
+                 "Fast: one trilinear tap at a continuous offset along the normal. The cheapest read in " +
+                 "the package. Where a surface sits mid-cell its footprint still catches the solid cell " +
+                 "behind - and on a wall thinner than a voxel that cell is shared with the far face, so " +
+                 "the two sides bleed into each other.\n " +
+                 "AxisSnapped: up to three taps, each snapped to the cell centre one step along its own " +
+                 "axis and weighted by n^2. The solid cell behind carries exactly zero weight, and the " +
+                 "hard-edged patches Fast can show across curved/carved detail go away. An axis-aligned " +
+                 "face still costs ONE tap (the other two weights are ~0 and are skipped); only swept " +
+                 "normals pay for 2-3.\n " +
+                 "Neither fixes the thin-wall bounce leak or the shared AO - those are baked before a " +
+                 "pixel is drawn and need Cube (or a two-voxel-thick wall).")]
+        [SerializeField] SingleTapFilter _singleTapFilter = SingleTapFilter.Fast;
+        [Tooltip("ANALYSIS: mute all direct lighting (sun + point + spot) in VoxelLit, leaving only " +
+                 "the indirect bounce (and emission) on screen. Direct light is normally an order of " +
+                 "magnitude brighter than the bounce, so it buries exactly the differences a GI A/B is " +
+                 "trying to measure - and makes a leak through a thin wall impossible to attribute to " +
+                 "the bounce rather than the sun.\n " +
+                 "The SOLVE is untouched: the GI still receives and bounces the sun, so what remains is " +
+                 "the bounce itself. Auto-exposure is unaffected too (it measures the GI field, not the " +
+                 "framebuffer), so an A/B pair stays exposure-matched with this on.\n " +
+                 "Costs one multiply in the lit shader and no extra variant. Leave off for normal rendering.")]
+        [SerializeField] bool _muteDirectLighting;
 
         [Header("Lighting")]
         [Tooltip("Display transform (exposure + tonemap operator), with optional auto-exposure. " +
@@ -275,6 +311,10 @@ namespace Lotec.Lighting {
         // RadianceSlots each frame (SyncRadianceDirections) to catch an inspector/script mode change.
         int _allocatedRadianceSlots;
         int _allocatedIrradianceSlots;
+        // Tap filter the BGI_TAP_AXIS_SNAPPED keyword currently reflects. Nullable so the FIRST sync
+        // always publishes: global keywords survive play-mode exits and domain reloads, so "the field
+        // says Fast" is not evidence that the keyword is off.
+        SingleTapFilter? _appliedTapFilter;
         int _initFineKernel = -1;
         int _averageLuminanceKernel = -1;
         int _buildOccupancyKernel = -1;
@@ -427,6 +467,22 @@ namespace Lotec.Lighting {
         //
         // Hence Cube is "6 directions" on the irradiance but only 2 slots of radiance.
 
+        /// <summary>ANALYSIS: mute all direct lighting in the lit shader, leaving only the indirect
+        /// bounce. Pure fragment state - the solve is untouched and auto-exposure does not move, so it
+        /// can be toggled mid-A/B without disturbing either.</summary>
+        public bool MuteDirectLighting {
+            get => _muteDirectLighting;
+            set => _muteDirectLighting = value;
+        }
+
+        /// <summary>Single-mode irradiance tap filter. Pure fragment read state - no reallocation and
+        /// no restart, so this is the one GI setting that can be A/B'd mid-frame without disturbing the
+        /// solve (which is exactly what makes it measurable against the Fast baseline).</summary>
+        public SingleTapFilter TapFilter {
+            get => _singleTapFilter;
+            set => _singleTapFilter = value;
+        }
+
         /// <summary>Outgoing-radiance slots per voxel (1 or 2) - the stride of _Radiance.</summary>
         public int RadianceSlots => _radianceDirections == RadianceDirections.Single ? 1 : 2;
 
@@ -509,6 +565,9 @@ namespace Lotec.Lighting {
         static readonly int s_ambientFloor = Shader.PropertyToID("_AmbientFloor");
         static readonly int s_intensity = Shader.PropertyToID("_BgiIntensity");
         static readonly int s_aoStrength = Shader.PropertyToID("_BgiAoStrength");
+        // Not a _Bgi* name: it lives in VoxelDirectLighting.hlsl and mutes the DIRECT term, which is
+        // present in every GI variant - it is not part of the buffer-GI read the _Bgi prefix marks.
+        static readonly int s_directMute = Shader.PropertyToID("_VoxelDirectMute");
         static readonly int s_shadowModeFine = Shader.PropertyToID("_BgiShadowModeFine");
         static readonly int s_shadowModeCoarse = Shader.PropertyToID("_BgiShadowModeCoarse");
         static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
@@ -590,6 +649,29 @@ namespace Lotec.Lighting {
         void SetGiBufferKeyword(bool on) {
             if (on) LightingKeywords.ClaimGi(this, LightingKeywords.GiBuffer);
             else LightingKeywords.ReleaseGi(this);
+            // Drop the tap keyword with the GI group so a disabled updater doesn't leave a variant of a
+            // shader it no longer drives resident. Re-published by SyncTapFilterKeyword next SetGlobals.
+            if (!on) SetTapKeyword(SingleTapFilter.Fast);
+        }
+
+        // BGI_TAP_AXIS_SNAPPED, change-only. Called every frame from SetGlobals, so it must not hit
+        // Shader.EnableKeyword/DisableKeyword unless something actually moved - a keyword change
+        // invalidates material/variant state engine-side and is not something to do 60 times a second.
+        //
+        // Gated on Single: the keyword only guards code inside `if (idirs == 1u)`, so publishing it in
+        // Cube would swap the whole VoxelLit variant set for a branch nothing reaches.
+        void SyncTapFilterKeyword() {
+            // Gate on the ALLOCATED stride, not the property: that is the value published as
+            // _BgiIrradianceDirs this same frame, so the keyword can never disagree with the branch the
+            // fragment actually takes during the frame a mode switch lands.
+            SetTapKeyword(_allocatedIrradianceSlots == 1 ? _singleTapFilter : SingleTapFilter.Fast);
+        }
+
+        void SetTapKeyword(SingleTapFilter filter) {
+            if (_appliedTapFilter == filter) return;
+            _appliedTapFilter = filter;
+            LightingKeywords.BgiTap.Set(
+                filter == SingleTapFilter.AxisSnapped ? LightingKeywords.BgiTapAxisSnapped : null);
         }
 
         void OnValidate() {
@@ -826,6 +908,10 @@ namespace Lotec.Lighting {
             Light sun = RenderSettings.sun;
             Shader.SetGlobalFloat(s_intensity, sun != null ? sun.bounceIntensity : 1f);
             Shader.SetGlobalFloat(s_aoStrength, _aoStrength);
+            // Analysis mute for the lit shader's direct term (see _muteDirectLighting). Published every
+            // frame like the other read parameters - it is one float and takes effect immediately, with
+            // no solve restart, which is what lets it be flipped in the middle of an A/B.
+            Shader.SetGlobalFloat(s_directMute, _muteDirectLighting ? 1f : 0f);
             // Sun-shadow, per field. Baked taps the sun visibility CSBlur mirrored into the irradiance
             // texture's alpha; Sdf marches the hi-res SDF per pixel (the _SdfHires global the active
             // volume already publishes - see VoxelVolume.ApplyShaderGlobals).
@@ -834,6 +920,11 @@ namespace Lotec.Lighting {
             // multiply the VoxelLit variant set (already GI_* x 4 tonemaps) for one scalar. The
             // RADIANCE stride is compute-side only, so it is not published here.
             Shader.SetGlobalInt(s_bgiIrradianceDirs, _allocatedIrradianceSlots);
+            // Single-mode tap filter. A KEYWORD unlike the stride above, and for the opposite reason:
+            // the stride is one scalar every path reads anyway, while this selects between two whole
+            // tap implementations whose register footprints differ - the Fast variant must not be
+            // compiled alongside the other. Change-only (see SyncTapFilterKeyword).
+            SyncTapFilterKeyword();
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
             // Fragment-side knobs for the Baked mode (BgiSampleShadowTexture). Both are pure read

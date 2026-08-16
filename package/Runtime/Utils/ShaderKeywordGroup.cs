@@ -55,6 +55,15 @@ namespace Lotec.Lighting {
         public const string TonemapAgx = "TONEMAP_AGX";
         public const string TonemapAces = "TONEMAP_ACES";
 
+        /// <summary>Single-mode irradiance tap filter (VoxelLit: multi_compile_fragment __
+        /// BGI_TAP_AXIS_SNAPPED), driven by <see cref="BufferGiUpdater.SingleTapFilter"/>. Bare default
+        /// (null) = the Fast one-tap read; the keyword selects the axis-snapped n^2-weighted taps. A
+        /// keyword rather than a uniform for the same register-allocation reason as
+        /// <see cref="Tonemap"/> - the Fast variant is the package's cheapest read and must not carry
+        /// the other path's registers. Fragment-only, so it doubles fragment variants but not vertex.</summary>
+        public static readonly ShaderKeywordGroup BgiTap = new ShaderKeywordGroup(null, "BGI_TAP_AXIS_SNAPPED");
+        public const string BgiTapAxisSnapped = "BGI_TAP_AXIS_SNAPPED";
+
         static object s_giOwner;
         static string s_giKeyword = GiOff;
 
