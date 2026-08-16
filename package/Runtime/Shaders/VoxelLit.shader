@@ -74,6 +74,13 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // while the CHEAP operator ran - Reinhard alone in the kernel costs 0.3ms, all three 1.3ms.
             // TONEMAP_OFF (the default) compiles the whole block out: linear HDR for a post stack.
             #pragma multi_compile TONEMAP_OFF TONEMAP_REINHARD TONEMAP_AGX TONEMAP_ACES
+            // SINGLE-mode irradiance tap filter (BufferGiUpdater.SingleTapFilter). Bare default = the
+            // Fast one-tap read, compiled byte for byte as before; the keyword selects the axis-snapped
+            // n^2-weighted taps (see BgiSampleFieldTexture). Compile-time for the same reason as
+            // TONEMAP_* - a fragment kernel is sized for every path it contains, and the Fast variant's
+            // whole purpose is to be the cheapest read available, so it must not pay the other's
+            // register pressure. _fragment: the tap is fragment-only, so the vertex variants don't double.
+            #pragma multi_compile_fragment __ BGI_TAP_AXIS_SNAPPED
 
             // Colours and factors are declared `half` (matching URP's own UnityPerMaterial layout in
             // LitInput.hlsl) so the constants arrive in fp16 registers and the shading chain never
@@ -198,6 +205,12 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 #endif
                 lit += GetPointLightDirect(IN.positionWS, N, geoN, albedo);
                 lit += GetSpotLightDirect(IN.positionWS, N, geoN, albedo);
+
+                // `lit` is exactly the summed DIRECT term at this point - indirect and emission are
+                // added below - so the analysis mute applies here and nowhere else. One multiply,
+                // no branch, no variant; unbound it reads 0 and this is the identity. See
+                // _VoxelDirectMute in VoxelDirectLighting.hlsl for why it is a mute and not a scale.
+                lit *= VoxelDirectGain();
 
                 #if defined(GI_VOXEL_BUFFER)
                     // Indirect lit (buffer GI) modulated by the buffer's OWN baked AO (bgiAo, resolved
