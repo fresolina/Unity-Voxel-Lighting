@@ -23,15 +23,10 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
             #pragma target 4.5
             #pragma vertex vert
             #pragma fragment frag
-            // BGI_BAKED_NORMALS: bake a per-voxel oct normal from the mesh (instead of leaving the
-            // runtime to derive one from the occupancy gradient).
-            #pragma multi_compile _ BGI_BAKED_NORMALS
-            // BGI_THICKEN: grow each fragment's solid one voxel INWARD. INDEPENDENT of the normal
-            // source - the two used to be the same switch, which meant you could not have exact mesh
-            // normals AND a thickened (leak-blocking) solid. They answer different questions:
-            // BAKED_NORMALS is "where does this surface face", THICKEN is "how much of the grid does
-            // this surface occupy". Four combinations, all meaningful, and this shader runs at bake
-            // time only - the extra variants cost nothing at runtime.
+            // BGI_THICKEN: grow each fragment's solid one voxel INWARD - "how much of the grid does
+            // this surface occupy", purely a leak control. The per-voxel mesh normal is no longer
+            // switchable: it is always written, because CSBuildSurface needs it for the sub-voxel
+            // cells where the occupancy gradient cancels and can supply nothing.
             #pragma multi_compile _ BGI_THICKEN
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Includes/BufferGiField.hlsl"
@@ -39,9 +34,7 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
             // Bound via CommandBuffer.SetRandomWriteTarget(1, ...). u1 = first free UAV slot after
             // the one color render target (u0).
             RWStructuredBuffer<uint> _MaterialWrite : register(u1);
-            #if defined(BGI_BAKED_NORMALS)
             RWStructuredBuffer<uint> _SurfaceWrite : register(u2); // per-voxel surface word (normal in low bits)
-            #endif
 
             TEXTURE2D(_VoxBaseMap); SAMPLER(sampler_VoxBaseMap); // material base map (white if none)
 
@@ -86,11 +79,11 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                     uint packed = BgiPackMaterial(albedo, _VoxEmission8);
                     _MaterialWrite[BgiSlot((uint3)c)] = packed;
 
-                #if defined(BGI_BAKED_NORMALS)
-                    // Bake the surface normal per voxel; the runtime reads it instead of the occupancy
-                    // gradient, so a hollow 1-voxel shell still keeps correct normals - thickening is
-                    // no longer REQUIRED for normals to work, though BGI_THICKEN may still be wanted
-                    // to stop light leaking through sub-voxel geometry (see below).
+                    // Bake the triangle normal per voxel. CSBuildSurface PREFERS the occupancy gradient
+                    // and reads this only where the gradient cancels - a sub-voxel wall with air on
+                    // both sides, where occupancy is mathematically silent about orientation and the
+                    // triangle is the sole record of which side is out. Cheap enough (one UAV store)
+                    // that writing it always beats deciding per bake whether those cells matter.
                     // Multiple triangles per voxel: last-write-wins (fine for flat surfaces).
                     // Two-sidedness is NOT detected here. Comparing against the normal already in the
                     // cell would need a read-modify-write, and the two faces' fragments race for the
@@ -100,21 +93,19 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                     // and tests the condition that actually matters rather than triangle bookkeeping.
                     if (dot(i.wn, i.wn) > 1e-6)
                         _SurfaceWrite[BgiSlot((uint3)c)] = BgiPackSurfaceNormal(normalize(i.wn));
-                #endif
 
                 #if defined(BGI_THICKEN)
                     // Thicken one voxel INWARD (opposite the surface normal) so a wall is solid-backed
-                    // instead of a 1-voxel hollow shell. Two independent reasons to want it:
-                    //   * GRADIENT normals need it. Without thickening, a surface voxel of a thick mesh
-                    //     has air on BOTH the room side and the hollow interior, so the occupancy-
-                    //     gradient normal cancels to 0 (gray) instead of pointing into the room. This is
-                    //     why it used to be bound to the normal source.
-                    //   * LEAK BLOCKING, in either normal mode. A sub-voxel occluder (curtain, banner,
-                    //     railing) occupies one cell with lit air on BOTH sides, and CSBlur's shell
-                    //     dilation then fills that cell's buckets from air on both sides at equal
-                    //     weight - so a surface on the dark side reads the lit side's light through it.
-                    //     Thickening makes the occluder opaque in the grid, and the dilation skips
-                    //     solid neighbours outright.
+                    // instead of a 1-voxel hollow shell. LEAK BLOCKING is the reason: a sub-voxel
+                    // occluder (curtain, banner, railing) occupies one cell with lit air on BOTH sides,
+                    // and CSBlur's shell dilation then fills that cell's buckets from air on both sides
+                    // at equal weight - so a surface on the dark side reads the lit side's light
+                    // through it. Thickening makes the occluder opaque in the grid, and the dilation
+                    // skips solid neighbours outright.
+                    // Side effect worth knowing: a thickened wall is no longer THIN, so CSBuildSurface's
+                    // two-sided detection stops firing on it and Cube's back-face radiance retires.
+                    // The grown cell gets _MaterialWrite but no _SurfaceWrite, so its normal comes from
+                    // the gradient (or, if that cancels, CSBuildSurface's thin-axis convention).
                     // Growing INTO the geometry (never outward) can't close openings or move the
                     // visible face. Caveat: a genuinely 1-voxel partition between two rooms grows 1
                     // voxel into each, and ALL thin geometry gains bulk - measured +73% solid cells in
