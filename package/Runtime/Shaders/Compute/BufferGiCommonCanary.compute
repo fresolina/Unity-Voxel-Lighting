@@ -17,11 +17,18 @@
 // Cost: one near-empty kernel. Keep it that way - it is a linker test, not a place for logic.
 #pragma kernel CSCommonCanary
 
+// EVERY header in Includes/, so the guarantee covers the whole library rather than a chosen subset.
+// Adding a header there means adding it here.
 #include "../Includes/BufferGiField.hlsl"
 #include "../Includes/Math.hlsl"
 #include "../Includes/BufferGiVoxelData.hlsl"
 #include "../Includes/Volume.hlsl"
+#include "../Includes/Raymarch.hlsl"
+#include "../Includes/Tonemap.hlsl"
 #include "../Includes/VoxelOcclusion.hlsl"
+#include "../Includes/VoxelSdfShadows.hlsl"
+#include "../Includes/VoxelDirectLighting.hlsl"
+#include "../Includes/BufferGi.hlsl"
 
 // One tiny sink so the includes cannot be dead-stripped before they are compiled. Reads one element
 // of each shared buffer and one helper from each header, then writes a value the driver cannot fold

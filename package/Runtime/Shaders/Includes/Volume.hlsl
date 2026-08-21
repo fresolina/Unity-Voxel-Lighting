@@ -1,9 +1,15 @@
 #ifndef LOTEC_VOLUME_INCLUDED
 #define LOTEC_VOLUME_INCLUDED
 
-// LAYER: COMMON - may be included from ANY stage, which is what the note below always intended:
-// this is the volume mapping every feature and both stages share. Plain uniforms and arithmetic,
-// no textures and no URP headers. Guarded by BufferGiCommonCanary.compute.
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Compute/BufferGiCommonCanary.compute, which includes every header here and fails the
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
 
 // Universal volume space: the active volume's world-space AABB and the world->[0,1] UVW
 // mapping that every feature (shadows, occlusion, GI) and both stages (fragment + compute)

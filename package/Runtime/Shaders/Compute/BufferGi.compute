@@ -336,17 +336,6 @@ half3 SanitizeColor(float3 c)
     return (c < 1e8) ? (half3)clamp(c, 0.0, 60000.0) : half3(0.0h, 0.0h, 0.0h);
 }
 
-// Must stay identical to the fragment's GetLocalLightRangeAttenuation (VoxelDirectLighting.hlsl):
-// URP's window, saturate(1 - (d^2/r^2)^2)^2, so a light's bounce matches the direct lighting it casts.
-// Same precision split as the fragment copy: fp32 divides (squared world distances), fp16 window.
-half GetLocalLightRangeAttenuation(float distSq, float rangeSq)
-{
-    half distanceAtten = (half)rcp(max(distSq, 0.01));
-    half factor = (half)(distSq / max(rangeSq, 1e-6));
-    half rangeFade = saturate(1.0h - factor * factor);
-    return distanceAtten * rangeFade * rangeFade;
-}
-
 // Direct lighting at a surface voxel, with DDA shadow rays and an N.L cosine term. `sunVis` returns
 // the main directional light's raw visibility (1 lit, 0 shadowed) so the fragment can read a cheap
 // baked voxel sun-shadow straight from the radiance field's spare w channel (see BgiSampleFaceAoShadow).
@@ -423,7 +412,7 @@ float3 GetDirectLight(int3 cell, float3 normal, int3 shadowStep, uint radSlot, o
         if (ndl <= 0.0h) continue;
         float worldDist = distSq * invD; // = sqrt(distSq), distance to the light
         half vis = MarchOccupancy(shadowStart, L, worldDist, hit) ? 0.0h : 1.0h;
-        total += _PointLightColor[p].rgb * (float)(ndl * vis * GetLocalLightRangeAttenuation(distSq, rangeSq));
+        total += _PointLightColor[p].rgb * (float)(ndl * vis * GetLightRangeAttenuation(distSq, rangeSq));
     }
 
     // Spot lights
@@ -446,7 +435,7 @@ float3 GetDirectLight(int3 cell, float3 normal, int3 shadowStep, uint radSlot, o
         if (cone <= 0.0h) continue;
         float worldDist = distSq * invD; // = sqrt(distSq), distance to the light
         half vis = MarchOccupancy(shadowStart, L, worldDist, hit) ? 0.0h : 1.0h;
-        total += colAngleOffset.rgb * (float)(ndl * vis * (cone * cone) * GetLocalLightRangeAttenuation(distSq, rangeSq));
+        total += colAngleOffset.rgb * (float)(ndl * vis * (cone * cone) * GetLightRangeAttenuation(distSq, rangeSq));
     }
 
     return total;

@@ -1,11 +1,15 @@
 #ifndef LOTEC_BUFFER_GI_INCLUDED
 #define LOTEC_BUFFER_GI_INCLUDED
 
-// LAYER: FRAGMENT-SIDE - only the lit shader path uses it. Engine-free as it stands (its own code
-// always was, and VoxelOcclusion.hlsl dropped the Core.hlsl texture macros), so it would compile in
-// a compute shader - but that is not promised: it pulls VoxelSdfShadows.hlsl, which is free to take
-// a URP dependency. The compute side reads the same fields via BufferGiVoxelData.hlsl and does not
-// need this header; if that ever changes, promote this chain to COMMON and add it to the canary.
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Compute/BufferGiCommonCanary.compute, which includes every header here and fails the
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
 
 // Fragment-side read for the buffer GI. Normal-oriented per field: pick the face the surface looks
 // through (dominant normal axis) and read the air layer ONE voxel in FRONT of the surface - leak-free

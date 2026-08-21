@@ -1,8 +1,15 @@
 #ifndef LOTEC_BUFFER_GI_VOXEL_DATA_INCLUDED
 #define LOTEC_BUFFER_GI_VOXEL_DATA_INCLUDED
 
-// LAYER: COMMON (resources) - included by both compute shaders. Guarded by
-// BufferGiCommonCanary.compute. See the contract note below.
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Compute/BufferGiCommonCanary.compute, which includes every header here and fails the
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
 
 // LAYER 1 (Resources): the STATIC voxel fields, shared by both compute stages.
 // Depends only on BufferGiField.hlsl - no URP headers, no vertex/fragment semantics.

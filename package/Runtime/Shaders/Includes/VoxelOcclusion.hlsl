@@ -1,11 +1,15 @@
 #ifndef LOTEC_VOXEL_OCCLUSION_INCLUDED
 #define LOTEC_VOXEL_OCCLUSION_INCLUDED
 
-// LAYER: COMMON - may be included from ANY stage. Declares its textures as plain HLSL
-// (Texture3D<float4> / SamplerState) rather than the URP Core.hlsl TEXTURE3D / SAMPLER macros,
-// which on every platform Core ships today expand to exactly that and nothing more. It already
-// sampled with raw .Load / .SampleLevel, so the macros were buying it nothing.
-// Guarded by BufferGiCommonCanary.compute; its own includes (Volume.hlsl, Math.hlsl) are COMMON too.
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Compute/BufferGiCommonCanary.compute, which includes every header here and fails the
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
 
 // Baked directional occlusion shadow sources, read by the buffer-GI per-field shadow modes
 // (BgiSampleFaceAoShadow):

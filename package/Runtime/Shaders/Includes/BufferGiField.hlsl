@@ -1,10 +1,15 @@
 #ifndef LOTEC_BUFFER_GI_FIELD_INCLUDED
 #define LOTEC_BUFFER_GI_FIELD_INCLUDED
 
-// LAYER: COMMON - may be included from ANY stage (fragment, compute, the voxelize raster).
-// Depends on HLSL intrinsics only: no URP headers, no vertex/fragment semantics, no texture
-// macros. That is a guarantee, not an observation - BufferGiCommonCanary.compute includes this
-// file and will fail to compile the moment it acquires an engine dependency.
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Compute/BufferGiCommonCanary.compute, which includes every header here and fails the
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
 
 // Shared layout for the buffer-based GI (the textureless voxel GI). One cubic grid per cascade,
 // sized at runtime from VoxelVolume._maxResolution (snapped to a power of two - see BufferGiUpdater).

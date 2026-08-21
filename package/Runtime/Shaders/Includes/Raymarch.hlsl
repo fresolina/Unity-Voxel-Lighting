@@ -1,9 +1,15 @@
 #ifndef LOTEC_RAYMARCH_INCLUDED
 #define LOTEC_RAYMARCH_INCLUDED
 
-// LAYER: FRAGMENT-SIDE - only the lit shader path uses it. Engine-free as it stands, so it would
-// compile in a compute shader, but nothing guarantees that: it is free to take a URP dependency.
-// Anything compute must be able to include belongs in the COMMON set instead (see BufferGiField.hlsl).
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Compute/BufferGiCommonCanary.compute, which includes every header here and fails the
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
 
 #include "Math.hlsl"
 
