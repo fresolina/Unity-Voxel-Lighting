@@ -2,16 +2,14 @@ using System;
 using System.IO;
 using UnityEditor;
 using UnityEditor.AddressableAssets;
-using UnityEditor.AddressableAssets.Build;
 using UnityEditor.AddressableAssets.Settings;
 using UnityEditor.Build;
-using UnityEditor.Build.Reporting;
 using UnityEngine;
 
 namespace Lotec.Demo.Editor {
     /// <summary>
-    /// Packs the remote Addressables content as part of every player build, and points its load path
-    /// at the folder this particular build will be published to.
+    /// Points the remote Addressables content at the folder THIS build will be published to, so the
+    /// content packed for a build always matches the code in it.
     ///
     /// Why this exists: the demo ships exactly ONE scene in Build Settings (Bootstrap). Playground and
     /// Sponza are Addressable groups on the Remote path, fetched at runtime - so the levels are not in
@@ -19,25 +17,37 @@ namespace Lotec.Demo.Editor {
     /// /WebGL/ folder, which let code and content drift apart silently: a player expecting
     /// BufferGiBakeAsset v4 kept loading a bundle that still held v2, the disk bake was rejected, the
     /// runtime voxelization fallback rasterized nothing (it filters on the editor-only isStatic), and
-    /// every level rendered black with no error. Building content HERE makes that split impossible -
-    /// a player build always carries content packed from the same commit.
+    /// every level rendered black with no error at all.
     ///
     /// The load path is per-build (publish_path/ServerData/[BuildTarget]) rather than shared, so
-    /// previews and releases no longer overwrite each other's levels and an old release keeps loading
+    /// previews and releases no longer overwrite each other's levels, and an old release keeps loading
     /// the content it was actually built against.
+    ///
+    /// <b>This is a <see cref="BuildPlayerProcessor"/>, not an IPreprocessBuildWithReport, and it does
+    /// NOT build the content itself.</b> Both points are load-bearing:
+    /// <list type="bullet">
+    /// <item>IPreprocessBuildWithReport runs INSIDE the player build, where the asset bundle pipeline
+    /// is already locked - calling BuildPlayerContent there throws "Cannot build asset bundles while a
+    /// build is in progress". BuildPlayerProcessor.PrepareForBuild runs before the build starts.</item>
+    /// <item>Addressables' own AddressablesPlayerBuildProcessor (callbackOrder 1) does the content
+    /// build, and also copies link.xml and registers streaming asset paths. Re-implementing that would
+    /// mean re-implementing those too, so this only has to run FIRST (callbackOrder 0) and leave the
+    /// right load path and build-with-player setting behind for it.</item>
+    /// </list>
     /// </summary>
-    class RemoteContentBuild : IPreprocessBuildWithReport {
+    public class RemoteContentBuild : BuildPlayerProcessor {
         /// <summary>Remote.LoadPath for this build. CI writes it next to the project (see the
         /// webgl-pages workflow); the env var is the same value for a one-off local build. Absent
-        /// locally, where the profile's own value is left untouched.</summary>
+        /// locally, where the profile's own value and the developer's own preference are left
+        /// untouched.</summary>
         const string LoadPathFileName = "remote-load-path.txt";
         const string LoadPathEnvVar = "VOXEL_REMOTE_LOAD_PATH";
         const string RemoteLoadPathVariable = "Remote.LoadPath";
 
-        // After BufferGiBakeAssetValidator (0): no point packing content for a project it rejects.
-        public int callbackOrder => 100;
+        // Before AddressablesPlayerBuildProcessor (1), which reads both values set below.
+        public override int callbackOrder => 0;
 
-        public void OnPreprocessBuild(BuildReport report) {
+        public override void PrepareForBuild(BuildPlayerContext buildPlayerContext) {
             AddressableAssetSettings settings = AddressableAssetSettingsDefaultObject.Settings;
             if (settings == null) {
                 throw new BuildFailedException(
@@ -46,24 +56,27 @@ namespace Lotec.Demo.Editor {
             }
 
             string loadPath = ResolveLoadPath();
-            if (!string.IsNullOrEmpty(loadPath)) {
-                settings.profileSettings.SetValue(settings.activeProfileId, RemoteLoadPathVariable, loadPath);
-                EditorUtility.SetDirty(settings);
-                AssetDatabase.SaveAssets();
-                Debug.Log($"[RemoteContentBuild] {RemoteLoadPathVariable} = {loadPath}");
-            } else {
-                Debug.Log($"[RemoteContentBuild] no {LoadPathFileName}/{LoadPathEnvVar}; " +
-                          "using the profile's own Remote.LoadPath.");
+            if (string.IsNullOrEmpty(loadPath)) {
+                Debug.Log($"[RemoteContentBuild] no {LoadPathFileName}/{LoadPathEnvVar}; leaving " +
+                          "Remote.LoadPath and the build-with-player setting as authored.");
+                return;
             }
 
-            // Content is packed right here, so make sure nothing packs it a second time.
-            settings.BuildAddressablesWithPlayerBuild = AddressableAssetSettings.PlayerBuildOption.DoNotBuildWithPlayer;
+            settings.profileSettings.SetValue(settings.activeProfileId, RemoteLoadPathVariable, loadPath);
+            // A CI build must always carry freshly packed content - never a developer's local
+            // preference, and never a stale upload.
+            settings.BuildAddressablesWithPlayerBuild = AddressableAssetSettings.PlayerBuildOption.BuildWithPlayer;
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssets();
 
-            AddressableAssetSettings.BuildPlayerContent(out AddressablesPlayerBuildResult result);
-            if (!string.IsNullOrEmpty(result.Error))
-                throw new BuildFailedException("Addressables content build failed: " + result.Error);
-
-            Debug.Log("[RemoteContentBuild] packed remote content for this build.");
+            // Addressables resolves the relative Remote.BuildPath against the CURRENT DIRECTORY, which
+            // is the project folder in the editor but can differ under a batchmode builder - so the
+            // publish step cannot assume one fixed location. Logged so the build log settles it.
+            Debug.Log($"[RemoteContentBuild] {RemoteLoadPathVariable} = {loadPath}" +
+                      " | cwd=" + Directory.GetCurrentDirectory() +
+                      " | dataPath=" + Application.dataPath +
+                      " | Remote.BuildPath=" + settings.profileSettings.GetValueByName(
+                          settings.activeProfileId, "Remote.BuildPath"));
         }
 
         /// <summary>The CI-provided Remote.LoadPath, or null to leave the profile alone. The file wins

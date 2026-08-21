@@ -53,12 +53,32 @@ fi
 # fetched at runtime (Build Settings ships Bootstrap alone). Publish the content this build was packed
 # against right next to the build, so a preview and a release never share - and so never silently
 # overwrite - each other's levels. RemoteContentBuild pointed the player's Remote.LoadPath here.
-REMOTE_CONTENT_PATH="$PROJECT_PATH/ServerData/WebGL"
-if [ ! -d "$REMOTE_CONTENT_PATH" ]; then
-    echo "No packed remote content at '$REMOTE_CONTENT_PATH'." >&2
-    echo "The player would load no levels at all, so refuse to publish it." >&2
-    exit 1
-fi
+# Addressables resolves the relative Remote.BuildPath ("ServerData/[BuildTarget]") against the
+# CURRENT DIRECTORY, which is the project folder in the editor but the repository root under game-ci,
+# where Unity is launched from the workspace. Check both rather than pin one.
+resolve_remote_content_path() {
+    local candidate
+
+    for candidate in \
+        "${REMOTE_CONTENT_PATH:-}" \
+        "$PROJECT_PATH/ServerData/WebGL" \
+        "ServerData/WebGL"
+    do
+        if [ -n "$candidate" ] && [ -d "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    echo "No packed remote content found." >&2
+    echo "Checked: '$PROJECT_PATH/ServerData/WebGL' and 'ServerData/WebGL'." >&2
+    echo "Every level is an Addressable on the Remote path, so the player would load nothing at" >&2
+    echo "all - refusing to publish it. ServerData directories present in the tree:" >&2
+    find . -maxdepth 4 -type d -name 'ServerData' -not -path './.git/*' >&2 || true
+    return 1
+}
+
+REMOTE_CONTENT_PATH="$(resolve_remote_content_path)"
 mkdir -p "$SITE_PATH/$PUBLISH_PATH/ServerData/WebGL"
 rsync -a --delete "$REMOTE_CONTENT_PATH/" "$SITE_PATH/$PUBLISH_PATH/ServerData/WebGL/"
 
