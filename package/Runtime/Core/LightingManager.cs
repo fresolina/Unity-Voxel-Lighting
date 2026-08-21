@@ -55,7 +55,7 @@ namespace Lotec.Lighting {
             if (_autoSwitchToClosestVolume)
                 SwitchToClosestVolume();
             else if (_volume == null)
-                AdoptAnyRegisteredVolume();
+                AdoptFallbackVolume();
             if (Application.isPlaying || _updateInEditor)
                 PublishActiveVolume();
         }
@@ -74,11 +74,22 @@ namespace Lotec.Lighting {
         // the active volume (BufferGiFields.Find searches that volume's scene). No volume means no
         // fields, so HasCoarse is false and the level-wide GI is never set up at all.
         //
-        // Which volume hardly matters here: Find returns the first BufferGiFields in the volume's
-        // SCENE, so every volume in one level resolves the same fields and therefore the same
-        // coarse field. Auto-switching only decides which FINE volume wins; this just makes sure a
-        // level that never switches still has one.
-        void AdoptAnyRegisteredVolume() {
+        // The level's BufferGiFields ("Level Settings") decides, because it is the only thing that
+        // knows which fields exist and which of them are actually baked - so a level that never
+        // switches loads its bake instead of silently voxelizing at runtime. Note the COARSE field
+        // is never a candidate: it is a bare MeshBounds with no VoxelVolume, so it never registers
+        // and cannot be "active". It does not need to be - it is reached THROUGH whichever volume is
+        // active, since that volume's scene is how the updater finds the provider at all.
+        //
+        // Falls back to the volume registry when a level has no provider (fine-only, runtime
+        // voxelized), which is the case this manager was already written for.
+        void AdoptFallbackVolume() {
+            BufferGiFields fields = BufferGiFields.FindAny();
+            VoxelVolume preferred = fields != null ? fields.FallbackVolume : null;
+            if (preferred != null) {
+                SetActiveVolume(preferred);
+                return;
+            }
             var all = VoxelVolume.All;
             for (int i = 0; i < all.Count; i++) {
                 if (all[i] == null) continue;

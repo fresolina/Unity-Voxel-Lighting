@@ -39,5 +39,13 @@ namespace Lotec.Lighting {
         // retuned without a re-bake); freezing them into `material` would rule both out.
         [HideInInspector] public uint[] material; // one field slice, VoxelCount words
         [HideInInspector] public uint[] surface;  // one field slice, VoxelCount words
+
+        /// <summary>True when this bake was rasterized against exactly this grid mapping. Bounds must
+        /// match within a millimetre - the stored voxels are only valid for the mapping they were baked
+        /// against, so a moved or rescaled volume invalidates them. This is the ONE definition of that
+        /// test; BufferGiUpdater's load/diagnostics and BufferGiFields' fallback pick both call it,
+        /// rather than each carrying a private epsilon that can drift apart.</summary>
+        public bool MatchesBounds(Vector3 gridOrigin, Vector3 gridSize) =>
+            (origin - gridOrigin).sqrMagnitude < 1e-6f && (size - gridSize).sqrMagnitude < 1e-6f;
     }
 }

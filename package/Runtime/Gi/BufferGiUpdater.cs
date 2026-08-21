@@ -1188,8 +1188,8 @@ namespace Lotec.Lighting {
             foreach (BufferGiBakeAsset a in bakeAssets) {
                 if (a == null || !BakeAssetValid(a)) continue;
                 if (a.isCoarse) {
-                    if (HasCoarse && NearlyEqual(a.origin, CoarseOrigin) && NearlyEqual(a.size, CoarseSize)) coarse = a;
-                } else if (NearlyEqual(a.origin, GridOrigin) && NearlyEqual(a.size, GridSize)) {
+                    if (HasCoarse && a.MatchesBounds(CoarseOrigin, CoarseSize)) coarse = a;
+                } else if (a.MatchesBounds(GridOrigin, GridSize)) {
                     fine = a;
                 }
             }
@@ -1258,7 +1258,7 @@ namespace Lotec.Lighting {
                     }
                     Vector3 eo = a.isCoarse ? CoarseOrigin : GridOrigin;
                     Vector3 es = a.isCoarse ? CoarseSize : GridSize;
-                    bool boundsMatch = NearlyEqual(a.origin, eo) && NearlyEqual(a.size, es) && (!a.isCoarse || HasCoarse);
+                    bool boundsMatch = a.MatchesBounds(eo, es) && (!a.isCoarse || HasCoarse);
                     sb.AppendLine(
                         $"  [{i}] '{a.name}' isCoarse={a.isCoarse} version={a.version} grid={a.grid} " +
                         $"material={(a.material == null ? "null" : a.material.Length.ToString())} " +
