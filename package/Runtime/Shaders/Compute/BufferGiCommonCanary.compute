@@ -20,6 +20,8 @@
 #include "../Includes/BufferGiField.hlsl"
 #include "../Includes/Math.hlsl"
 #include "../Includes/BufferGiVoxelData.hlsl"
+#include "../Includes/Volume.hlsl"
+#include "../Includes/VoxelOcclusion.hlsl"
 
 // One tiny sink so the includes cannot be dead-stripped before they are compiled. Reads one element
 // of each shared buffer and one helper from each header, then writes a value the driver cannot fold
@@ -33,5 +35,11 @@ void CSCommonCanary(uint3 id : SV_DispatchThreadID)
     uint packed = BgiPackSurfaceNormal(float3(0, 1, 0)); // BufferGiField.hlsl: pack helpers
     bool solid = BgiSolidBit(slot);                      // BufferGiVoxelData.hlsl: shared buffers
     float lum = GetRec709Luminance(float3(1, 1, 1));     // Math.hlsl
-    _CanarySink[0] = packed + (solid ? 1u : 0u) + (uint)lum + _Material[0] + _Surface[0];
+    float3 uvw = WorldToVoxelUV(float3(0, 0, 0));        // Volume.hlsl
+    // VoxelOcclusion.hlsl: touch the TEXTURES themselves, not a helper - the declarations are what
+    // used to need the Core.hlsl macros, and going through a helper would only import its warnings.
+    float4 bits = _BitmaskTex.Load(int4(0, 0, 0, 0));
+    float4 occ  = _OccFieldTex.SampleLevel(sampler_OccFieldTex, float3(0, 0, 0), 0);
+    _CanarySink[0] = packed + (solid ? 1u : 0u) + (uint)lum + (uint)uvw.x
+                   + (uint)bits.x + (uint)occ.x + _Material[0] + _Surface[0];
 }

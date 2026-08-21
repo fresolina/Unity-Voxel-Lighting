@@ -1,9 +1,11 @@
 #ifndef LOTEC_VOXEL_OCCLUSION_INCLUDED
 #define LOTEC_VOXEL_OCCLUSION_INCLUDED
 
-// LAYER: ENGINE-COUPLED - vertex/fragment only. Uses the URP Core.hlsl texture macros
-// (TEXTURE3D / SAMPLER), so the including shader must have included Core.hlsl first.
-// Do NOT include from a compute shader.
+// LAYER: COMMON - may be included from ANY stage. Declares its textures as plain HLSL
+// (Texture3D<float4> / SamplerState) rather than the URP Core.hlsl TEXTURE3D / SAMPLER macros,
+// which on every platform Core ships today expand to exactly that and nothing more. It already
+// sampled with raw .Load / .SampleLevel, so the macros were buying it nothing.
+// Guarded by BufferGiCommonCanary.compute; its own includes (Volume.hlsl, Math.hlsl) are COMMON too.
 
 // Baked directional occlusion shadow sources, read by the buffer-GI per-field shadow modes
 // (BgiSampleFaceAoShadow):
@@ -28,7 +30,7 @@ float3 _VoxelResolution; // bitmask grid resolution (as a float vector)
 //   8 dirs  -> R8_UNorm      (8 bits in R channel)
 //   32 dirs -> RG16_UNorm    (32 bits: R,G = low/high 16 bits)
 //   64 dirs -> RGBA16_UNorm  (64 bits: R,G = uint.x low/high, B,A = uint.y low/high)
-TEXTURE3D(_BitmaskTex);
+Texture3D<float4> _BitmaskTex;
 
 // Precomputed nearest Fibonacci direction index for the sun (set from C# each frame).
 int _BitmaskSunFibIndex;
@@ -105,10 +107,10 @@ float _OccFieldBlend;
 float _OccFieldDecode;
 
 // Active occlusion field textures (bound per-frame to the textures holding the two nearest directions).
-TEXTURE3D(_OccFieldTex);
-SAMPLER(sampler_OccFieldTex);
-TEXTURE3D(_OccFieldTexB);
-SAMPLER(sampler_OccFieldTexB);
+Texture3D<float4> _OccFieldTex;
+SamplerState sampler_OccFieldTex;
+Texture3D<float4> _OccFieldTexB;
+SamplerState sampler_OccFieldTexB;
 
 // Sample the occlusion field shadow using the precomputed sun direction.
 // Returns 0.0 (shadow) to 1.0 (lit). The fetch narrows to fp16 immediately; only the uvw lookup

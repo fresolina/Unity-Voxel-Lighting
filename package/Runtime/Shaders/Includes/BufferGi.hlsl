@@ -1,9 +1,11 @@
 #ifndef LOTEC_BUFFER_GI_INCLUDED
 #define LOTEC_BUFFER_GI_INCLUDED
 
-// LAYER: ENGINE-COUPLED - vertex/fragment only. Its own code is engine-free, but it includes
-// VoxelOcclusion.hlsl, which needs the URP Core.hlsl texture macros. Do NOT include from a
-// compute shader; the compute side reads the same fields via BufferGiVoxelData.hlsl.
+// LAYER: FRAGMENT-SIDE - only the lit shader path uses it. Engine-free as it stands (its own code
+// always was, and VoxelOcclusion.hlsl dropped the Core.hlsl texture macros), so it would compile in
+// a compute shader - but that is not promised: it pulls VoxelSdfShadows.hlsl, which is free to take
+// a URP dependency. The compute side reads the same fields via BufferGiVoxelData.hlsl and does not
+// need this header; if that ever changes, promote this chain to COMMON and add it to the canary.
 
 // Fragment-side read for the buffer GI. Normal-oriented per field: pick the face the surface looks
 // through (dominant normal axis) and read the air layer ONE voxel in FRONT of the surface - leak-free
