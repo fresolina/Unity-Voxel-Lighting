@@ -951,7 +951,7 @@ namespace Lotec.Lighting {
             StoreSunState();
 
             SetGlobals();
-            SetGiBufferKeyword(true);
+            ClaimGiKeywordWhenSafe();
             // Display transform (exposure + tonemap); runs every frame so auto-exposure keeps
             // adapting even when the solve is idle (a static scene the camera moves through).
             _exposureControl.Apply(DispatchLuminance);
@@ -1009,24 +1009,46 @@ namespace Lotec.Lighting {
         ///
         /// Cheap enough to check every frame (two null tests), warns once, and names the fix.
         /// </summary>
-        void WarnIfClaimedWithoutBuffers() {
+        /// <summary>Every global the GI_VOXEL_BUFFER variant DECLARES, and therefore every global WebGPU
+        /// will validate against the pipeline layout. Keep this in step with the declarations at the top
+        /// of BufferGiRead.hlsl - a global declared there but missing here is exactly the black screen
+        /// this guard exists to prevent.</summary>
+        bool GiVariantGlobalsBound(out string missing) {
+            if (_occupancyBuffer == null || !_occupancyBuffer.IsValid()) { missing = "_Occupancy"; return false; }
+            if (_surfaceBuffer == null || !_surfaceBuffer.IsValid()) { missing = "_Surface"; return false; }
+            if (_irradianceTex == null || !_irradianceTex.IsCreated()) { missing = "_BgiIrradianceTex"; return false; }
+            if (_irradianceTexCoarse == null || !_irradianceTexCoarse.IsCreated()) { missing = "_BgiIrradianceTexCoarse"; return false; }
+            missing = null;
+            return true;
+        }
+
+        /// <summary>
+        /// Claim GI_VOXEL_BUFFER only when every global that variant declares is actually bound.
+        ///
+        /// WebGPU validates declared globals against the bound pipeline layout and FAILS PIPELINE
+        /// CREATION when one is unbound - which does not raise an error, it renders the object BLACK.
+        /// D3D11 and Vulkan tolerate it, so an editor session gives no warning at all. Withholding the
+        /// keyword instead degrades to direct lighting: the scene loses its GI, which is visible and
+        /// diagnosable, rather than turning into silhouettes.
+        /// </summary>
+        void ClaimGiKeywordWhenSafe() {
+            if (GiVariantGlobalsBound(out string missing)) {
+                SetGiBufferKeyword(true);
+                return;
+            }
+            SetGiBufferKeyword(false);
             if (_warnedUnboundWhileClaimed) return;
-            bool bound = _occupancyBuffer != null && _occupancyBuffer.IsValid()
-                      && _surfaceBuffer != null && _surfaceBuffer.IsValid();
-            if (bound || !Shader.IsKeywordEnabled(LightingKeywords.GiBuffer)) return;
             _warnedUnboundWhileClaimed = true;
             Debug.LogError(
-                $"Buffer GI: {LightingKeywords.GiBuffer} is claimed but _Occupancy/_Surface are not bound " +
-                "(occupancy=" + (_occupancyBuffer == null ? "null" : _occupancyBuffer.IsValid() ? "valid" : "released") +
-                ", surface=" + (_surfaceBuffer == null ? "null" : _surfaceBuffer.IsValid() ? "valid" : "released") + "). " +
-                "On WebGPU that fails pipeline creation for every VoxelLit material and renders them BLACK. " +
-                "Either the buffers were released while the keyword stayed claimed, or SetGlobals never ran.",
+                $"Buffer GI: not claiming {LightingKeywords.GiBuffer} - the variant declares {missing}, " +
+                "which is not bound. On WebGPU that would fail pipeline creation for every VoxelLit " +
+                "material and render them BLACK, so GI stays off and the scene keeps direct lighting. " +
+                "Fix the missing global rather than forcing the keyword.",
                 this);
         }
 
         void SetGlobals() {
             LogEnvironmentOnce();
-            WarnIfClaimedWithoutBuffers();
             // Grid resolution constants for the fragment index math (shared by both fields).
             Shader.SetGlobalInt(s_bgiGrid, _grid);
             Shader.SetGlobalInt(s_bgiGridLog2, _gridLog2);
