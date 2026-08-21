@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 
 namespace Lotec.Lighting {
     /// <summary>
@@ -8,7 +9,7 @@ namespace Lotec.Lighting {
     /// Owns the ComputeBuffers, voxelizes the scene mesh into the occupancy/albedo buffer once (GPU 3-axis
     /// raster, BufferGiVoxelize.shader), and runs the per-frame solve: inject (solid voxels
     /// emit/reflect) then gather (air voxels integrate 1 ray/frame with the temporal resolve fused
-    /// in) then a blur pass. The lit shader reads it via BgiGatherIndirect (BufferGi.hlsl).
+    /// in) then a blur pass. The lit shader reads it via BgiGatherIndirect (BufferGiRead.hlsl).
     ///
     /// All fields are a cubic grid whose resolution is this component's own _giResolution (snapped to a
     /// power of two so the shift/mask index math holds), independent of the volume's bake resolution
@@ -45,7 +46,7 @@ namespace Lotec.Lighting {
         /// <summary>Voxels across all concatenated fields (FieldCount * VoxelCount).</summary>
         public int TotalVoxels => _totalVoxels;
 
-        // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGi.hlsl). Each field picks
+        // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGiRead.hlsl). Each field picks
         // its main-light sun shadow explicitly - nothing is a hidden fall-through:
         //   Off (0)            : genuinely NO sun shadow (full direct light).
         //   Baked (1)          : the solve's pre-marched sun visibility (radiance.w), interpolated - soft, cheap.
@@ -59,7 +60,7 @@ namespace Lotec.Lighting {
         public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2, OcclusionField = 3, Bitmask = 4 }
 
         // How the Baked mode estimates per-voxel sun visibility (matches _BgiSunShadowMode in
-        // BufferGi.compute). Centre stores a single BIT per voxel - no filter downstream can recover
+        // BufferGiSolve.compute). Centre stores a single BIT per voxel - no filter downstream can recover
         // a sub-voxel edge from that, which is why Baked shadows look blocky. The other two spend
         // either rays (Supersampled) or frames (Temporal) to make it a real area fraction.
         public enum SunShadowSampling { Centre = 0, Supersampled = 1, Temporal = 2 }
@@ -238,7 +239,10 @@ namespace Lotec.Lighting {
                  "resolution), so this can be low without softening shadows. Snapped to a power of two, " +
                  "clamped 4..256; a change reallocates the buffers and re-bakes.")]
         [Min(4)][SerializeField] int _giResolution = 32;
-        [SerializeField] ComputeShader _computeShader;
+        // FormerlySerializedAs: this was _computeShader until the bake kernels moved to their own
+        // asset, at which point "the compute shader" stopped naming one of two.
+        [FormerlySerializedAs("_computeShader")]
+        [SerializeField] ComputeShader _solveShader;
         [Tooltip("BufferGiBake.compute - the bake-time derive passes (occupancy, surface word, air " +
                  "distance, baked lights). Kept separate from the solve shader so that what runs PER " +
                  "FRAME is a property of the file, not of a comment. Auto-resolved by name when empty.")]
@@ -299,7 +303,7 @@ namespace Lotec.Lighting {
         // data every DDA step / gate / fragment tap reads. Derived from _Material by CSBuildSurface.
         ComputeBuffer _occupancyBuffer;
         // Same 1-bit/voxel layout, but with each surfaced voxel's BACKING cell filled in. Bake-time
-        // scratch read by OccupancyNormal only - see _OccupancyThick in BufferGi.compute for why the
+        // scratch read by OccupancyNormal only - see _OccupancyThick in BufferGiBake.compute for why the
         // gradient needs a backed wall that the real occupancy cannot supply.
         ComputeBuffer _occupancyThickBuffer;
         uint[] _occupancyClear;
@@ -759,7 +763,7 @@ namespace Lotec.Lighting {
         // error anywhere. That is the one way the solve/bake split can break, so it is handled in one
         // place and neither caller gets to choose.
         void BindGridConstantsToCompute() {
-            BindGridConstants(_computeShader);
+            BindGridConstants(_solveShader);
             BindGridConstants(_bakeShader);
         }
 
@@ -834,7 +838,7 @@ namespace Lotec.Lighting {
                     ReleaseBuffers();
                 }
             }
-            if (_volume == null || _computeShader == null) {
+            if (_volume == null || _solveShader == null) {
                 SetGiBufferKeyword(false);
                 return;
             }
@@ -931,14 +935,14 @@ namespace Lotec.Lighting {
             }
 
             SetGridUniforms(origin, size, voxelSize);
-            _computeShader.SetInt(s_fieldOffset, fieldOffset);
-            _computeShader.SetBuffer(_averageLuminanceKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_averageLuminanceKernel, s_irradianceBlur, _irradianceBlurBuffer);
-            _computeShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, luminanceBuffer);
-            _computeShader.SetVector(s_cameraPosition, camPos);
-            _computeShader.SetVector(s_cameraForward, Camera.main.transform.forward);
-            _computeShader.SetFloat(s_luminanceRadius, _exposureControl.MeasureRadius);
-            _computeShader.Dispatch(_averageLuminanceKernel, Groups, 1, 1);
+            _solveShader.SetInt(s_fieldOffset, fieldOffset);
+            _solveShader.SetBuffer(_averageLuminanceKernel, s_occupancy, _occupancyBuffer);
+            _solveShader.SetBuffer(_averageLuminanceKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _solveShader.SetBuffer(_averageLuminanceKernel, s_luminanceResult, luminanceBuffer);
+            _solveShader.SetVector(s_cameraPosition, camPos);
+            _solveShader.SetVector(s_cameraForward, Camera.main.transform.forward);
+            _solveShader.SetFloat(s_luminanceRadius, _exposureControl.MeasureRadius);
+            _solveShader.Dispatch(_averageLuminanceKernel, Groups, 1, 1);
         }
 
         // Axis-aligned contains test for a grid given as min corner (origin) + size.
@@ -1036,7 +1040,7 @@ namespace Lotec.Lighting {
         }
 
         bool IsReady(out string reason) {
-            if (_computeShader == null) { reason = "ComputeShader"; return false; }
+            if (_solveShader == null) { reason = "ComputeShader"; return false; }
             if (_voxelizeShader == null) { reason = "Voxelize Shader (Hidden/Lotec/BufferGiVoxelize)"; return false; }
             if (_volume.BakeRoot == null) { reason = "the volume's MeshBounds root (mesh geometry to voxelize)"; return false; }
             reason = null;
@@ -1055,12 +1059,12 @@ namespace Lotec.Lighting {
 
             ResolveBakeShader();
 
-            _clearKernel = RequireKernel(_computeShader, "CSClear");
-            _injectKernel = RequireKernel(_computeShader, "CSInject");
-            _gatherKernel = RequireKernel(_computeShader, "CSGather");
-            _blurKernel = RequireKernel(_computeShader, "CSBlur");
-            _initFineKernel = RequireKernel(_computeShader, "CSInitFineFromCoarse");
-            _averageLuminanceKernel = RequireKernel(_computeShader, "CSAverageLuminance");
+            _clearKernel = RequireKernel(_solveShader, "CSClear");
+            _injectKernel = RequireKernel(_solveShader, "CSInject");
+            _gatherKernel = RequireKernel(_solveShader, "CSGather");
+            _blurKernel = RequireKernel(_solveShader, "CSBlur");
+            _initFineKernel = RequireKernel(_solveShader, "CSInitFineFromCoarse");
+            _averageLuminanceKernel = RequireKernel(_solveShader, "CSAverageLuminance");
             _buildOccupancyKernel = RequireKernel(_bakeShader, "CSBuildOccupancy");
             _buildNormalOccupancyKernel = RequireKernel(_bakeShader, "CSBuildNormalOccupancy");
             _buildSurfaceKernel = RequireKernel(_bakeShader, "CSBuildSurface");
@@ -1122,9 +1126,9 @@ namespace Lotec.Lighting {
         }
 
         void SetGridUniforms(Vector3 origin, Vector3 size, Vector3 voxelSize) {
-            _computeShader.SetVector(s_gridOrigin, origin);
-            _computeShader.SetVector(s_gridSize, size);
-            _computeShader.SetVector(s_voxelSize, voxelSize);
+            _solveShader.SetVector(s_gridOrigin, origin);
+            _solveShader.SetVector(s_gridSize, size);
+            _solveShader.SetVector(s_voxelSize, voxelSize);
         }
 
         // Groups to cover ONE field's voxels (each field is dispatched separately with its offset).
@@ -1138,11 +1142,11 @@ namespace Lotec.Lighting {
         // ease starts from black rather than a stale/garbage value).
         void ClearField(int fieldOffset) {
             if (_clearKernel < 0) return;
-            _computeShader.SetBuffer(_clearKernel, s_radiance, _radianceBuffer);
-            _computeShader.SetBuffer(_clearKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_clearKernel, s_irradianceBlur, _irradianceBlurBuffer);
-            _computeShader.SetInt(s_fieldOffset, fieldOffset);
-            _computeShader.Dispatch(_clearKernel, Groups, 1, 1);
+            _solveShader.SetBuffer(_clearKernel, s_radiance, _radianceBuffer);
+            _solveShader.SetBuffer(_clearKernel, s_irradiance, _irradianceBuffer);
+            _solveShader.SetBuffer(_clearKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _solveShader.SetInt(s_fieldOffset, fieldOffset);
+            _solveShader.Dispatch(_clearKernel, Groups, 1, 1);
         }
 
         // Seed the (freshly-switched) fine slice from the coarse field's displayed values, so the fine
@@ -1151,13 +1155,13 @@ namespace Lotec.Lighting {
         void InitFineFromCoarse() {
             if (_initFineKernel < 0) return;
             SetGridUniforms(GridOrigin, GridSize, VoxelSize); // fine grid = voxel world positions
-            _computeShader.SetVector(s_coarseGridOrigin, CoarseOrigin);
-            _computeShader.SetVector(s_coarseGridVoxelSize, CoarseVoxelSize);
-            _computeShader.SetBuffer(_initFineKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_initFineKernel, s_radiance, _radianceBuffer);
-            _computeShader.SetBuffer(_initFineKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_initFineKernel, s_irradianceBlur, _irradianceBlurBuffer);
-            _computeShader.Dispatch(_initFineKernel, Groups, 1, 1);
+            _solveShader.SetVector(s_coarseGridOrigin, CoarseOrigin);
+            _solveShader.SetVector(s_coarseGridVoxelSize, CoarseVoxelSize);
+            _solveShader.SetBuffer(_initFineKernel, s_occupancy, _occupancyBuffer);
+            _solveShader.SetBuffer(_initFineKernel, s_radiance, _radianceBuffer);
+            _solveShader.SetBuffer(_initFineKernel, s_irradiance, _irradianceBuffer);
+            _solveShader.SetBuffer(_initFineKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _solveShader.Dispatch(_initFineKernel, Groups, 1, 1);
         }
 
         // Fill the material/surface slices: upload the disk bakes when the coarse + active-fine assets
@@ -1277,7 +1281,7 @@ namespace Lotec.Lighting {
         // A detailed field's runtime grid is its sibling VoxelVolume's padded bounds, so pass those.
         public bool CaptureFieldToAsset(BufferGiBakeAsset asset, bool isCoarse, Transform root, Vector3 origin, Vector3 size) {
             if (asset == null) return false;
-            if (_computeShader == null || _voxelizeShader == null) {
+            if (_solveShader == null || _voxelizeShader == null) {
                 Debug.LogError("Buffer GI can't capture a field bake: assign the compute + voxelize shaders first.", this);
                 return false;
             }
@@ -1674,24 +1678,24 @@ namespace Lotec.Lighting {
             if (_injectKernel < 0 || _gatherKernel < 0 || !_materialBaked) return;
 
             // Per-frame shared uniforms (same for every field).
-            _computeShader.SetInt(s_frameCount, Time.frameCount);
-            _computeShader.SetInt(s_samplesPerFrame, Mathf.Max(1, _samplesPerFrame));
-            _computeShader.SetInt(s_sampleBase, sampleBase);
+            _solveShader.SetInt(s_frameCount, Time.frameCount);
+            _solveShader.SetInt(s_samplesPerFrame, Mathf.Max(1, _samplesPerFrame));
+            _solveShader.SetInt(s_sampleBase, sampleBase);
             // Progressive gather weight (CSGather) + convergence confidence 0->1 (CSBlur, hides the
             // noisy warm-up). Both derive from _collectedSamples so they stay aligned.
-            _computeShader.SetFloat(s_emaWeight, EmaWeight);
-            _computeShader.SetFloat(s_confidence, Confidence);
-            _computeShader.SetFloat(s_giFireflyClamp, _giFireflyClamp);
-            _computeShader.SetFloat(s_reachBoost, _reachBoost);
+            _solveShader.SetFloat(s_emaWeight, EmaWeight);
+            _solveShader.SetFloat(s_confidence, Confidence);
+            _solveShader.SetFloat(s_giFireflyClamp, _giFireflyClamp);
+            _solveShader.SetFloat(s_reachBoost, _reachBoost);
             // Baked sun-shadow estimator. Samples only matter in Supersampled; Centre and Temporal both
             // cast one ray, so pass 1 there to keep the compute's loop bound honest.
-            _computeShader.SetInt(s_sunShadowMode, (int)_sunShadowSampling);
-            _computeShader.SetInt(s_sunShadowSamples,
+            _solveShader.SetInt(s_sunShadowMode, (int)_sunShadowSampling);
+            _solveShader.SetInt(s_sunShadowSamples,
                 _sunShadowSampling == SunShadowSampling.Supersampled ? Mathf.Clamp(_sunShadowSamples, 1, 16) : 1);
-            _computeShader.SetInt(s_blurSunVis, _blurSunVisibility ? 1 : 0);
-            _computeShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
+            _solveShader.SetInt(s_blurSunVis, _blurSunVisibility ? 1 : 0);
+            _solveShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
             SetDirectionalLightUniforms();
-            LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_computeShader);
+            LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_solveShader);
 
             // The EMA blend weight (samplesPerFrame/maxSamples) is computed in the compute itself.
             // CSBlur mirrors each field's blurred irradiance straight into its Texture3D (the fragment's
@@ -1706,66 +1710,66 @@ namespace Lotec.Lighting {
         // Inject -> gather -> blur for one field's slice; blur also mirrors the result into irradianceTex.
         void SolveField(Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset, RenderTexture irradianceTex) {
             SetGridUniforms(origin, size, voxelSize);
-            _computeShader.SetInt(s_fieldOffset, fieldOffset);
+            _solveShader.SetInt(s_fieldOffset, fieldOffset);
 
             // Inject: solid voxels emit/reflect. Bounce = the surface's own last-frame incident
             // irradiance (its _Irradiance slot, built by gather). The ONLY kernel that still reads
             // _Material (albedo/emission); solidity comes from the bitfield.
-            _computeShader.SetBuffer(_injectKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
-            _computeShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
-            _computeShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_injectKernel, s_surface, _surfaceBuffer);
+            _solveShader.SetBuffer(_injectKernel, s_occupancy, _occupancyBuffer);
+            _solveShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
+            _solveShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
+            _solveShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
+            _solveShader.SetBuffer(_injectKernel, s_surface, _surfaceBuffer);
             BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Inject);
-            _computeShader.Dispatch(_injectKernel, Groups, 1, 1);
+            _solveShader.Dispatch(_injectKernel, Groups, 1, 1);
             BufferGiSolveProfiler.End(BufferGiSolveProfiler.Stage.Inject);
 
             // Gather: off the fresh _Radiance, fold into _Irradiance - AIR voxels omnidirectionally
             // (the read field), SOLID voxels over their front hemisphere (next frame's inject bounce).
             // All its solidity (DDA + gates) is the bitfield; it never touches _Material.
-            _computeShader.SetBuffer(_gatherKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
-            _computeShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
+            _solveShader.SetBuffer(_gatherKernel, s_occupancy, _occupancyBuffer);
+            _solveShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
+            _solveShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
+            _solveShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
             BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Gather);
-            _computeShader.Dispatch(_gatherKernel, Groups, 1, 1);
+            _solveShader.Dispatch(_gatherKernel, Groups, 1, 1);
             BufferGiSolveProfiler.End(BufferGiSolveProfiler.Stage.Gather);
 
             // Blur: occupancy-gated spatial smoothing + the confidence ease (CSBlur) that hides the
             // warm-up, written to _IrradianceBlur AND mirrored into this field's Texture3D (the fragment's
             // 1-tap read source) in the same pass - no separate SSBO->texture copy dispatch.
-            _computeShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
-            _computeShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
+            _solveShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
+            _solveShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
+            _solveShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
             // Surface flags: the blur reads them only for SOLID voxels, to let a baked-light voxel take
             // the air path instead of being zeroed into a hole (CSBlur).
-            _computeShader.SetBuffer(_blurKernel, s_surface, _surfaceBuffer);
+            _solveShader.SetBuffer(_blurKernel, s_surface, _surfaceBuffer);
             // Solid voxels' texture alpha = their baked sun visibility (radiance.w), so the fragment's
             // shadow tap isn't washed to lit by a constant near surfaces (see CSBlur).
-            _computeShader.SetBuffer(_blurKernel, s_radiance, _radianceBuffer);
-            _computeShader.SetTexture(_blurKernel, s_bgiIrradianceTexWrite, irradianceTex);
+            _solveShader.SetBuffer(_blurKernel, s_radiance, _radianceBuffer);
+            _solveShader.SetTexture(_blurKernel, s_bgiIrradianceTexWrite, irradianceTex);
             BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Blur);
-            _computeShader.Dispatch(_blurKernel, Groups, 1, 1);
+            _solveShader.Dispatch(_blurKernel, Groups, 1, 1);
             BufferGiSolveProfiler.End(BufferGiSolveProfiler.Stage.Blur);
         }
 
         void SetDirectionalLightUniforms() {
             Light sun = RenderSettings.sun;
             if (sun != null) {
-                _computeShader.SetVector(s_directLightDir, -sun.transform.forward);
+                _solveShader.SetVector(s_directLightDir, -sun.transform.forward);
                 // FinalColor: the solve must bounce the SAME colour the fragment shades with, which for
                 // the main light is URP's already colour-space-converted value.
-                _computeShader.SetVector(s_directLightColor, sun.FinalColor());
+                _solveShader.SetVector(s_directLightColor, sun.FinalColor());
             } else {
-                _computeShader.SetVector(s_directLightDir, Vector3.down);
-                _computeShader.SetVector(s_directLightColor, Vector4.zero);
+                _solveShader.SetVector(s_directLightDir, Vector3.down);
+                _solveShader.SetVector(s_directLightColor, Vector4.zero);
             }
 
             // Environment lighting as the ambient-probe SH, evaluated per ray direction. The probe
             // reflects the Lighting window's Environment Source (Skybox / Gradient / Color), so this
             // follows that setting automatically.
             PackAmbientProbeSH(RenderSettings.ambientProbe, s_shScratch);
-            for (int i = 0; i < 7; i++) _computeShader.SetVector(s_envSh[i], s_shScratch[i]);
+            for (int i = 0; i < 7; i++) _solveShader.SetVector(s_envSh[i], s_shScratch[i]);
         }
 
         static readonly Vector4[] s_shScratch = new Vector4[7];

@@ -20,9 +20,9 @@
 #define MAX_POINT_LIGHTS 4
 #define MAX_SPOT_LIGHTS 4
 
-#include "../Includes/BufferGiField.hlsl"
-#include "../Includes/Math.hlsl"
-#include "../Includes/BufferGiVoxelData.hlsl"
+#include "../../ShaderLibrary/BufferGiField.hlsl"
+#include "../../ShaderLibrary/Math.hlsl"
+#include "../../ShaderLibrary/BufferGiVoxelData.hlsl"
 
 // --- Fields ---
 // Radiance is the one field with a per-voxel STRIDE: _BgiRadianceDirs slots per voxel, contiguous.

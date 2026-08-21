@@ -56,10 +56,10 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // Surface lighting: direct + selectable shadow source + SDF AO (pulls its own
             // shadow/AO/volume headers). BufferGi is the runtime GI read (guarded to its variant).
             // Each is self-contained, so these two are all the lit pass needs.
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelDirectLighting.hlsl"
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/BufferGi.hlsl"
+            #include "Packages/com.lotecsoftware.voxel-lighting/ShaderLibrary/VoxelDirectLighting.hlsl"
+            #include "Packages/com.lotecsoftware.voxel-lighting/ShaderLibrary/BufferGiRead.hlsl"
             // Display-transform tonemap operators (Reinhard / AgX / ACES), selected by the TONEMAP_* keyword.
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/Tonemap.hlsl"
+            #include "Packages/com.lotecsoftware.voxel-lighting/ShaderLibrary/Tonemap.hlsl"
 
             // GI_OFF (default): direct lighting only. GI_VOXEL_BUFFER: the buffer GI read filter
             // (BufferGiUpdater). GI_UNITY: Unity's built-in indirect (SampleSH) - a component-less A/B

@@ -29,7 +29,7 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
             // cells where the occupancy gradient cancels and can supply nothing.
             #pragma multi_compile _ BGI_THICKEN
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-            #include "Includes/BufferGiField.hlsl"
+            #include "../ShaderLibrary/BufferGiField.hlsl"
 
             // Bound via CommandBuffer.SetRandomWriteTarget(1, ...). u1 = first free UAV slot after
             // the one color render target (u0).

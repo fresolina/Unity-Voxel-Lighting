@@ -21,7 +21,7 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             #pragma fragment frag
             #pragma target 4.5
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
-            #include "../Shaders/Includes/BufferGiField.hlsl"
+            #include "../../ShaderLibrary/BufferGiField.hlsl"
 
             StructuredBuffer<uint>  _DbgMaterial;
             StructuredBuffer<uint2> _DbgRadiance;
@@ -84,7 +84,7 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             };
 
             // Surface normal for a solid voxel: the per-voxel baked value (mirrors SurfaceNormal in
-            // BufferGi.compute). Always in _Surface now - filled at bake from mesh normals or the
+            // BufferGiSolve.compute). Always in _Surface now - filled at bake from mesh normals or the
             // occupancy gradient - so the viewer just reads it.
             float3 DbgSurfaceNormal(uint3 c) {
                 return BgiSurfaceNormal(_DbgSurface[(uint)_DbgFieldOffset + BgiIndex(c)]);

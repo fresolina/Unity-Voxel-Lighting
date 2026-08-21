@@ -7,7 +7,7 @@
 //
 // The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
 // Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
-// Guarded by Compute/BufferGiCommonCanary.compute, which includes every header here and fails the
+// Guarded by Shaders/Compute/BufferGiCommonCanary.compute, which includes every header here and fails
 // moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
 
 

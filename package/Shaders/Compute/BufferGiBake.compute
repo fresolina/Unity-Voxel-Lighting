@@ -21,8 +21,8 @@
 // Baked lights injected per CSInjectBakedLights dispatch (C# batches longer lists).
 #define MAX_BAKED_LIGHTS 16
 
-#include "../Includes/BufferGiField.hlsl"
-#include "../Includes/BufferGiVoxelData.hlsl"
+#include "../../ShaderLibrary/BufferGiField.hlsl"
+#include "../../ShaderLibrary/BufferGiVoxelData.hlsl"
 
 // The same buffer as _Material, aliased as a UAV and bound ONLY by CSInjectBakedLights (which stamps
 // the Baked lights into the raster's output). Kept a separate declaration so _Material stays a

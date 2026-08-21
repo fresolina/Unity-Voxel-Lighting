@@ -7,7 +7,7 @@
 //
 // The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
 // Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
-// Guarded by Compute/BufferGiCommonCanary.compute, which includes every header here and fails the
+// Guarded by Shaders/Compute/BufferGiCommonCanary.compute, which includes every header here and fails
 // moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
 
 
@@ -16,7 +16,7 @@
 // by construction, never touches voxels behind - as ONE hardware-trilinear tap of the mirrored
 // irradiance Texture3D, snapped to that layer's voxel centres along the normal axis. Samples the FINE
 // field, falls back to the COARSE field outside it (blended at the
-// fine edges). No raymarching, no SDF, all cache-resident. The companion solve is BufferGi.compute
+// fine edges). No raymarching, no SDF, all cache-resident. The companion solve is BufferGiSolve.compute
 // (which dilates irradiance into the first solid shell for the texture path); layout is BufferGiField.hlsl.
 //
 // BGI_TAP_AXIS_SNAPPED (global keyword, BufferGiUpdater.SingleTapFilter) selects the SINGLE-mode tap

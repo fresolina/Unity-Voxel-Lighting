@@ -3,7 +3,7 @@
 #pragma kernel Resolve
 #pragma target 5.0
 
-#include "../Includes/Math.hlsl"
+#include "../../ShaderLibrary/Math.hlsl"
 
 // 3D SDF bake via Jump Flooding Algorithm (JFA).
 //
