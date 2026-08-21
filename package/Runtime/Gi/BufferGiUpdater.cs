@@ -664,6 +664,47 @@ namespace Lotec.Lighting {
         }
 #endif
 
+        bool _loggedEnvironment;
+        // Which path last filled _Material: the disk bake, or the GPU rasterizer. Reported by
+        // LogEnvironmentOnce because the two fail very differently on a restricted graphics API.
+        string _voxelizeSource = "<none yet>";
+
+        /// <summary>
+        /// One-shot report of everything the GI needs from the PLATFORM, logged the first time this
+        /// updater publishes. "The solve dispatches but I see no GI" has several possible causes that
+        /// look identical from the solve's own logs - the fragment keyword never claimed, the mirrored
+        /// irradiance textures never created, or a device that cannot run the compute at all - and a
+        /// web build gives no other way to tell them apart.
+        ///
+        /// Deliberately one line per fact and one shot per session: this exists to be pasted out of a
+        /// browser console, not to run every frame.
+        /// </summary>
+        void LogEnvironmentOnce() {
+            if (_loggedEnvironment) return;
+            _loggedEnvironment = true;
+            bool keyword = Shader.IsKeywordEnabled(LightingKeywords.GiBuffer);
+            Debug.Log(
+                $"[BufferGI env] device={SystemInfo.graphicsDeviceType} ({SystemInfo.graphicsDeviceVersion})\n" +
+                $"  compute={SystemInfo.supportsComputeShaders} 3dTex={SystemInfo.supports3DTextures} " +
+                $"3dRT={SystemInfo.supports3DRenderTextures}\n" +
+                $"  voxelization source={_voxelizeSource}   <- \"runtime raster\" needs UAV writes from a\n" +
+                "     FRAGMENT shader (SetRandomWriteTarget). Where that is unsupported the raster writes\n" +
+                "     nothing, occupancy stays empty, and the solve runs to completion producing no light\n" +
+                $"  keyword {LightingKeywords.GiBuffer}={keyword}   <- false means the lit shader is " +
+                "compiling its GI_OFF variant, so nothing this updater publishes can be read\n" +
+                $"  irradianceTex fine={(_irradianceTex != null ? _irradianceTex.name + " created=" + _irradianceTex.IsCreated() : "NULL")} " +
+                $"coarse={(_irradianceTexCoarse != null ? _irradianceTexCoarse.name + " created=" + _irradianceTexCoarse.IsCreated() : "NULL")}\n" +
+                $"  solveShader={(_solveShader != null ? _solveShader.name : "NULL")} " +
+                $"bakeShader={(_bakeShader != null ? _bakeShader.name : "NULL")} " +
+                $"voxelizeShader={(_voxelizeShader != null ? _voxelizeShader.name : "NULL")}\n" +
+                $"  kernels solve(inject={_injectKernel} gather={_gatherKernel} blur={_blurKernel}) " +
+                $"bake(occ={_buildOccupancyKernel} surface={_buildSurfaceKernel})   <- -1 means the kernel " +
+                "was not found and its dispatch is skipped\n" +
+                $"  grid={Grid} volume={(_volume != null ? _volume.name : "NULL")} fields={(_fields != null ? _fields.name : "NULL")} " +
+                $"hasCoarse={HasCoarse} directions={_radianceDirections}",
+                this);
+        }
+
         // GI_VOXEL_BUFFER only while this updater is actually solving/publishing (buffers bound); the
         // claim is change-only and ownership-aware, so this is safe to call every frame and safe
         // against the old owner clobbering the keyword while switching GI methods.
@@ -953,6 +994,7 @@ namespace Lotec.Lighting {
 
         // Publish the buffers + grid mapping + confidence the lit shader's BgiGatherIndirect reads.
         void SetGlobals() {
+            LogEnvironmentOnce();
             // Grid resolution constants for the fragment index math (shared by both fields).
             Shader.SetGlobalInt(s_bgiGrid, _grid);
             Shader.SetGlobalInt(s_bgiGridLog2, _gridLog2);
@@ -1172,7 +1214,8 @@ namespace Lotec.Lighting {
             // Refresh the baked-light holders before either path stamps them: a level may have loaded, or
             // the bake button may have just filled a list.
             LightEmissionBake.CollectHolders(_lightHolders);
-            if (TryLoadBakeAssets()) return;
+            if (TryLoadBakeAssets()) { _voxelizeSource = "disk bake"; return; }
+            _voxelizeSource = "runtime raster";
             VoxelizeScene();
         }
 
@@ -1261,6 +1304,7 @@ namespace Lotec.Lighting {
                     bool boundsMatch = a.MatchesBounds(eo, es) && (!a.isCoarse || HasCoarse);
                     sb.AppendLine(
                         $"  [{i}] '{a.name}' isCoarse={a.isCoarse} version={a.version} grid={a.grid} " +
+                        $"content=0x{a.ContentHash():X8} " +
                         $"material={(a.material == null ? "null" : a.material.Length.ToString())} " +
                         $"surface={(a.surface == null ? "null" : a.surface.Length.ToString())} " +
                         $"thickened={a.thickened} " +

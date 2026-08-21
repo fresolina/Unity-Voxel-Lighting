@@ -47,5 +47,34 @@ namespace Lotec.Lighting {
         /// rather than each carrying a private epsilon that can drift apart.</summary>
         public bool MatchesBounds(Vector3 gridOrigin, Vector3 gridSize) =>
             (origin - gridOrigin).sqrMagnitude < 1e-6f && (size - gridSize).sqrMagnitude < 1e-6f;
+
+        /// <summary>FNV-1a over the raster products, for telling two BAKES apart in a log.
+        ///
+        /// Exists because "the file on disk is v4 but the player reports v2" has two very different
+        /// causes and the version number alone cannot separate them: the player may hold genuinely
+        /// OLDER data (a stale imported artifact), or the right data with one field read wrong. The
+        /// content hash answers that - it is computed from the arrays, not from any field that
+        /// changed meaning between versions, so it is comparable across versions.
+        ///
+        /// Samples a stride rather than every word: 32^3 voxels x 2 arrays is 256 KB, and this runs
+        /// on a diagnostic path that may fire on a low-end WebGL device.</summary>
+        public uint ContentHash() {
+            unchecked {
+                uint h = 2166136261u;
+                h = Mix(h, material);
+                h = Mix(h, surface);
+                return h;
+            }
+        }
+
+        static uint Mix(uint h, uint[] words) {
+            unchecked {
+                if (words == null) return h * 16777619u;
+                h = (h ^ (uint)words.Length) * 16777619u;
+                int stride = words.Length > 4096 ? words.Length / 4096 : 1;
+                for (int i = 0; i < words.Length; i += stride) h = (h ^ words[i]) * 16777619u;
+                return h;
+            }
+        }
     }
 }

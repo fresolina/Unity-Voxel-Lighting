@@ -56,6 +56,11 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   PROJECT_PATH: project-demo
+  # Bump to force a COLD Unity Library in CI. The cache below falls back through restore-keys on
+  # any miss, which is normally what you want - but it also lets a run build against artifacts that
+  # were imported from different source files. Bumping this salt is how to rule that out, or recover
+  # from it, without deleting caches by hand in the Actions UI.
+  LIBRARY_CACHE_SALT: v2
   SITE_PATH: .pages-site
   GIT_REF: ${{ inputs.git_ref || github.event.inputs.git_ref || github.ref_name }}
   PUBLISH_KIND: ${{ inputs.publish_kind || github.event.inputs.publish_kind || 'preview' }}
@@ -169,9 +174,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PROJECT_PATH }}/Library
-          key: Library-${{ runner.os }}-${{ env.PROJECT_PATH }}-WebGL-${{ steps.unity_version.outputs.unity_version }}-${{ hashFiles('project-demo/Assets/**', 'project-demo/Packages/**', 'project-demo/ProjectSettings/**', 'package/package.json', 'package/Editor/**', 'package/Runtime/**', 'package/ShaderLibrary/**', 'package/Shaders/**', 'package/Samples~/**') }}
+          key: Library-${{ env.LIBRARY_CACHE_SALT }}-${{ runner.os }}-${{ env.PROJECT_PATH }}-WebGL-${{ steps.unity_version.outputs.unity_version }}-${{ hashFiles('project-demo/Assets/**', 'project-demo/Packages/**', 'project-demo/ProjectSettings/**', 'package/package.json', 'package/Editor/**', 'package/Runtime/**', 'package/ShaderLibrary/**', 'package/Shaders/**', 'package/Samples~/**') }}
           restore-keys: |
-            Library-${{ runner.os }}-${{ env.PROJECT_PATH }}-WebGL-${{ steps.unity_version.outputs.unity_version }}-
+            Library-${{ env.LIBRARY_CACHE_SALT }}-${{ runner.os }}-${{ env.PROJECT_PATH }}-WebGL-${{ steps.unity_version.outputs.unity_version }}-
 
       - name: Build WebGL sample
         uses: game-ci/unity-builder@v4
