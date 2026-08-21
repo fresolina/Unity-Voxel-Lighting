@@ -1,6 +1,11 @@
 #ifndef LOTEC_BUFFER_GI_FIELD_INCLUDED
 #define LOTEC_BUFFER_GI_FIELD_INCLUDED
 
+// LAYER: COMMON - may be included from ANY stage (fragment, compute, the voxelize raster).
+// Depends on HLSL intrinsics only: no URP headers, no vertex/fragment semantics, no texture
+// macros. That is a guarantee, not an observation - BufferGiCommonCanary.compute includes this
+// file and will fail to compile the moment it acquires an engine dependency.
+
 // Shared layout for the buffer-based GI (the textureless voxel GI). One cubic grid per cascade,
 // sized at runtime from VoxelVolume._maxResolution (snapped to a power of two - see BufferGiUpdater).
 // All fields are flat StructuredBuffers indexed by BgiIndex; this header holds the index math, the

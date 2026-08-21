@@ -1,6 +1,9 @@
 #ifndef LOTEC_BUFFER_GI_VOXEL_DATA_INCLUDED
 #define LOTEC_BUFFER_GI_VOXEL_DATA_INCLUDED
 
+// LAYER: COMMON (resources) - included by both compute shaders. Guarded by
+// BufferGiCommonCanary.compute. See the contract note below.
+
 // LAYER 1 (Resources): the STATIC voxel fields, shared by both compute stages.
 // Depends only on BufferGiField.hlsl - no URP headers, no vertex/fragment semantics.
 //

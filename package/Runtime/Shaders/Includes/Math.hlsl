@@ -2,6 +2,10 @@
 #ifndef LOTEC_MATH_INCLUDED
 #define LOTEC_MATH_INCLUDED
 
+// LAYER: COMMON - may be included from ANY stage (fragment, compute, the voxelize raster).
+// Depends on HLSL intrinsics only: no URP headers, no vertex/fragment semantics, no texture
+// macros. Guarded by BufferGiCommonCanary.compute.
+
 #define EMISSION_INTENSITY_MAX 1024.0
 
 static const float LOTEC_MATH_PI = 3.14159265f;

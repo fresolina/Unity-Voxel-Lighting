@@ -2,6 +2,10 @@
 #ifndef LOTEC_TONEMAP_INCLUDED
 #define LOTEC_TONEMAP_INCLUDED
 
+// LAYER: FRAGMENT-SIDE - only the lit shader path uses it. Engine-free as it stands, so it would
+// compile in a compute shader, but nothing guarantees that: it is free to take a URP dependency.
+// Anything compute must be able to include belongs in the COMMON set instead (see BufferGiField.hlsl).
+
 // Display-transform tonemap operators for the lit shader. Each takes linear HDR and returns a
 // linear value (the render pipeline applies the sRGB OETF on write), so they are interchangeable
 // in the display-transform block. The lit shader selects one at COMPILE time (TONEMAP_* keyword) -

@@ -1,6 +1,10 @@
 #ifndef LOTEC_RAYMARCH_INCLUDED
 #define LOTEC_RAYMARCH_INCLUDED
 
+// LAYER: FRAGMENT-SIDE - only the lit shader path uses it. Engine-free as it stands, so it would
+// compile in a compute shader, but nothing guarantees that: it is free to take a URP dependency.
+// Anything compute must be able to include belongs in the COMMON set instead (see BufferGiField.hlsl).
+
 #include "Math.hlsl"
 
 // `lit` is a 0..1 visibility factor - fp16 is ample for it and it is what every consumer

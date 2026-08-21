@@ -1,5 +1,9 @@
+
 #ifndef LOTECSOFTWARE_VOXEL_DIRECT_LIGHTING_INCLUDED
 #define LOTECSOFTWARE_VOXEL_DIRECT_LIGHTING_INCLUDED
+
+// LAYER: ENGINE-COUPLED - vertex/fragment only. Uses URP Lighting.hlsl's Light type, so the
+// including shader must have included Lighting.hlsl first. Do NOT include from a compute shader.
 
 // Surface lighting module: direct lighting (sun + local point/spot lights) and the selectable
 // shadow source (SDF / bitmask / occlusion field). Self-contained - it includes every shadow

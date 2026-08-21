@@ -1,5 +1,10 @@
+
 #ifndef LOTECSOFTWARE_VOXEL_SDF_SHADOWS_INCLUDED
 #define LOTECSOFTWARE_VOXEL_SDF_SHADOWS_INCLUDED
+
+// LAYER: FRAGMENT-SIDE - only the lit shader path uses it. Engine-free as it stands, so it would
+// compile in a compute shader, but nothing guarantees that: it is free to take a URP dependency.
+// Anything compute must be able to include belongs in the COMMON set instead (see BufferGiField.hlsl).
 
 // SDF raymarch shadow with 64-bit bitmask occlusion optimization.
 // Expects an SDF stored in a 3D texture in world units (signed distance).

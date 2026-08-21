@@ -1,6 +1,10 @@
 #ifndef LOTEC_VOLUME_INCLUDED
 #define LOTEC_VOLUME_INCLUDED
 
+// LAYER: FRAGMENT-SIDE - only the lit shader path uses it. Engine-free as it stands, so it would
+// compile in a compute shader, but nothing guarantees that: it is free to take a URP dependency.
+// Anything compute must be able to include belongs in the COMMON set instead (see BufferGiField.hlsl).
+
 // Universal volume space: the active volume's world-space AABB and the world->[0,1] UVW
 // mapping that every feature (shadows, occlusion, GI) and both stages (fragment + compute)
 // share. Published by the active VoxelVolume. No textures or stage-specific uniforms here -

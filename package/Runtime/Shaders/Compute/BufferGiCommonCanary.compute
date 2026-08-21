@@ -1,0 +1,37 @@
+// COMPILE-TIME GUARD for the COMMON include layer. It renders nothing and is never dispatched.
+//
+// The rule it enforces: a header marked "LAYER: COMMON" must stay includable from a compute shader,
+// which means HLSL intrinsics only - no URP headers, no vertex/fragment semantics, no Core.hlsl
+// texture macros (TEXTURE2D/TEXTURE3D/SAMPLER), no Light type.
+//
+// Why a shader and not a comment. Those headers carry the data layout that BOTH the fragment read
+// and the two compute shaders agree on, so the pressure to reach for a URP helper while editing them
+// is real - and the failure is delayed and confusing: the fragment path keeps compiling (it includes
+// Core.hlsl first), and only a compute shader breaks, at whatever unrelated moment someone next
+// touches it. This file fails immediately, in the same reimport as the edit that caused it.
+//
+// If this stops compiling: do not "fix" it by including a URP header here. Either move the engine
+// dependency out of the COMMON header, or move that header out of the COMMON layer and update its
+// LAYER banner. Adding an include to this file defeats the entire point of it.
+//
+// Cost: one near-empty kernel. Keep it that way - it is a linker test, not a place for logic.
+#pragma kernel CSCommonCanary
+
+#include "../Includes/BufferGiField.hlsl"
+#include "../Includes/Math.hlsl"
+#include "../Includes/BufferGiVoxelData.hlsl"
+
+// One tiny sink so the includes cannot be dead-stripped before they are compiled. Reads one element
+// of each shared buffer and one helper from each header, then writes a value the driver cannot fold
+// away. Never dispatched, so the contents only have to be VALID, not meaningful.
+RWStructuredBuffer<uint> _CanarySink;
+
+[numthreads(1, 1, 1)]
+void CSCommonCanary(uint3 id : SV_DispatchThreadID)
+{
+    uint slot = BgiSlot(uint3(0, 0, 0));                 // BufferGiField.hlsl: index math
+    uint packed = BgiPackSurfaceNormal(float3(0, 1, 0)); // BufferGiField.hlsl: pack helpers
+    bool solid = BgiSolidBit(slot);                      // BufferGiVoxelData.hlsl: shared buffers
+    float lum = GetRec709Luminance(float3(1, 1, 1));     // Math.hlsl
+    _CanarySink[0] = packed + (solid ? 1u : 0u) + (uint)lum + _Material[0] + _Surface[0];
+}

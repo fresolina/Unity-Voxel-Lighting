@@ -1,6 +1,10 @@
 #ifndef LOTEC_VOXEL_OCCLUSION_INCLUDED
 #define LOTEC_VOXEL_OCCLUSION_INCLUDED
 
+// LAYER: ENGINE-COUPLED - vertex/fragment only. Uses the URP Core.hlsl texture macros
+// (TEXTURE3D / SAMPLER), so the including shader must have included Core.hlsl first.
+// Do NOT include from a compute shader.
+
 // Baked directional occlusion shadow sources, read by the buffer-GI per-field shadow modes
 // (BgiSampleFaceAoShadow):
 //   GetBitmaskShadow   -> per-voxel directional bitmask (one point fetch, hard voxel edges)
