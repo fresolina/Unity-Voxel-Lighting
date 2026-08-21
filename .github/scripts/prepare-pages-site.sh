@@ -49,4 +49,17 @@ elif [ -n "$PREVIEW_LABEL" ]; then
     printf '%s\n' "$PREVIEW_LABEL" > "$SITE_PATH/$PUBLISH_PATH/.preview-label"
 fi
 
+# The levels are NOT in the player: Playground and Sponza are Addressable groups on the Remote path,
+# fetched at runtime (Build Settings ships Bootstrap alone). Publish the content this build was packed
+# against right next to the build, so a preview and a release never share - and so never silently
+# overwrite - each other's levels. RemoteContentBuild pointed the player's Remote.LoadPath here.
+REMOTE_CONTENT_PATH="$PROJECT_PATH/ServerData/WebGL"
+if [ ! -d "$REMOTE_CONTENT_PATH" ]; then
+    echo "No packed remote content at '$REMOTE_CONTENT_PATH'." >&2
+    echo "The player would load no levels at all, so refuse to publish it." >&2
+    exit 1
+fi
+mkdir -p "$SITE_PATH/$PUBLISH_PATH/ServerData/WebGL"
+rsync -a --delete "$REMOTE_CONTENT_PATH/" "$SITE_PATH/$PUBLISH_PATH/ServerData/WebGL/"
+
 bash .github/scripts/render-pages-index.sh

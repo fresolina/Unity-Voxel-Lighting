@@ -93,3 +93,9 @@ Assets/_Samples*
 !/ProjectSettings/EditorBuildSettings.asset
 !/ProjectSettings/GraphicsSettings.asset
 !/ProjectSettings/ProjectVersion.txt
+
+# Written by the webgl-pages workflow so RemoteContentBuild can set Remote.LoadPath.
+/remote-load-path.txt
+
+# Addressables content output (published next to each build by CI).
+/ServerData/
