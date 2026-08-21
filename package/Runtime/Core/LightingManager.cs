@@ -54,6 +54,8 @@ namespace Lotec.Lighting {
             // closest (for a level that holds several volumes, e.g. adjacent rooms).
             if (_autoSwitchToClosestVolume)
                 SwitchToClosestVolume();
+            else if (_volume == null)
+                AdoptAnyRegisteredVolume();
             if (Application.isPlaying || _updateInEditor)
                 PublishActiveVolume();
         }
@@ -63,6 +65,26 @@ namespace Lotec.Lighting {
         void PublishActiveVolume() {
             if (Volume != null)
                 Volume.ApplyShaderGlobals();
+        }
+
+        // With auto-switching OFF nothing else picks a volume: _volume is deliberately not
+        // serialized (it is a runtime override), so it starts null and stays null until someone
+        // calls SetActiveVolume. A null active volume does not just disable the fine field - it
+        // takes the COARSE one with it, because BufferGiUpdater resolves its BufferGiFields FROM
+        // the active volume (BufferGiFields.Find searches that volume's scene). No volume means no
+        // fields, so HasCoarse is false and the level-wide GI is never set up at all.
+        //
+        // Which volume hardly matters here: Find returns the first BufferGiFields in the volume's
+        // SCENE, so every volume in one level resolves the same fields and therefore the same
+        // coarse field. Auto-switching only decides which FINE volume wins; this just makes sure a
+        // level that never switches still has one.
+        void AdoptAnyRegisteredVolume() {
+            var all = VoxelVolume.All;
+            for (int i = 0; i < all.Count; i++) {
+                if (all[i] == null) continue;
+                SetActiveVolume(all[i]);
+                return;
+            }
         }
 
         void SwitchToClosestVolume() {
