@@ -1,8 +1,17 @@
 #ifndef LOTEC_TRIANGLE_GRID_TRAVERSAL_INCLUDED
 #define LOTEC_TRIANGLE_GRID_TRAVERSAL_INCLUDED
 
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Shaders/Compute/BufferGiCommonCanary.compute, which includes every header here and fails
+// the moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
 // Exact ray/voxel queries against the scene triangles, using the CPU-built uniform grid
-// from ExactSdfBake.BuildUniformGrid. Bake-only (lives under Compute/, never compiled into a
+// from ExactSdfBake.BuildUniformGrid. Bake-only (only OcclusionFieldTrace.compute uses it, never a
 // runtime shader variant), so correctness beats speed everywhere in here.
 //
 // Why this exists: sphere-tracing an SDF answers "does this ray hit geometry" only
@@ -10,7 +19,7 @@
 // distance at convex edges, so rays tunnel through. Offline there is no reason to accept that;
 // the grid reduces a ray to a handful of triangle tests, so the exact answer is affordable.
 
-#include "../Includes/Math.hlsl"
+#include "Math.hlsl"
 
 // Uniform grid over the bake bounds, CSR layout (see ExactSdfBake.BuildUniformGrid).
 // NOTE: the grid is sized to ~1 triangle per cell and is UNRELATED to the field's voxel

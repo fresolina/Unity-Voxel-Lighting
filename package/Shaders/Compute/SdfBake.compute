@@ -1,7 +1,7 @@
 #pragma kernel CSMain
 #pragma target 5.0
 
-#include "../Includes/Math.hlsl"
+#include "../../ShaderLibrary/Math.hlsl"
 
 // 3D SDF Bake from triangles
 

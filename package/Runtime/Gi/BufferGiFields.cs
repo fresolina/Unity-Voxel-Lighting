@@ -52,6 +52,54 @@ namespace Lotec.Lighting {
             return null;
         }
 
+        /// <summary>
+        /// The volume to make active when nothing else has chosen one (see LightingManager's
+        /// adoption path, used when auto-switch-to-closest is off).
+        ///
+        /// The COARSE field is deliberately never a candidate: it is a bare scene-covering
+        /// <see cref="MeshBounds"/> with no <see cref="VoxelVolume"/> on it, so it never registers
+        /// and can never be "the active volume". It does not need to be - the coarse field is reached
+        /// THROUGH whichever volume is active, because that volume's scene is how the updater finds
+        /// this component at all (see <see cref="Find"/>). Adopting any detailed field here is what
+        /// makes the coarse one available.
+        ///
+        /// Prefers a field that actually has a disk bake, so a level that never switches loads its
+        /// bake instead of silently voxelizing at runtime; falls back to the first detailed field
+        /// with a volume when nothing is baked yet.
+        /// </summary>
+        public VoxelVolume FallbackVolume {
+            get {
+                VoxelVolume firstWithVolume = null;
+                for (int i = 0; i < _detailedFields.Count; i++) {
+                    MeshBounds field = _detailedFields[i];
+                    if (field == null) continue;
+                    // Every detailed field is authored to sit on a GameObject that also carries the
+                    // VoxelVolume whose padded bounds are the runtime fine grid.
+                    VoxelVolume volume = field.GetComponent<VoxelVolume>();
+                    if (volume == null) continue;
+                    if (firstWithVolume == null) firstWithVolume = volume;
+                    if (HasBakeFor(volume)) return volume;
+                }
+                return firstWithVolume;
+            }
+        }
+
+        /// <summary>Whether a non-coarse bake in this level was rasterized against this volume's grid.</summary>
+        bool HasBakeFor(VoxelVolume volume) {
+            Bounds bounds = volume.Bounds;
+            for (int i = 0; i < _bakeAssets.Count; i++) {
+                BufferGiBakeAsset asset = _bakeAssets[i];
+                if (asset == null || asset.isCoarse) continue;
+                if (asset.MatchesBounds(bounds.min, bounds.size)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>The provider for whichever level is loaded, when no volume is active yet to resolve
+        /// it from. Returns null with no level loaded.</summary>
+        public static BufferGiFields FindAny() =>
+            FindFirstObjectByType<BufferGiFields>(FindObjectsInactive.Include);
+
         // Editor: prefill the detailed-field list with every MeshBounds in the scene except the coarse
         // one, so a freshly added component already lists the fine fields to bake.
         void Reset() {

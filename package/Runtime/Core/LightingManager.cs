@@ -54,6 +54,8 @@ namespace Lotec.Lighting {
             // closest (for a level that holds several volumes, e.g. adjacent rooms).
             if (_autoSwitchToClosestVolume)
                 SwitchToClosestVolume();
+            else if (_volume == null)
+                AdoptFallbackVolume();
             if (Application.isPlaying || _updateInEditor)
                 PublishActiveVolume();
         }
@@ -63,6 +65,37 @@ namespace Lotec.Lighting {
         void PublishActiveVolume() {
             if (Volume != null)
                 Volume.ApplyShaderGlobals();
+        }
+
+        // With auto-switching OFF nothing else picks a volume: _volume is deliberately not
+        // serialized (it is a runtime override), so it starts null and stays null until someone
+        // calls SetActiveVolume. A null active volume does not just disable the fine field - it
+        // takes the COARSE one with it, because BufferGiUpdater resolves its BufferGiFields FROM
+        // the active volume (BufferGiFields.Find searches that volume's scene). No volume means no
+        // fields, so HasCoarse is false and the level-wide GI is never set up at all.
+        //
+        // The level's BufferGiFields ("Level Settings") decides, because it is the only thing that
+        // knows which fields exist and which of them are actually baked - so a level that never
+        // switches loads its bake instead of silently voxelizing at runtime. Note the COARSE field
+        // is never a candidate: it is a bare MeshBounds with no VoxelVolume, so it never registers
+        // and cannot be "active". It does not need to be - it is reached THROUGH whichever volume is
+        // active, since that volume's scene is how the updater finds the provider at all.
+        //
+        // Falls back to the volume registry when a level has no provider (fine-only, runtime
+        // voxelized), which is the case this manager was already written for.
+        void AdoptFallbackVolume() {
+            BufferGiFields fields = BufferGiFields.FindAny();
+            VoxelVolume preferred = fields != null ? fields.FallbackVolume : null;
+            if (preferred != null) {
+                SetActiveVolume(preferred);
+                return;
+            }
+            var all = VoxelVolume.All;
+            for (int i = 0; i < all.Count; i++) {
+                if (all[i] == null) continue;
+                SetActiveVolume(all[i]);
+                return;
+            }
         }
 
         void SwitchToClosestVolume() {

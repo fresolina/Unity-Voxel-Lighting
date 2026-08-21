@@ -56,10 +56,10 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // Surface lighting: direct + selectable shadow source + SDF AO (pulls its own
             // shadow/AO/volume headers). BufferGi is the runtime GI read (guarded to its variant).
             // Each is self-contained, so these two are all the lit pass needs.
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/VoxelDirectLighting.hlsl"
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/BufferGi.hlsl"
+            #include "Packages/com.lotecsoftware.voxel-lighting/ShaderLibrary/VoxelDirectLighting.hlsl"
+            #include "Packages/com.lotecsoftware.voxel-lighting/ShaderLibrary/BufferGiRead.hlsl"
             // Display-transform tonemap operators (Reinhard / AgX / ACES), selected by the TONEMAP_* keyword.
-            #include "Packages/com.lotecsoftware.voxel-lighting/Runtime/Shaders/Includes/Tonemap.hlsl"
+            #include "Packages/com.lotecsoftware.voxel-lighting/ShaderLibrary/Tonemap.hlsl"
 
             // GI_OFF (default): direct lighting only. GI_VOXEL_BUFFER: the buffer GI read filter
             // (BufferGiUpdater). GI_UNITY: Unity's built-in indirect (SampleSH) - a component-less A/B
@@ -199,9 +199,9 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     half bgiAo, bgiShadow;
                     // Geometric normal, not N: this is a voxel-grid lookup, not a shading term.
                     BgiSampleFaceAoShadow(IN.positionWS, geoN, light.direction, bgiAo, bgiShadow);
-                    half3 lit = GetMainDirectLightingShadow(light, IN.positionWS, N, geoN, albedo, bgiShadow);
+                    half3 lit = GetMainDirectLightingShadow(light.direction, light.color, IN.positionWS, N, geoN, albedo, bgiShadow);
                 #else
-                    half3 lit = GetMainDirectLighting(light, IN.positionWS, N, geoN, albedo);
+                    half3 lit = GetMainDirectLighting(light.direction, light.color, IN.positionWS, N, geoN, albedo);
                 #endif
                 lit += GetPointLightDirect(IN.positionWS, N, geoN, albedo);
                 lit += GetSpotLightDirect(IN.positionWS, N, geoN, albedo);

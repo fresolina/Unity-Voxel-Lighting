@@ -1,5 +1,16 @@
+
 #ifndef LOTECSOFTWARE_VOXEL_SDF_SHADOWS_INCLUDED
 #define LOTECSOFTWARE_VOXEL_SDF_SHADOWS_INCLUDED
+
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Shaders/Compute/BufferGiCommonCanary.compute, which includes every header here and fails
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
 
 // SDF raymarch shadow with 64-bit bitmask occlusion optimization.
 // Expects an SDF stored in a 3D texture in world units (signed distance).

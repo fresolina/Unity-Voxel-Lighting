@@ -1,6 +1,16 @@
 #ifndef LOTEC_VOXEL_OCCLUSION_INCLUDED
 #define LOTEC_VOXEL_OCCLUSION_INCLUDED
 
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Shaders/Compute/BufferGiCommonCanary.compute, which includes every header here and fails
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
+
 // Baked directional occlusion shadow sources, read by the buffer-GI per-field shadow modes
 // (BgiSampleFaceAoShadow):
 //   GetBitmaskShadow   -> per-voxel directional bitmask (one point fetch, hard voxel edges)
@@ -24,7 +34,7 @@ float3 _VoxelResolution; // bitmask grid resolution (as a float vector)
 //   8 dirs  -> R8_UNorm      (8 bits in R channel)
 //   32 dirs -> RG16_UNorm    (32 bits: R,G = low/high 16 bits)
 //   64 dirs -> RGBA16_UNorm  (64 bits: R,G = uint.x low/high, B,A = uint.y low/high)
-TEXTURE3D(_BitmaskTex);
+Texture3D<float4> _BitmaskTex;
 
 // Precomputed nearest Fibonacci direction index for the sun (set from C# each frame).
 int _BitmaskSunFibIndex;
@@ -101,10 +111,10 @@ float _OccFieldBlend;
 float _OccFieldDecode;
 
 // Active occlusion field textures (bound per-frame to the textures holding the two nearest directions).
-TEXTURE3D(_OccFieldTex);
-SAMPLER(sampler_OccFieldTex);
-TEXTURE3D(_OccFieldTexB);
-SAMPLER(sampler_OccFieldTexB);
+Texture3D<float4> _OccFieldTex;
+SamplerState sampler_OccFieldTex;
+Texture3D<float4> _OccFieldTexB;
+SamplerState sampler_OccFieldTexB;
 
 // Sample the occlusion field shadow using the precomputed sun direction.
 // Returns 0.0 (shadow) to 1.0 (lit). The fetch narrows to fp16 immediately; only the uvw lookup

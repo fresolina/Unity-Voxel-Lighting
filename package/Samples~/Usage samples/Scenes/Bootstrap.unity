@@ -136,7 +136,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &333063935
 Transform:
   m_ObjectHideFlags: 0
@@ -475,8 +475,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1200926430}
   serializedVersion: 2
-  m_LocalRotation: {x: -0.004561381, y: 0.9948294, z: 0.0870363, w: 0.05213682}
-  m_LocalPosition: {x: -1.15, y: 2, z: 8}
+  m_LocalRotation: {x: 0, y: 1, z: 0, w: -0.00000004371139}
+  m_LocalPosition: {x: 0, y: -4.11, z: 8}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -677,26 +677,29 @@ MonoBehaviour:
   _giFireflyClamp: 8
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
   _reachBoost: 1
-  _bakedNormals: 1
+  _thickenWalls: 0
   _aoStrength: 0
   _fineShadow: 1
   _coarseShadow: 1
   _sunShadowSampling: 1
   _sunShadowSamples: 4
   _bakedShadowSharpness: 1.5
-  _blurSunVisibility: 1
-  _shadowNormalOffset: 1
-  _radianceDirections: 6
+  _blurSunVisibility: 0
+  _shadowNormalOffset: 0.5
+  _radianceDirections: 1
+  _singleTapFilter: 0
+  _muteDirectLighting: 0
   _exposureControl:
     _tonemap: 2
-    _exposure: 0
-    _auto: 1
+    _exposure: 0.2
+    _auto: 0
     _min: -2
     _max: 2
     _adaptationSpeed: 2
     _measureRadius: 3
   _giResolution: 32
-  _computeShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
+  _solveShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
+  _bakeShader: {fileID: 7200000, guid: 0dffdcf5447441444a9650246af88950, type: 3}
   _voxelizeShader: {fileID: 4800000, guid: fb19bf6e7b7d7e24bb740879f668a9bd, type: 3}
 --- !u!114 &1437948854
 MonoBehaviour:
@@ -757,7 +760,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1500960146}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 98fca1dd38e7de247b9754d844d4b193, type: 3}
   m_Name: 

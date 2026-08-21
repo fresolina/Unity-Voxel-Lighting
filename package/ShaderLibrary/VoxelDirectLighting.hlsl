@@ -1,13 +1,26 @@
+
 #ifndef LOTECSOFTWARE_VOXEL_DIRECT_LIGHTING_INCLUDED
 #define LOTECSOFTWARE_VOXEL_DIRECT_LIGHTING_INCLUDED
+
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Shaders/Compute/BufferGiCommonCanary.compute, which includes every header here and fails
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
 
 // Surface lighting module: direct lighting (sun + local point/spot lights) and the selectable
 // shadow source (SDF / bitmask / occlusion field). Self-contained - it includes every shadow
 // header it dispatches to, so the lit shader only needs this.
-// Assumes the including shader has already included URP Lighting.hlsl (for the Light type).
+// Needs no URP header of its own: the caller resolves the light (GetMainLight in a URP shader) and
+// passes its direction and colour in.
 
 #include "VoxelSdfShadows.hlsl" // GetShadowFromSdf (the shadow source for this path)
 #include "VoxelOcclusion.hlsl"  // GetBitmaskShadow / GetOccFieldShadow - buffer-GI per-field shadow
+#include "Math.hlsl"           // GetLightRangeAttenuation, shared with the GI solve
                                 // sources; also keeps their globals declared in every variant (WebGPU-safe)
 
 #ifndef MAX_POINT_LIGHTS
@@ -70,21 +83,6 @@ inline half GetShadow(float3 worldPos, float3 lightDir, float3 normal, float max
     #endif
 }
 
-// Returns an fp16 attenuation. The two divides stay fp32 because their inputs are squared world
-// distances (rangeSq for a long-range light overflows fp16), but the resulting ratio, the window
-// and the final product are all small unitless values that belong in fp16.
-inline half GetLocalLightRangeAttenuation(float distSq, float rangeSq) {
-    // Inverse-square distance falloff (physical light intensity) with URP's range window:
-    // saturate(1 - (d^2/r^2)^2)^2, the same smoothing Unity's lightmapper uses. Squaring the FACTOR
-    // is what keeps the light at full strength through most of its range and does the fade near the
-    // edge; without it (a plain 1 - d^2/r^2 window) the same light reads 36% dimmer at half range
-    // than it would on a URP/Lit surface. The extra multiply is free next to the shadow march.
-    half distanceAtten = (half)rcp(max(distSq, 0.01));
-    half factor = (half)(distSq / max(rangeSq, 1e-6));
-    half rangeFade = saturate(1.0h - factor * factor);
-    return distanceAtten * rangeFade * rangeFade;
-}
-
 // GEOMETRIC GATE. N.L uses the normal-MAPPED normal, as every renderer does - but on a surface whose
 // real (vertex) normal points away from the light, a normal map can still tilt individual texels back
 // toward it and light them at full strength. In a shadow-mapped pipeline that never shows, because
@@ -134,18 +132,21 @@ inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 geoNormal, h
     return albedo * lightColor * (ndotl * gate * shadow * attenuation);
 }
 
-inline half3 GetMainDirectLighting(Light light, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo) {
-    return GetDirectLighting(worldPos, normal, geoNormal, albedo, light.direction, light.color, 1.0h);
+// Takes the light DIRECTION and COLOR rather than URP's Light struct. Those two fields were the only
+// thing this header ever read from it, and taking them plainly is what keeps the whole shader library
+// engine-agnostic: only the .shader entry points call GetMainLight() and know URP exists.
+inline half3 GetMainDirectLighting(half3 lightDir, half3 lightColor, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo) {
+    return GetDirectLighting(worldPos, normal, geoNormal, albedo, lightDir, lightColor, 1.0h);
 }
 
 // Main directional light with an externally-resolved shadow term - used by the buffer-GI path, which
 // computes the baked sun visibility together with the baked AO in a single face read
 // (BgiSampleFaceAoShadow) and passes it in here, so the shadow is not resolved again via GetShadow.
-inline half3 GetMainDirectLightingShadow(Light light, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo, half shadow) {
-    half ndotl = saturate(dot(normal, (half3)light.direction)); // URP hands back a unit direction
+inline half3 GetMainDirectLightingShadow(half3 lightDir, half3 lightColor, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo, half shadow) {
+    half ndotl = saturate(dot(normal, lightDir)); // callers hand back a unit direction
     if (ndotl <= 0.0h)
         return 0.0h;
-    return albedo * light.color * (ndotl * GetGeometricGate(geoNormal, light.direction) * shadow);
+    return albedo * lightColor * (ndotl * GetGeometricGate(geoNormal, lightDir) * shadow);
 }
 
 inline half3 GetPointLightDirect(float3 worldPos, half3 normal, half3 geoNormal, half3 albedo) {
@@ -167,7 +168,7 @@ inline half3 GetPointLightDirect(float3 worldPos, half3 normal, half3 geoNormal,
         float invDistance = rsqrt(surfaceDistSq);
         float distanceToLight = surfaceDistSq * invDistance;
         float3 lightDir = toLight * invDistance; // already unit - GetDirectLighting does not re-normalize
-        half attenuation = GetLocalLightRangeAttenuation(surfaceDistSq, rangeSq);
+        half attenuation = GetLightRangeAttenuation(surfaceDistSq, rangeSq);
         totalLight += GetDirectLighting(worldPos, normal, geoNormal, albedo, lightDir, (half3)_PointLightColor[lightIndex].rgb, attenuation, distanceToLight);
     }
 
@@ -201,7 +202,7 @@ inline half3 GetSpotLightDirect(float3 worldPos, half3 normal, half3 geoNormal, 
         if (coneAttenuation <= 0.0h)
             continue;
 
-        half attenuation = GetLocalLightRangeAttenuation(surfaceDistSq, rangeSq) * (coneAttenuation * coneAttenuation);
+        half attenuation = GetLightRangeAttenuation(surfaceDistSq, rangeSq) * (coneAttenuation * coneAttenuation);
         totalLight += GetDirectLighting(worldPos, normal, geoNormal, albedo, lightDir, (half3)colorAngleOffset.rgb, attenuation, distanceToLight);
     }
 

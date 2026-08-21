@@ -2,6 +2,16 @@
 #ifndef LOTEC_MATH_INCLUDED
 #define LOTEC_MATH_INCLUDED
 
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Shaders/Compute/BufferGiCommonCanary.compute, which includes every header here and fails
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
+
 #define EMISSION_INTENSITY_MAX 1024.0
 
 static const float LOTEC_MATH_PI = 3.14159265f;
@@ -167,6 +177,29 @@ float DecodeEmissionIntensityFrom8Bit(float encodedIntensity) {
 }
 
 // Generates a value 0.0 -> 1.0 that is spatially balanced
+// Distance/range attenuation for a point or spot light. ONE of the two terms a spot needs - the cone
+// term is separate and multiplied on by the caller, which is why this keeps "Range" in the name.
+//
+// Inverse-square distance falloff (physical light intensity) with URP's range window:
+// saturate(1 - (d^2/r^2)^2)^2, the same smoothing Unity's lightmapper uses. Squaring the FACTOR is
+// what keeps the light at full strength through most of its range and does the fade near the edge;
+// without it (a plain 1 - d^2/r^2 window) the same light reads 36% dimmer at half range than it
+// would on a URP/Lit surface.
+//
+// Returns an fp16 attenuation. The two divides stay fp32 because their inputs are squared world
+// distances (rangeSq for a long-range light overflows fp16), but the resulting ratio, the window and
+// the final product are all small unitless values that belong in fp16.
+//
+// Lives here, in the shared math, because the fragment lighting and the GI solve MUST agree: a
+// light's bounce is only correct if it falls off exactly like the direct light that casts it. The two
+// used to hold line-for-line identical private copies, fed from one place in C# and free to drift.
+inline half GetLightRangeAttenuation(float distSq, float rangeSq) {
+    half distanceAtten = (half)rcp(max(distSq, 0.01));
+    half factor = (half)(distSq / max(rangeSq, 1e-6));
+    half rangeFade = saturate(1.0h - factor * factor);
+    return distanceAtten * rangeFade * rangeFade;
+}
+
 float GetIGN(float3 position, int frame) {
     float3 p = position + float(frame) * 5.588238f;
     return frac(52.9829189f * frac(0.06711056f * p.x + 0.00583715f * p.y + 0.0123456f * p.z));

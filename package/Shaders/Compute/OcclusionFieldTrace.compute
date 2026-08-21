@@ -22,7 +22,7 @@
 // every voxel resolves to a hard 0 or 1 and trilinear interpolation just makes blocky shadows with
 // soft corners. So Even is deterministic in the light's disc, not in the voxel.
 
-#include "TriangleGridTraversal.hlsl"
+#include "../../ShaderLibrary/TriangleGridTraversal.hlsl"
 
 float3 _BoundsSize;
 int3 _Resolution;

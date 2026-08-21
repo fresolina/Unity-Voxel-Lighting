@@ -2,6 +2,16 @@
 #ifndef LOTEC_TONEMAP_INCLUDED
 #define LOTEC_TONEMAP_INCLUDED
 
+// ENGINE-AGNOSTIC, like every header in this folder: HLSL intrinsics and our own headers only. No
+// URP includes, no vertex/fragment semantics, no Core.hlsl texture macros. That means any of these
+// can be included from a fragment shader, a compute shader or the voxelize raster alike.
+//
+// The engine boundary is the .shader / .compute ENTRY POINTS. VoxelLit.shader includes URP's
+// Core.hlsl and Lighting.hlsl and calls GetMainLight(), then hands this library plain values.
+// Guarded by Shaders/Compute/BufferGiCommonCanary.compute, which includes every header here and fails
+// moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
+
+
 // Display-transform tonemap operators for the lit shader. Each takes linear HDR and returns a
 // linear value (the render pipeline applies the sRGB OETF on write), so they are interchangeable
 // in the display-transform block. The lit shader selects one at COMPILE time (TONEMAP_* keyword) -

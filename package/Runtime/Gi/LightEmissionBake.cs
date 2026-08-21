@@ -24,7 +24,7 @@ namespace Lotec.Lighting {
     /// passes, so the light voxel comes out solid + emissive like any other emitter.
     /// </summary>
     public static class LightEmissionBake {
-        // Voxels lit per dispatch; longer lists are batched. Matches MAX_BAKED_LIGHTS in BufferGi.compute.
+        // Voxels lit per dispatch; longer lists are batched. Matches MAX_BAKED_LIGHTS in BufferGiSolve.compute.
         const int MaxPerDispatch = 16;
 
         static readonly int s_bakedLightCount = Shader.PropertyToID("_BakedLightCount");
