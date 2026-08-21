@@ -692,6 +692,11 @@ namespace Lotec.Lighting {
                 "     nothing, occupancy stays empty, and the solve runs to completion producing no light\n" +
                 $"  keyword {LightingKeywords.GiBuffer}={keyword}   <- false means the lit shader is " +
                 "compiling its GI_OFF variant, so nothing this updater publishes can be read\n" +
+                $"  bound buffers _Occupancy={(_occupancyBuffer != null && _occupancyBuffer.IsValid() ? "valid" : "NULL/INVALID")} " +
+                $"_Surface={(_surfaceBuffer != null && _surfaceBuffer.IsValid() ? "valid" : "NULL/INVALID")}\n" +
+                "     <- on WebGPU these two MUST be bound whenever GI_VOXEL_BUFFER is claimed: the driver\n" +
+                "        validates every declared global against the pipeline layout and FAILS PIPELINE\n" +
+                "        CREATION for a variant declaring them while unbound, which renders the object BLACK\n" +
                 $"  irradianceTex fine={(_irradianceTex != null ? _irradianceTex.name + " created=" + _irradianceTex.IsCreated() : "NULL")} " +
                 $"coarse={(_irradianceTexCoarse != null ? _irradianceTexCoarse.name + " created=" + _irradianceTexCoarse.IsCreated() : "NULL")}\n" +
                 $"  solveShader={(_solveShader != null ? _solveShader.name : "NULL")} " +
@@ -993,8 +998,35 @@ namespace Lotec.Lighting {
             p.z >= origin.z && p.z <= origin.z + size.z;
 
         // Publish the buffers + grid mapping + confidence the lit shader's BgiGatherIndirect reads.
+        bool _warnedUnboundWhileClaimed;
+
+        /// <summary>
+        /// The one combination WebGPU turns into a black screen: GI_VOXEL_BUFFER claimed - so the lit
+        /// shader compiles the variant that DECLARES _Occupancy / _Surface - while those buffers are
+        /// not actually bound. The driver validates declared globals against the pipeline layout and
+        /// fails pipeline creation outright; D3D11 and Vulkan tolerate it, so this only ever shows up
+        /// in a browser build, and it shows up as unlit geometry rather than as an error.
+        ///
+        /// Cheap enough to check every frame (two null tests), warns once, and names the fix.
+        /// </summary>
+        void WarnIfClaimedWithoutBuffers() {
+            if (_warnedUnboundWhileClaimed) return;
+            bool bound = _occupancyBuffer != null && _occupancyBuffer.IsValid()
+                      && _surfaceBuffer != null && _surfaceBuffer.IsValid();
+            if (bound || !Shader.IsKeywordEnabled(LightingKeywords.GiBuffer)) return;
+            _warnedUnboundWhileClaimed = true;
+            Debug.LogError(
+                $"Buffer GI: {LightingKeywords.GiBuffer} is claimed but _Occupancy/_Surface are not bound " +
+                "(occupancy=" + (_occupancyBuffer == null ? "null" : _occupancyBuffer.IsValid() ? "valid" : "released") +
+                ", surface=" + (_surfaceBuffer == null ? "null" : _surfaceBuffer.IsValid() ? "valid" : "released") + "). " +
+                "On WebGPU that fails pipeline creation for every VoxelLit material and renders them BLACK. " +
+                "Either the buffers were released while the keyword stayed claimed, or SetGlobals never ran.",
+                this);
+        }
+
         void SetGlobals() {
             LogEnvironmentOnce();
+            WarnIfClaimedWithoutBuffers();
             // Grid resolution constants for the fragment index math (shared by both fields).
             Shader.SetGlobalInt(s_bgiGrid, _grid);
             Shader.SetGlobalInt(s_bgiGridLog2, _gridLog2);
