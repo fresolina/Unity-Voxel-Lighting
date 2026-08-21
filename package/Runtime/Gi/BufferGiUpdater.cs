@@ -239,6 +239,10 @@ namespace Lotec.Lighting {
                  "clamped 4..256; a change reallocates the buffers and re-bakes.")]
         [Min(4)][SerializeField] int _giResolution = 32;
         [SerializeField] ComputeShader _computeShader;
+        [Tooltip("BufferGiBake.compute - the bake-time derive passes (occupancy, surface word, air " +
+                 "distance, baked lights). Kept separate from the solve shader so that what runs PER " +
+                 "FRAME is a property of the file, not of a comment. Auto-resolved by name when empty.")]
+        [SerializeField] ComputeShader _bakeShader;
         [Tooltip("Shader 'Hidden/Lotec/BufferGiVoxelize' - GPU 3-axis rasterizer that voxelizes " +
                  "scene meshes into the occupancy/albedo buffer.")]
         [SerializeField] Shader _voxelizeShader;
@@ -746,18 +750,62 @@ namespace Lotec.Lighting {
             _collectedSamples = 0;
         }
 
-        // Publish the grid resolution constants to the compute shader (the shader's BgiIndex/BgiCoord/
+        // Publish the grid resolution constants to the compute shaders (their BgiIndex/BgiCoord/
         // occupancy math reads them). They only change when the grid does, but re-setting each frame is
-        // cheap and keeps the shared _computeShader asset in sync regardless of dispatch ordering.
+        // cheap and keeps the shader assets in sync regardless of dispatch ordering.
+        //
+        // BOTH shaders, always. Uniforms are per-ComputeShader, so a bake kernel that never got these
+        // would read BGI_COUNT as 0 and early-out on every thread - an empty field, silently, with no
+        // error anywhere. That is the one way the solve/bake split can break, so it is handled in one
+        // place and neither caller gets to choose.
         void BindGridConstantsToCompute() {
-            if (_computeShader == null) return;
-            _computeShader.SetInt(s_bgiGrid, _grid);
-            _computeShader.SetInt(s_bgiGridLog2, _gridLog2);
-            _computeShader.SetInt(s_bgiCount, _voxelCount);
+            BindGridConstants(_computeShader);
+            BindGridConstants(_bakeShader);
+        }
+
+        // The bake shader is a second asset, so an existing prefab/scene has an empty reference for it.
+        // Resolve it BY NAME rather than by path: the project already does this for the SDF bakers
+        // (VoxelBakerBase.FindComputeShaderByExactName), and a name lookup survives the file being
+        // moved or the package folder layout changing. Editor-only, and the result is serialized, so a
+        // build gets the reference without the user ever touching the inspector.
+        void ResolveBakeShader() {
+#if UNITY_EDITOR
+            if (_bakeShader != null) return;
+            foreach (string guid in UnityEditor.AssetDatabase.FindAssets("BufferGiBake t:ComputeShader")) {
+                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guid);
+                // FindAssets substring-matches, so filter to the exact file name.
+                if (System.IO.Path.GetFileNameWithoutExtension(path) != "BufferGiBake") continue;
+                _bakeShader = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                if (_bakeShader != null) UnityEditor.EditorUtility.SetDirty(this);
+                return;
+            }
+#endif
+        }
+
+        // FindKernel THROWS on a missing kernel, which after a solve/bake split is the likeliest
+        // mistake (a kernel left in, or moved to, the wrong file). Name both the shader and the kernel
+        // instead, and return -1 so the existing `< 0` guards skip the dispatch.
+        int RequireKernel(ComputeShader cs, string kernel) {
+            if (cs == null) {
+                Debug.LogError($"Buffer GI: no compute shader assigned for kernel '{kernel}'.", this);
+                return -1;
+            }
+            if (!cs.HasKernel(kernel)) {
+                Debug.LogError($"Buffer GI: '{cs.name}' has no kernel '{kernel}'.", this);
+                return -1;
+            }
+            return cs.FindKernel(kernel);
+        }
+
+        void BindGridConstants(ComputeShader cs) {
+            if (cs == null) return;
+            cs.SetInt(s_bgiGrid, _grid);
+            cs.SetInt(s_bgiGridLog2, _gridLog2);
+            cs.SetInt(s_bgiCount, _voxelCount);
             // Radiance stride. Bound alongside the grid constants because BgiRadianceSlot's index math
             // depends on it exactly the way BgiIndex depends on the grid.
-            _computeShader.SetInt(s_bgiRadianceDirs, _allocatedRadianceSlots);
-            _computeShader.SetInt(s_bgiIrradianceDirs, _allocatedIrradianceSlots);
+            cs.SetInt(s_bgiRadianceDirs, _allocatedRadianceSlots);
+            cs.SetInt(s_bgiIrradianceDirs, _allocatedIrradianceSlots);
         }
 
         void Update() {
@@ -1005,17 +1053,19 @@ namespace Lotec.Lighting {
             }
             ReleaseBuffers();
 
-            _clearKernel = _computeShader.FindKernel("CSClear");
-            _injectKernel = _computeShader.FindKernel("CSInject");
-            _gatherKernel = _computeShader.FindKernel("CSGather");
-            _blurKernel = _computeShader.FindKernel("CSBlur");
-            _initFineKernel = _computeShader.FindKernel("CSInitFineFromCoarse");
-            _averageLuminanceKernel = _computeShader.FindKernel("CSAverageLuminance");
-            _buildOccupancyKernel = _computeShader.FindKernel("CSBuildOccupancy");
-            _buildNormalOccupancyKernel = _computeShader.FindKernel("CSBuildNormalOccupancy");
-            _buildSurfaceKernel = _computeShader.FindKernel("CSBuildSurface");
-            _buildAirDistanceKernel = _computeShader.FindKernel("CSBuildAirDistance");
-            _injectBakedLightsKernel = _computeShader.FindKernel("CSInjectBakedLights");
+            ResolveBakeShader();
+
+            _clearKernel = RequireKernel(_computeShader, "CSClear");
+            _injectKernel = RequireKernel(_computeShader, "CSInject");
+            _gatherKernel = RequireKernel(_computeShader, "CSGather");
+            _blurKernel = RequireKernel(_computeShader, "CSBlur");
+            _initFineKernel = RequireKernel(_computeShader, "CSInitFineFromCoarse");
+            _averageLuminanceKernel = RequireKernel(_computeShader, "CSAverageLuminance");
+            _buildOccupancyKernel = RequireKernel(_bakeShader, "CSBuildOccupancy");
+            _buildNormalOccupancyKernel = RequireKernel(_bakeShader, "CSBuildNormalOccupancy");
+            _buildSurfaceKernel = RequireKernel(_bakeShader, "CSBuildSurface");
+            _buildAirDistanceKernel = RequireKernel(_bakeShader, "CSBuildAirDistance");
+            _injectBakedLightsKernel = RequireKernel(_bakeShader, "CSInjectBakedLights");
 
             // uint material, uint2 radiance/irradiance. Sized for all fields (concatenated slices).
             _materialBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));
@@ -1381,8 +1431,8 @@ namespace Lotec.Lighting {
             // The kernel's BgiSlot index math reads the grid constants, and the editor capture path
             // (CaptureFieldToAsset) never goes through Update - so bind them here rather than assume.
             BindGridConstantsToCompute();
-            _computeShader.SetInt(s_fieldOffset, fieldOffset);
-            LightEmissionBake.Inject(_computeShader, _injectBakedLightsKernel,
+            _bakeShader.SetInt(s_fieldOffset, fieldOffset);
+            LightEmissionBake.Inject(_bakeShader, _injectBakedLightsKernel,
                 _materialBuffer, _surfaceBuffer, _lightHolders, origin, voxelSize, Grid);
         }
 
@@ -1477,10 +1527,10 @@ namespace Lotec.Lighting {
         // one thread per word). Runs first so CSBuildSurface's gradient sees complete occupancy.
         void BuildOccupancy(int fieldOffset) {
             if (_buildOccupancyKernel < 0) return;
-            _computeShader.SetInt(s_fieldOffset, fieldOffset);
-            _computeShader.SetBuffer(_buildOccupancyKernel, s_material, _materialBuffer);
-            _computeShader.SetBuffer(_buildOccupancyKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.Dispatch(_buildOccupancyKernel, Mathf.CeilToInt(VoxelCount / 32f / 64f), 1, 1);
+            _bakeShader.SetInt(s_fieldOffset, fieldOffset);
+            _bakeShader.SetBuffer(_buildOccupancyKernel, s_material, _materialBuffer);
+            _bakeShader.SetBuffer(_buildOccupancyKernel, s_occupancy, _occupancyBuffer);
+            _bakeShader.Dispatch(_buildOccupancyKernel, Mathf.CeilToInt(VoxelCount / 32f / 64f), 1, 1);
         }
 
         // Fill one field's _OccupancyThick: real solids + the cell behind each surfaced voxel, along
@@ -1489,22 +1539,22 @@ namespace Lotec.Lighting {
         // buffer is zeroed once for all fields by the caller - the kernel only ORs bits in.
         void BuildNormalOccupancy(int fieldOffset) {
             if (_buildNormalOccupancyKernel < 0) return;
-            _computeShader.SetInt(s_fieldOffset, fieldOffset);
-            _computeShader.SetBuffer(_buildNormalOccupancyKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_buildNormalOccupancyKernel, s_occupancyThick, _occupancyThickBuffer);
-            _computeShader.SetBuffer(_buildNormalOccupancyKernel, s_surface, _surfaceBuffer);
-            _computeShader.Dispatch(_buildNormalOccupancyKernel, Groups, 1, 1);
+            _bakeShader.SetInt(s_fieldOffset, fieldOffset);
+            _bakeShader.SetBuffer(_buildNormalOccupancyKernel, s_occupancy, _occupancyBuffer);
+            _bakeShader.SetBuffer(_buildNormalOccupancyKernel, s_occupancyThick, _occupancyThickBuffer);
+            _bakeShader.SetBuffer(_buildNormalOccupancyKernel, s_surface, _surfaceBuffer);
+            _bakeShader.Dispatch(_buildNormalOccupancyKernel, Groups, 1, 1);
         }
 
         // Fill one field's _Surface word (per voxel): the gradient normal (gradient mode; mesh mode
         // keeps the voxelizer's) + the static openness/AO (both modes). Future air-distance/flags too.
         void BuildSurface(int fieldOffset) {
             if (_buildSurfaceKernel < 0) return;
-            _computeShader.SetInt(s_fieldOffset, fieldOffset);
-            _computeShader.SetBuffer(_buildSurfaceKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_buildSurfaceKernel, s_occupancyThick, _occupancyThickBuffer);
-            _computeShader.SetBuffer(_buildSurfaceKernel, s_surface, _surfaceBuffer);
-            _computeShader.Dispatch(_buildSurfaceKernel, Groups, 1, 1);
+            _bakeShader.SetInt(s_fieldOffset, fieldOffset);
+            _bakeShader.SetBuffer(_buildSurfaceKernel, s_occupancy, _occupancyBuffer);
+            _bakeShader.SetBuffer(_buildSurfaceKernel, s_occupancyThick, _occupancyThickBuffer);
+            _bakeShader.SetBuffer(_buildSurfaceKernel, s_surface, _surfaceBuffer);
+            _bakeShader.Dispatch(_buildSurfaceKernel, Groups, 1, 1);
         }
 
         // Relax one field's AIR-voxel city-block distance-to-nearest-solid (CSBuildSurface seeded it at
@@ -1512,11 +1562,11 @@ namespace Lotec.Lighting {
         // whole capped field. Feeds the far-air gather skip. Solid voxels are untouched (distance-0 seeds).
         void BuildAirDistance(int fieldOffset) {
             if (_buildAirDistanceKernel < 0) return;
-            _computeShader.SetInt(s_fieldOffset, fieldOffset);
-            _computeShader.SetBuffer(_buildAirDistanceKernel, s_occupancy, _occupancyBuffer);
-            _computeShader.SetBuffer(_buildAirDistanceKernel, s_surface, _surfaceBuffer);
+            _bakeShader.SetInt(s_fieldOffset, fieldOffset);
+            _bakeShader.SetBuffer(_buildAirDistanceKernel, s_occupancy, _occupancyBuffer);
+            _bakeShader.SetBuffer(_buildAirDistanceKernel, s_surface, _surfaceBuffer);
             for (int pass = 0; pass < AirDistancePasses; pass++)
-                _computeShader.Dispatch(_buildAirDistanceKernel, Groups, 1, 1);
+                _bakeShader.Dispatch(_buildAirDistanceKernel, Groups, 1, 1);
         }
 
         // Rasterize a volume's geometry into one field's slice. The voxelize shader reads the grid +
