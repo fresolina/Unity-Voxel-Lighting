@@ -199,9 +199,9 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     half bgiAo, bgiShadow;
                     // Geometric normal, not N: this is a voxel-grid lookup, not a shading term.
                     BgiSampleFaceAoShadow(IN.positionWS, geoN, light.direction, bgiAo, bgiShadow);
-                    half3 lit = GetMainDirectLightingShadow(light, IN.positionWS, N, geoN, albedo, bgiShadow);
+                    half3 lit = GetMainDirectLightingShadow(light.direction, light.color, IN.positionWS, N, geoN, albedo, bgiShadow);
                 #else
-                    half3 lit = GetMainDirectLighting(light, IN.positionWS, N, geoN, albedo);
+                    half3 lit = GetMainDirectLighting(light.direction, light.color, IN.positionWS, N, geoN, albedo);
                 #endif
                 lit += GetPointLightDirect(IN.positionWS, N, geoN, albedo);
                 lit += GetSpotLightDirect(IN.positionWS, N, geoN, albedo);

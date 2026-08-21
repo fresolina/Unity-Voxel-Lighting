@@ -2,13 +2,16 @@
 #ifndef LOTECSOFTWARE_VOXEL_DIRECT_LIGHTING_INCLUDED
 #define LOTECSOFTWARE_VOXEL_DIRECT_LIGHTING_INCLUDED
 
-// LAYER: ENGINE-COUPLED - vertex/fragment only. Uses URP Lighting.hlsl's Light type, so the
-// including shader must have included Lighting.hlsl first. Do NOT include from a compute shader.
+// LAYER: FRAGMENT-SIDE - only the lit shader path uses it. Engine-free: it used to take URP's Light
+// struct, but it only ever read .direction and .color, so it takes those plainly now and no URP header
+// is required. Not promoted to COMMON because it pulls VoxelSdfShadows.hlsl, which promises nothing,
+// and no compute shader needs this today.
 
 // Surface lighting module: direct lighting (sun + local point/spot lights) and the selectable
 // shadow source (SDF / bitmask / occlusion field). Self-contained - it includes every shadow
 // header it dispatches to, so the lit shader only needs this.
-// Assumes the including shader has already included URP Lighting.hlsl (for the Light type).
+// Needs no URP header of its own: the caller resolves the light (GetMainLight in a URP shader) and
+// passes its direction and colour in.
 
 #include "VoxelSdfShadows.hlsl" // GetShadowFromSdf (the shadow source for this path)
 #include "VoxelOcclusion.hlsl"  // GetBitmaskShadow / GetOccFieldShadow - buffer-GI per-field shadow
@@ -138,18 +141,21 @@ inline half3 GetDirectLighting(float3 worldPos, half3 normal, half3 geoNormal, h
     return albedo * lightColor * (ndotl * gate * shadow * attenuation);
 }
 
-inline half3 GetMainDirectLighting(Light light, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo) {
-    return GetDirectLighting(worldPos, normal, geoNormal, albedo, light.direction, light.color, 1.0h);
+// Takes the light DIRECTION and COLOR rather than URP's Light struct. Those two fields were the only
+// thing this header ever read from it, and taking them plainly is what keeps the whole shader library
+// engine-agnostic: only the .shader entry points call GetMainLight() and know URP exists.
+inline half3 GetMainDirectLighting(half3 lightDir, half3 lightColor, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo) {
+    return GetDirectLighting(worldPos, normal, geoNormal, albedo, lightDir, lightColor, 1.0h);
 }
 
 // Main directional light with an externally-resolved shadow term - used by the buffer-GI path, which
 // computes the baked sun visibility together with the baked AO in a single face read
 // (BgiSampleFaceAoShadow) and passes it in here, so the shadow is not resolved again via GetShadow.
-inline half3 GetMainDirectLightingShadow(Light light, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo, half shadow) {
-    half ndotl = saturate(dot(normal, (half3)light.direction)); // URP hands back a unit direction
+inline half3 GetMainDirectLightingShadow(half3 lightDir, half3 lightColor, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo, half shadow) {
+    half ndotl = saturate(dot(normal, lightDir)); // callers hand back a unit direction
     if (ndotl <= 0.0h)
         return 0.0h;
-    return albedo * light.color * (ndotl * GetGeometricGate(geoNormal, light.direction) * shadow);
+    return albedo * lightColor * (ndotl * GetGeometricGate(geoNormal, lightDir) * shadow);
 }
 
 inline half3 GetPointLightDirect(float3 worldPos, half3 normal, half3 geoNormal, half3 albedo) {
