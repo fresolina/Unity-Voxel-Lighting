@@ -82,6 +82,11 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // register pressure. _fragment: the tap is fragment-only, so the vertex variants don't double.
             #pragma multi_compile_fragment __ BGI_TAP_AXIS_SNAPPED
 
+            // ANALYSIS views (BufferGiUpdater.DebugView). Fragment-only and OFF by default, so a
+            // shipping build never compiles the solid-weight walk or its occupancy reads in - see
+            // LightingKeywords.BgiDebug for why this is a keyword and not a branch on the uniform.
+            #pragma multi_compile_fragment __ BGI_DEBUG_VIEWS
+
             // Colours and factors are declared `half` (matching URP's own UnityPerMaterial layout in
             // LitInput.hlsl) so the constants arrive in fp16 registers and the shading chain never
             // gets promoted back to fp32 by a stray float operand.
@@ -220,7 +225,31 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                     // the voxel layer to read, and the grid knows nothing about normal maps. Feeding it
                     // the per-texel N made the sampled layer jump within a single flat face, which
                     // pushed the tap back into the dark solid cell in blotches.
-                    lit += albedo * BgiGatherIndirect(IN.positionWS, geoN) * bgiAo;
+                    half3 bgiDirect   = lit; // the summed, muted DIRECT term - kept for the analysis views
+                    half3 bgiIndirect = albedo * BgiGatherIndirect(IN.positionWS, geoN) * bgiAo;
+                    lit += bgiIndirect;
+
+                    // ANALYSIS views (BufferGiUpdater.DebugView). Isolating a term here rather than in
+                    // the voxel-cube viewer is the point: this is the value AFTER the fragment's own
+                    // tap, so comparing it against the cubes (which show the same quantity per VOXEL)
+                    // tells you whether an artifact came out of the bake or out of the read.
+                    #if defined(BGI_DEBUG_VIEWS)
+                    uint bgiDbg = (uint)_BgiDebugView;
+                    if (bgiDbg != 0u) {
+                        // Contamination map: how much of THIS pixel's GI footprint sat on solid cells.
+                        // Raw, like the other scalars - it is a weight, not a radiance.
+                        if (bgiDbg == 5u) return half4(((half)BgiTapSolidWeight(IN.positionWS, geoN)).xxx, 1.0h);
+                        // Scalars are returned RAW - no exposure, no tonemap - so they read as literal
+                        // 0..1 greyscale and can be eyedropped against the cube colours directly.
+                        // Tonemapping them would remap the very numbers being compared.
+                        if (bgiDbg == 2u) return half4(bgiShadow.xxx, 1.0h); // sun visibility
+                        if (bgiDbg == 3u) return half4(bgiAo.xxx,     1.0h); // baked AO
+                        // The HDR terms keep the display transform below, so they read like the normal
+                        // image with the other term removed rather than like a different scene.
+                        if (bgiDbg == 1u) lit = bgiIndirect; // GI only
+                        if (bgiDbg == 4u) lit = bgiDirect;   // direct only
+                    }
+                    #endif // BGI_DEBUG_VIEWS
                 #elif defined(GI_UNITY)
                     // (SampleSH is fp32 in URP; narrowed once so the add stays in fp16.)
                     // A/B baseline: Unity's built-in indirect diffuse (ambient / light probes via

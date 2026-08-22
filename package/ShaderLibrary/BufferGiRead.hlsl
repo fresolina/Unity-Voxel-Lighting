@@ -97,6 +97,35 @@ float _BgiShadowSharpness;
 // How far off the surface the baked shadow tap sits, in voxels. 0.5 = first air voxel's centre,
 // 1.0 = the historical value.
 float _BgiShadowNormalOffset;
+// ANALYSIS view selector (BufferGiUpdater.DebugView): 0 = off (normal shading), 1 = GI only,
+// 2 = sun visibility, 3 = baked AO, 4 = direct only. Applied in the lit shader's fragment, so it
+// isolates the term AS THE FRAGMENT ACTUALLY READ IT - which is what separates a bake artifact from
+// a read artifact when compared against the BufferGiDebug cubes showing the same quantity per voxel.
+// Loose global like the rest; unbound it reads 0 and everything below is the identity.
+float _BgiDebugView;
+
+// How much of the trilinear footprint at grid position `ga` lands on SOLID cells. Texel c's centre
+// is at c+0.5 in grid units, so the interpolation origin is ga-0.5 and the eight corner weights are
+// the usual separable products. Out-of-grid corners are skipped rather than counted: the sampler
+// clamps there, so they cannot contribute a shell texel.
+#if defined(BGI_DEBUG_VIEWS)
+float BgiSolidWeightAt(float3 ga, uint baseOffset)
+{
+    float3 t  = ga - 0.5;
+    int3   c0 = (int3)floor(t);
+    float3 f  = t - (float3)c0;
+    float sw = 0.0;
+    [unroll] for (int dz = 0; dz <= 1; dz++)
+    [unroll] for (int dy = 0; dy <= 1; dy++)
+    [unroll] for (int dx = 0; dx <= 1; dx++) {
+        int3 c = c0 + int3(dx, dy, dz);
+        if (!BgiInBounds(c)) continue;
+        if (!BgiSolidBit(baseOffset + BgiIndex((uint3)c))) continue;
+        sw += (dx == 0 ? 1.0 - f.x : f.x) * (dy == 0 ? 1.0 - f.y : f.y) * (dz == 0 ? 1.0 - f.z : f.z);
+    }
+    return sw;
+}
+#endif
 
 // Which field (fine vs coarse) a shading point falls in, plus that field's grid + buffer slice.
 // Shared by the GI gather and the AO/sun-shadow face read so they all agree on the same voxels.
@@ -400,6 +429,60 @@ half3 BgiSampleFieldTexture(Texture3D<float4> tex, SamplerState smp, float3 worl
     }
     return (wsum > 1e-4) ? (half3)(acc / wsum) : 0.0h;
 }
+
+#if defined(BGI_DEBUG_VIEWS)
+// ANALYSIS. How much of the GI tap's footprint is contaminated by solid (shell) texels - the raw
+// material of the in-plane leak. 0 = the pixel physically CANNOT leak; 1 = its GI came entirely from
+// shell cells. This MIRRORS BgiSampleFieldTexture's tap placement branch for branch, so the number
+// describes the read the fragment actually performed rather than an idealised one. Keep the two in
+// sync - a divergence here would quietly report a fictional cause.
+float BgiTapSolidWeight(float3 worldPos, float3 normal)
+{
+    bool insideFine; float3 origin, voxelSize; uint baseOff;
+    BgiSelectField(worldPos, insideFine, origin, voxelSize, baseOff);
+    float3 g = (worldPos - origin) / max(voxelSize, 1e-6);
+    uint idirs = BgiIrradianceDirs();
+
+    if (idirs == 1u) {
+#if defined(BGI_TAP_AXIS_SNAPPED)
+        float3 n2 = normal * normal;
+        float acc = 0.0, wsum = 0.0;
+        [unroll]
+        for (uint a = 0u; a < 3u; a++) {
+            float w2 = (a == 0u) ? n2.x : ((a == 1u) ? n2.y : n2.z);
+            if (w2 < BGI_TAP_MIN_WEIGHT) continue;
+            float3 axisMask = (a == 0u) ? float3(1, 0, 0) : ((a == 1u) ? float3(0, 1, 0) : float3(0, 0, 1));
+            float d = dot(normal, axisMask), gA = dot(g, axisMask);
+            float3 ga = g + axisMask * ((floor(gA) + (d >= 0.0 ? 1.0 : -1.0) + 0.5) - gA);
+            if (any(ga < 0.0) || any(ga > (float)BGI_GRID)) continue;
+            acc += BgiSolidWeightAt(ga, baseOff) * w2;
+            wsum += w2;
+        }
+        return (wsum > 1e-4) ? acc / wsum : 0.0;
+#else
+        float3 aN = abs(normal);
+        float3 ga = g + normal / max(max(aN.x, aN.y), max(aN.z, 1e-4));
+        if (any(ga < 0.0) || any(ga > (float)BGI_GRID)) return 0.0;
+        return BgiSolidWeightAt(ga, baseOff);
+#endif
+    }
+
+    // CUBE: per-axis planes, n^2 weighted, same as the sampled version. The slab packing is a Z
+    // offset in the TEXTURE only - occupancy is indexed by the plain cell, so the walk is unchanged.
+    float3 n2c = normal * normal;
+    float accC = 0.0, wsumC = 0.0;
+    [unroll]
+    for (uint a2 = 0u; a2 < 3u; a2++) {
+        float3 axisMask = (a2 == 0u) ? float3(1, 0, 0) : ((a2 == 1u) ? float3(0, 1, 0) : float3(0, 0, 1));
+        float d = dot(normal, axisMask), w2 = dot(n2c, axisMask), gA = dot(g, axisMask);
+        float3 ga = g + axisMask * ((floor(gA) + (d >= 0.0 ? 1.0 : -1.0) + 0.5) - gA);
+        if (any(ga < 0.0) || any(ga > (float)BGI_GRID)) continue;
+        accC += BgiSolidWeightAt(ga, baseOff) * w2;
+        wsumC += w2;
+    }
+    return (wsumC > 1e-4) ? accC / wsumC : 0.0;
+}
+#endif // BGI_DEBUG_VIEWS
 
 // Raw buffer-GI irradiance at a surface point (NO AO - the caller multiplies in the merged AO from
 // BgiSampleFaceAoShadow). Fine field inside its box, coarse outside; scaled by _BgiIntensity.

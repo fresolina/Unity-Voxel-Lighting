@@ -96,6 +96,23 @@ namespace Lotec.Lighting {
         /// </summary>
         public enum SingleTapFilter { Fast = 0, AxisSnapped = 1 }
 
+        /// <summary>
+        /// ANALYSIS views for the lit shader: show one term of the shaded result on its own, so an
+        /// artifact can be attributed to the GI bounce, the sun visibility or the baked AO rather
+        /// than guessed at from the composite. Must match the _BgiDebugView cases in VoxelLit.
+        /// </summary>
+        public enum DebugView {
+            Off = 0,
+            GiOnly = 1,        // indirect bounce * AO, tonemapped (HDR)
+            SunVisibility = 2, // raw 0..1 greyscale, no display transform
+            Ao = 3,            // raw 0..1 greyscale, no display transform
+            DirectOnly = 4,    // direct term only, tonemapped (HDR)
+            /// <summary>Fraction of the GI tap's trilinear footprint that lands on SOLID cells -
+            /// the contamination the in-plane leak is made of. Black = the pixel physically cannot
+            /// leak; white = its GI came entirely from shell texels. Raw 0..1.</summary>
+            GiSolidWeight = 5
+        }
+
         public static BufferGiUpdater Instance { get; private set; }
 
         [Header("Solve")]
@@ -223,6 +240,18 @@ namespace Lotec.Lighting {
                  "framebuffer), so an A/B pair stays exposure-matched with this on.\n " +
                  "Costs one multiply in the lit shader and no extra variant. Leave off for normal rendering.")]
         [SerializeField] bool _muteDirectLighting;
+
+        [Tooltip("ANALYSIS: replace the shaded result with ONE of its terms, to see which one is " +
+                 "producing an artifact. Off = normal shading.\n " +
+                 "GiOnly / DirectOnly are HDR radiance, so they keep exposure + tonemap and read like " +
+                 "the normal image with the other term removed.\n " +
+                 "SunVisibility / Ao are 0..1 scalars, so they bypass the display transform entirely " +
+                 "and read as literal greyscale - the same number the Buffer GI Debug cubes show in " +
+                 "SunVisibility mode, but resolved PER PIXEL through the actual fragment tap. That is " +
+                 "the pairing that separates a bake problem from a read problem: if the cubes are " +
+                 "crisp black/white but this view ramps between them, the leak is in the read.\n " +
+                 "Pure fragment state - no solve restart, no rebake, so it can be flipped mid-A/B.")]
+        [SerializeField] DebugView _debugView = DebugView.Off;
 
         [Header("Lighting")]
         [Tooltip("Display transform (exposure + tonemap operator), with optional auto-exposure. " +
@@ -496,6 +525,14 @@ namespace Lotec.Lighting {
             set => _muteDirectLighting = value;
         }
 
+        /// <summary>ANALYSIS: show one term of the shaded result on its own (see <see cref="DebugView"/>).
+        /// Pure fragment state, like <see cref="MuteDirectLighting"/> - the solve is untouched and
+        /// auto-exposure does not move, so it can be flipped mid-A/B.</summary>
+        public DebugView View {
+            get => _debugView;
+            set => _debugView = value;
+        }
+
         /// <summary>Single-mode irradiance tap filter. Pure fragment read state - no reallocation and
         /// no restart, so this is the one GI setting that can be A/B'd mid-frame without disturbing the
         /// solve (which is exactly what makes it measurable against the Fast baseline).</summary>
@@ -589,6 +626,7 @@ namespace Lotec.Lighting {
         // Not a _Bgi* name: it lives in VoxelDirectLighting.hlsl and mutes the DIRECT term, which is
         // present in every GI variant - it is not part of the buffer-GI read the _Bgi prefix marks.
         static readonly int s_directMute = Shader.PropertyToID("_VoxelDirectMute");
+        static readonly int s_debugView = Shader.PropertyToID("_BgiDebugView");
         static readonly int s_shadowModeFine = Shader.PropertyToID("_BgiShadowModeFine");
         static readonly int s_shadowModeCoarse = Shader.PropertyToID("_BgiShadowModeCoarse");
         static readonly int s_luminanceResult = Shader.PropertyToID("_LuminanceResult");
@@ -719,6 +757,9 @@ namespace Lotec.Lighting {
             // Drop the tap keyword with the GI group so a disabled updater doesn't leave a variant of a
             // shader it no longer drives resident. Re-published by SyncTapFilterKeyword next SetGlobals.
             if (!on) SetTapKeyword(SingleTapFilter.Fast);
+            // Same for the analysis variant: a disabled updater must not leave BGI_DEBUG_VIEWS resident
+            // on a shader it no longer drives. Re-claimed by SetGlobals if a view is still selected.
+            if (!on) SetDebugKeyword(false);
         }
 
         // BGI_TAP_AXIS_SNAPPED, change-only. Called every frame from SetGlobals, so it must not hit
@@ -732,6 +773,14 @@ namespace Lotec.Lighting {
             // _BgiIrradianceDirs this same frame, so the keyword can never disagree with the branch the
             // fragment actually takes during the frame a mode switch lands.
             SetTapKeyword(_allocatedIrradianceSlots == 1 ? _singleTapFilter : SingleTapFilter.Fast);
+        }
+
+        // BGI_DEBUG_VIEWS, change-only for the same reason as SetTapKeyword below.
+        bool? _appliedDebugKeyword;
+        void SetDebugKeyword(bool on) {
+            if (_appliedDebugKeyword == on) return;
+            _appliedDebugKeyword = on;
+            LightingKeywords.BgiDebug.Set(on ? LightingKeywords.BgiDebugViews : null);
         }
 
         void SetTapKeyword(SingleTapFilter filter) {
@@ -1073,6 +1122,13 @@ namespace Lotec.Lighting {
             // frame like the other read parameters - it is one float and takes effect immediately, with
             // no solve restart, which is what lets it be flipped in the middle of an A/B.
             Shader.SetGlobalFloat(s_directMute, _muteDirectLighting ? 1f : 0f);
+            // Analysis view selector (see DebugView). Same reasoning as the mute above: one float,
+            // published every frame, effective immediately, no variant and no solve restart.
+            Shader.SetGlobalFloat(s_debugView, (float)_debugView);
+            // The analysis code is behind BGI_DEBUG_VIEWS so it costs a shipping build nothing; claim
+            // the variant only while a view is actually selected. Change-only, same reason as the tap
+            // keyword - a keyword write invalidates variant state and must not happen every frame.
+            SetDebugKeyword(_debugView != DebugView.Off);
             // Sun-shadow, per field. Baked taps the sun visibility CSBlur mirrored into the irradiance
             // texture's alpha; Sdf marches the hi-res SDF per pixel (the _SdfHires global the active
             // volume already publishes - see VoxelVolume.ApplyShaderGlobals).
