@@ -14,7 +14,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
   m_GroupName: Sponza
   m_GUID: 378dee4c78570a7499f4a67b9ade3846
-  m_SerializeEntries: []
+  m_SerializeEntries:
+  - m_GUID: 83dbfee4cede4f54da2dbea3bb3057f3
+    m_Address: Sponza.unity
+    m_ReadOnly: 0
+    m_SerializedLabels: []
+    FlaggedDuringContentUpdateRestriction: 0
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: c33ff8789176f3d42815263919edbbac, type: 2}
   m_SchemaSet:
