@@ -9,6 +9,12 @@ This repo is a **Unity Package Manager (UPM) package** (`com.lotecsoftware.voxel
 
 **To run and verify**: see [docs/verifying-changes.md](docs/verifying-changes.md) — driving the editor headlessly, the reimport/re-bake/re-solve cycle a GI comparison requires, the Sponza A/B camera poses, and the diff/benchmark recipes.
 
+**How Buffer GI works**: [docs/buffer-gi-architecture.md](docs/buffer-gi-architecture.md) — the reference for the buffers, every bit in `_Material` / `_Surface`, the two directional strides, the bake and solve pass order, and the fragment read paths.
+
+**Optimization guidelines**: [docs/optimization-guidelines.md](docs/optimization-guidelines.md) — 44 guidelines with their evidence, numbered `category.item` so additions do not renumber the rest, plus the handful that are hard constraints: which tier work belongs in, waves vs threads, cache-line and layout math, Texture3D vs StructuredBuffer, what hardware trilinear really costs, and how to measure without fooling yourself.
+
+**Implementation plan**: [docs/decoupling-field-resolutions.md](docs/decoupling-field-resolutions.md) — phased plan to decouple occupancy / surface / material / irradiance / shadow resolutions. Decoupling phases (P0-P3) first, fixes (P4-P9) after; per-phase acceptance criteria, a hard-constraints checklist, and the measured evidence and rejected approaches in appendices. Not started.
+
 ## Repository layout
 - `package/Runtime/` — split by concern:
   - `Core/` — the always-on plumbing: `LightingManager` (tracks the active `VoxelVolume` and publishes its shader globals — nothing else), `VoxelVolume` (+ its `VoxelVolume.All` self-registry), `VoxelSdfField` (holds the baked hi-res SDF; the volume publishes it as `_SdfHires`), `MeshBounds`, the `GiMethodSelector` GI-method helper, the SDF shadow feature + its config, local-light publishing.
