@@ -6,6 +6,7 @@ A voxel-based lighting system playground for Unity. Goal is a performant lightin
 
 * `package/` contains the Unity Package Manager package content (`package.json`, `Editor/`, `Runtime/`, `Samples~/`).
 * `project-demo/` contains the Unity project used for local validation and WebGL builds.
+* `project-vr-demo/` contains the Quest 3 (VR) demo project.
 * The repository root contains docs, changelog, and CI/release configuration.
 
 ## Demo samples setup
@@ -24,6 +25,7 @@ Static objects can cast shadows on dynamic objects. Reacts in realtime to lighti
 Dynamic objects can only *receive* shadows.
 
 3 modes:
+
 * SDF Shadows: (Accuracy) Ray marching from every pixel. Always used for local lights.
 * Occlusion direction field (1bit): (Performance) 8-64 directions in one texture, hard blocky voxel shadows.
 * Occlusion direction field (8bit): (Performance + Accuracy) 4 directions per texture, interpolated smoother voxel shadows. Supports 256 directions (64 textures).
@@ -31,12 +33,13 @@ Dynamic objects can only *receive* shadows.
 ### Global illumination / Indirect lighting
 
 Global illumination (GI) for static meshes in a GI Volume. Dynamic objects can only *receive* GI.
+
 * Path tracing: Ray trace from voxel towards light each frame. Requires longer temporal accumulation for stable results.
 
 ## Platform notes
 
 * Runtime GI in this package depends on compute shaders and 3D textures.
-* Web builds are expected to run with the WebGPU graphics backend. The sample web build script explicitly requests WebGPU for BuildTarget.WebGL.
+* Web builds are expected to run with the WebGPU graphics backend. The demo project pins WebGPU as the only graphics API for BuildTarget.WebGL in its Project Settings (`project-demo/ProjectSettings/ProjectSettings.asset`).
 * Voxelizing in runtime requires static batching to be disabled.
 
 ## Web preview builds

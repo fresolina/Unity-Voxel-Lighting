@@ -7,6 +7,8 @@ This repo is a **Unity Package Manager (UPM) package** (`com.lotecsoftware.voxel
 
 **To compile**: dotnet build project-demo/project-demo.slnx
 
+**To run and verify**: see [docs/verifying-changes.md](docs/verifying-changes.md) — driving the editor headlessly, the reimport/re-bake/re-solve cycle a GI comparison requires, the Sponza A/B camera poses, and the diff/benchmark recipes.
+
 ## Repository layout
 - `package/Runtime/` — split by concern:
   - `Core/` — the always-on plumbing: `LightingManager` (tracks the active `VoxelVolume` and publishes its shader globals — nothing else), `VoxelVolume` (+ its `VoxelVolume.All` self-registry), `VoxelSdfField` (holds the baked hi-res SDF; the volume publishes it as `_SdfHires`), `MeshBounds`, the `GiMethodSelector` GI-method helper, the SDF shadow feature + its config, local-light publishing.
@@ -24,7 +26,7 @@ This repo is a **Unity Package Manager (UPM) package** (`com.lotecsoftware.voxel
 - For performance reasons, we use a voxel-space lookup structure for as much as possible.
 - We are targeting Quest 3, so performance is important.
 - **Components are features**: enabling a component turns its feature on. `LightingManager` stays minimal (which volume is active + publish its globals); every other capability (GI method, shadow source, AO, local lights) is its own component that reads the active volume via `LightingManager.Instance.Volume`.
-- The shared lighting singletons are being consolidated into the **Bootstrap** scene as persistent objects, with each level carrying only its per-level data (`VoxelVolume` + occlusion binders, coarse `MeshBounds`, `BufferGiFields`, spawn point). See the memory notes for the current migration state.
+- The shared lighting singletons are being consolidated into the **Bootstrap** scene as persistent objects, with each level carrying only its per-level data (`VoxelVolume` + occlusion binders, coarse `MeshBounds`, `BufferGiFields`, spawn point). This migration is in progress — check the scenes for how far it has got.
 
 ## Runtime UI (samples)
 - UI Toolkit, driven by **`PanelRenderer`** (Unity 6.5+, replaces `UIDocument`). There is no synchronous `rootVisualElement`: register `RegisterUIReloadCallback` and cache the root handed to the callback. `visualTreeAsset` / `panelSettings` are the same names; sort order is the inherited `Renderer.sortingOrder` (int).
