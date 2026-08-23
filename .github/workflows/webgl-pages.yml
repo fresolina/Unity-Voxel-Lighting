@@ -138,17 +138,9 @@ jobs:
               preview_label="${preview_name} (${short_sha})"
           fi
 
-          # Where this build's Addressables content will live. Per-build rather than one shared
-          # folder: the levels are remote, so a shared path lets any preview publish replace the
-          # levels every released version loads - and lets content drift from the code that expects
-          # it, which renders black with no error.
-          repo_name="${GITHUB_REPOSITORY#*/}"
-          remote_load_path="https://${GITHUB_REPOSITORY_OWNER}.github.io/${repo_name}/${publish_path}/ServerData/[BuildTarget]"
-
           echo "publish_path=${publish_path}" >> "$GITHUB_OUTPUT"
           echo "preview_label=${preview_label}" >> "$GITHUB_OUTPUT"
           echo "preview_slug=${preview_slug}" >> "$GITHUB_OUTPUT"
-          echo "remote_load_path=${remote_load_path}" >> "$GITHUB_OUTPUT"
 
       - name: Restore existing site content
         continue-on-error: true
@@ -185,18 +177,6 @@ jobs:
           key: Library-${{ env.LIBRARY_CACHE_SALT }}-${{ runner.os }}-${{ env.PROJECT_PATH }}-WebGL-${{ steps.unity_version.outputs.unity_version }}-${{ hashFiles('project-demo/Assets/**', 'project-demo/Packages/**', 'project-demo/ProjectSettings/**', 'package/package.json', 'package/Editor/**', 'package/Runtime/**', 'package/ShaderLibrary/**', 'package/Shaders/**', 'package/Samples~/**') }}
           restore-keys: |
             Library-${{ env.LIBRARY_CACHE_SALT }}-${{ runner.os }}-${{ env.PROJECT_PATH }}-WebGL-${{ steps.unity_version.outputs.unity_version }}-
-
-      # Read by RemoteContentBuild (an IPreprocessBuildWithReport) to set Remote.LoadPath before it
-      # packs the content. A file rather than an env var: game-ci runs Unity inside a container, where
-      # a file under the mounted project is guaranteed to arrive and an arbitrary env var is not.
-      - name: Point remote content at this build
-        shell: bash
-        env:
-          REMOTE_LOAD_PATH: ${{ steps.publish_target.outputs.remote_load_path }}
-        run: |
-          set -eu
-          printf '%s\n' "$REMOTE_LOAD_PATH" > "$PROJECT_PATH/remote-load-path.txt"
-          echo "Remote.LoadPath for this build: $REMOTE_LOAD_PATH"
 
       - name: Build WebGL sample
         uses: game-ci/unity-builder@v4
