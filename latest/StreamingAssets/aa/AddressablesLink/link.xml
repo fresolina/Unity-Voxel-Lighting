@@ -5,10 +5,12 @@
   <assembly fullname="Lotec.Lighting, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
     <type fullname="Lotec.Lighting.BufferGiBakeAsset" preserve="all" />
     <type fullname="Lotec.Lighting.BufferGiFields" preserve="all" />
+    <type fullname="Lotec.Lighting.LocalLightsProvider" preserve="all" />
     <type fullname="Lotec.Lighting.MeshBounds" preserve="all" />
-    <type fullname="Lotec.Lighting.VoxelMaterialField" preserve="all" />
+    <type fullname="Lotec.Lighting.VoxelDirectionSet" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelOcclusionBitmask" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelOcclusionField" preserve="all" />
+    <type fullname="Lotec.Lighting.VoxelSdfField" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelVolume" preserve="all" />
   </assembly>
   <assembly fullname="Unity.Addressables, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null" preserve="all">
