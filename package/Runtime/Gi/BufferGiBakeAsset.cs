@@ -14,6 +14,15 @@ namespace Lotec.Lighting {
     [PreferBinarySerialization]
     public class BufferGiBakeAsset : ScriptableObject {
         /// <summary>Bump when the stored layout changes; loaders reject other versions.</summary>
+        // 6: grown occupancy added (`occupancyGrown`). It is a RASTER product - the cell behind each
+        // FRAGMENT along its triangle normal - and that is per-fragment information nothing else
+        // retains: the voxelizer's per-voxel normal is last-write-wins, so a v5 asset cannot
+        // reconstruct it (measured: deriving it per voxel via _OccupancyThick moves the defect it
+        // exists to fix by 0.0025). A v5 asset must be re-baked, not adopted.
+        // 5: hi-res occupancy added (`occupancyHi` + `occGrid`). A v4 asset carries no solidity at the
+        // occupancy grid at all, and there is nothing to reconstruct it from without the mesh - the
+        // low-res material is a DIFFERENT, coarser raster, so synthesising the fine field from it
+        // would fabricate exactly the sub-voxel detail the field exists to record. Re-bake, don't adopt.
         // 4: bakedNormals dropped - the voxelizer now always writes the triangle normal, and
         // CSBuildSurface decides per voxel whether to use it. A v3 asset stores `surface` from a bake
         // that may have had that write DISABLED (bakedNormals == false), so its sub-voxel cells carry
@@ -22,10 +31,17 @@ namespace Lotec.Lighting {
         // 3: thickening split out of bakedNormals into its own flag. A v2 asset cannot be reinterpreted,
         // because in v2 "bakedNormals == false" silently ALSO meant thickened - the material array it
         // stores already has the grown solids baked in, and nothing records that independently.
-        public const int Version = 4;
+        public const int Version = 6;
 
         public int version = Version;
         public int grid;
+        /// <summary>Resolution the hi-res occupancy in <see cref="occupancyHi"/> was rasterized at.
+        /// Stored rather than assumed: the asset is baked once at the highest resolution the project
+        /// supports and OR-downsampled at load to whatever the running platform uses, so the loader
+        /// has to know which level it is holding. Never upsampled - a coarser asset than the platform
+        /// wants is rejected, because inventing sub-voxel detail is exactly the failure the hi-res
+        /// field exists to avoid.</summary>
+        public int occGrid;
         public bool isCoarse;      // true = the coarse field slice, false = a fine/detailed field slice
         // Whether the raster grew each solid one voxel inward. A required part of the identity:
         // thickening changes `material` itself, so an asset baked with it must never be loaded by an
@@ -39,6 +55,21 @@ namespace Lotec.Lighting {
         // retuned without a re-bake); freezing them into `material` would rule both out.
         [HideInInspector] public uint[] material; // one field slice, VoxelCount words
         [HideInInspector] public uint[] surface;  // one field slice, VoxelCount words
+        /// <summary>One field slice of the hi-res occupancy bitfield at <see cref="occGrid"/>, in
+        /// 4x4x4 blocks of two contiguous uints (see BGI_OCC_BLOCK_LOG2 in BufferGiField.hlsl).
+        /// Length = (occGrid/4)^3 * 2. 0.125 bits per voxel, so 2 MB at 256^3.</summary>
+        [HideInInspector] public uint[] occupancyHi;
+        /// <summary>One field slice of the GROWN occupancy bitfield on the LIGHTING grid: every
+        /// rasterized voxel plus the one behind each fragment along its triangle normal, 1 bit per
+        /// voxel. Length = VoxelCount/32 (4 KB at 32^3). Read by CSBlur's shell dilation alone -
+        /// nothing that traces a ray sees it, which is what separates it from `thickened`.</summary>
+        [HideInInspector] public uint[] occupancyGrown;
+
+        /// <summary>Words <see cref="occupancyHi"/> must hold for a given occupancy resolution.</summary>
+        public static int OccWordsFor(int occGrid) {
+            int blocks = occGrid >> 2;
+            return blocks * blocks * blocks * 2;
+        }
 
         /// <summary>True when this bake was rasterized against exactly this grid mapping. Bounds must
         /// match within a millimetre - the stored voxels are only valid for the mapping they were baked
@@ -63,6 +94,8 @@ namespace Lotec.Lighting {
                 uint h = 2166136261u;
                 h = Mix(h, material);
                 h = Mix(h, surface);
+                h = Mix(h, occupancyHi);
+                h = Mix(h, occupancyGrown);
                 return h;
             }
         }

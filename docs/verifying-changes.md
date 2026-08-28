@@ -47,15 +47,35 @@ meaningless — the screen keeps showing the previous pass's contents and the di
 2. **Force a re-bake.** The derive passes only re-run on a bake input change, so a shader edit needs
    a forced re-voxelize: set `_materialBaked = false` on the `BufferGiUpdater`, then call
    `Voxelize()`.
-3. **Force a re-solve.** `_continuousGi` is `0`, so the solve stops once the ray budget is spent —
-   the log reads `BufferGi solve: idle — ray budget spent` and nothing further changes on screen.
-   Restart it by setting `_collectedSamples = 0`, then poll it against `_maxSamples` (500) until
-   converged. Takes roughly two seconds.
+3. **Force a re-solve, from a CLEARED field.** `_continuousGi` is `0`, so the solve stops once the
+   ray budget is spent — the log reads `BufferGi solve: idle — ray budget spent` and nothing further
+   changes on screen. Restart it by setting `_resetAllFields = true` **and** `_collectedSamples = 0`,
+   then poll against `_maxSamples` (500) until converged. Takes roughly two seconds.
 
 **A re-solve is not a re-bake.** Resetting `_collectedSamples` restarts the solve only. A "noise
 floor" measured with re-solve alone is not a noise floor, and a baseline taken that way is not a
 baseline: re-take it through the identical reimport + re-bake + re-solve cycle and require the two
 readings to match before comparing anything against it.
+
+### Clear the dynamic fields, or the capture depends on the previous one
+
+`_collectedSamples = 0` restarts the *accumulation*; it does not clear `_Irradiance`. `CSGather`'s
+Cube branch makes that observable: **a bucket that received no ray this frame HOLDS its previous
+value** rather than folding in a zero (correct — otherwise it would decay to black), so a bucket that
+never receives a ray keeps whatever the *previous run* left in it, forever. The result is a capture
+that depends on the run before it.
+
+Measured on Playground, two consecutive full reimport + re-bake + re-solve captures:
+
+| | without `_resetAllFields` | with it |
+|---|---|---|
+| Cube | mean luminance **119.0 then 127.8** (7% apart) | byte-identical ×3 |
+| Single | ±1–3 LSB, ~0.3% mean luminance | byte-identical ×3 |
+
+So set `_resetAllFields = true` before every capture. With it the whole cycle is **exactly
+reproducible in both modes** — a null phase can be required to be byte-identical rather than
+"within noise", which is a far sharper instrument. Without it the Single drift looks like raster
+nondeterminism and the Cube drift swamps any change worth measuring.
 
 **Prove the changed code runs in the captured configuration.** A clean render diff over a path that
 never executes verifies nothing — e.g. occlusion-texture changes are invisible in the default
@@ -65,6 +85,18 @@ the image, before trusting an A/B.
 
 **A/B the two GI read paths** with `BufferGiUpdater.SsboRead` (public setter, takes effect the next
 frame). The SSBO path is leak-free and is the reference the texture path is measured against.
+
+**Drive the whole cycle synchronously from one `eval`.** `Update()` is private but is the same entry
+the editor pump calls, so invoking it by reflection in a loop runs voxelize, the derive passes and
+one solve step per call — no polling, no waiting on the editor to tick, and the capture happens in
+the same call. Roughly: set `_materialBaked = false` and `_resetAllFields = true`, zero
+`_collectedSamples`, call `Update()` `maxSamples/samplesPerFrame + 8` times, then render
+`Camera.main` into a `RenderTexture` and `EncodeToPNG`. A whole A/B pair takes about ten seconds.
+
+**A capture right after a `RadianceDirections` switch is a transient.** The switch reallocates and
+re-seeds, and the first capture after it does not match the ones that follow (measured 106.1 against
+a settled 107.5 in Single). Discard it, or compare only captures taken the same number of steps
+after a switch.
 
 ## Sponza A/B captures
 

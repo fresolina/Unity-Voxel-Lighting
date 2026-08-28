@@ -2,8 +2,9 @@
 // per frame - that is the whole point of it being a separate file.
 //   CSInjectBakedLights  - stamp VoxelLights entries into _Material as emissive voxels.
 //   CSBuildOccupancy     - _Material -> the 1-bit/voxel _Occupancy bitfield.
+//   CSBuildTraversalMip  - OR-downsample _OccupancyHi onto _BgiGrid -> _OccupancyTraversal.
 //   CSBuildNormalOccupancy - _OccupancyThick: real solids + the cell behind each surfaced voxel.
-//   CSBuildSurface       - per solid voxel: normal, openness/AO, flags, baked sun-ray origin.
+//   CSBuildSurface       - per solid voxel: normal, flags, baked sun-ray origin.
 //   CSBuildAirDistance   - relax the air voxels' city-block distance-to-nearest-solid.
 //
 // Dispatched from BufferGiUpdater.RunDerivePasses (voxelize + bake-asset load) and, for the baked
@@ -14,6 +15,8 @@
 // per-wave frugality the solve needs.
 #pragma kernel CSInjectBakedLights
 #pragma kernel CSBuildOccupancy
+#pragma kernel CSBuildTraversalMip
+#pragma kernel CSBuildNeighbourMask
 #pragma kernel CSBuildNormalOccupancy
 #pragma kernel CSBuildSurface
 #pragma kernel CSBuildAirDistance
@@ -31,7 +34,7 @@ RWStructuredBuffer<uint>  _MaterialWrite;
 
 // the one cell directly BEHIND it along its triangle normal. Built once at bake by
 // CSBuildNormalOccupancy and read by OccupancyNormal alone. Nothing else touches it: visibility, the
-// DDA, injection, openness, the sun-ray origin and the two-sided test all keep reading _Occupancy.
+// DDA, injection, the sun-ray origin and the two-sided test all keep reading _Occupancy.
 //
 // Why it has to exist. An unthickened wall is a hollow 1-voxel shell, so its surface cell has air on
 // the room side AND air in the shell's interior. Occupancy cannot tell those apart - they are both
@@ -135,11 +138,37 @@ int3 BgiPickShadowOrigin(int3 cell, float3 n)
     return bestStep;
 }
 
+// Hi-res SLAB EXTENT of one coarse cell: for each axis, how many of the `ratio` slices perpendicular
+// to it contain a solid hi-res cell. That is the cell's real thickness per axis, measured on the
+// occupancy grid rather than inferred from the stored normal - so nothing that consumes it is
+// circular. Returns 0 on an axis only when the whole coarse cell is empty at hi-res, which the
+// containment invariant rules out for a solid cell (and which the caller guards anyway).
+//
+// One pass over the ratio^3 sub-cells, accumulating a slice bitmask per axis. ratio <= 8 (256/32), so
+// the masks fit a uint and countbits gives the extent. 64-512 taps per solid voxel, once, at bake.
+uint3 BgiHiSlabExtent(int3 cell)
+{
+    uint ratioLog2 = BGI_OCC_GRID_LOG2 - BGI_GRID_LOG2;
+    uint ratio = 1u << ratioLog2;
+    uint3 base_ = (uint3)cell << ratioLog2;
+    uint maskX = 0u, maskY = 0u, maskZ = 0u;
+    [loop]
+    for (uint z = 0u; z < ratio; z++)
+    [loop]
+    for (uint y = 0u; y < ratio; y++)
+    [loop]
+    for (uint x = 0u; x < ratio; x++) {
+        if (!BgiHiSolidBit(base_ + uint3(x, y, z))) continue;
+        maskX |= 1u << x; maskY |= 1u << y; maskZ |= 1u << z;
+    }
+    return uint3(countbits(maskX), countbits(maskY), countbits(maskZ));
+}
+
 float3 OccupancyNormal(int3 c)
 {
     float3 n = 0;
-    // Rolled: 27 unrolled iterations would bloat a kernel that already carries the 125-tap openness
-    // loop, and this is bandwidth-bound on the occupancy tests anyway.
+    // Rolled: 27 unrolled iterations would bloat the kernel for no gain, and this is bandwidth-bound
+    // on the occupancy tests anyway.
     for (int dz = -1; dz <= 1; dz++)
     for (int dy = -1; dy <= 1; dy++)
     for (int dx = -1; dx <= 1; dx++) {
@@ -179,8 +208,8 @@ void CSInjectBakedLights(uint3 id : SV_DispatchThreadID)
     float4 albedoEmission = _BakedLightAlbedoEmission[i];
     _MaterialWrite[slot] = BgiPackMaterial(albedoEmission.rgb, albedoEmission.a);
     // ADD the flag rather than write the word: a switch re-dispatch is not followed by a
-    // CSBuildSurface, so a plain write would wipe the openness that pass computed. Nothing else has
-    // to be seeded here - a zero normal already decodes to a valid direction, and the flag makes the
+    // CSBuildSurface, so a plain write would wipe the normal and sun-ray origin that pass computed.
+    // Nothing else has to be seeded here - a zero normal already decodes to a valid direction, and the flag makes the
     // gather ignore it anyway (it only feeds inject's own direct/bounce term). C# merged co-located
     // lights, so there is exactly one thread per slot and no read-modify-write race.
     _Surface[slot] |= BGI_SURFACE_FLAG_EMISSIVE;
@@ -205,6 +234,100 @@ void CSBuildOccupancy(uint3 id : SV_DispatchThreadID)
         if (BgiIsSolid(_Material[slot0 + b])) word |= 1u << b;
     }
     _Occupancy[(_FieldOffset >> 5) + w] = word;
+}
+
+// ----------------------------------------------------------
+// BUILD TRAVERSAL MIP (bake-time, after the hi-res raster / upload): OR-downsample _OccupancyHi onto
+// the LIGHTING grid into _OccupancyTraversal - one thread per _BgiGrid voxel, setting its bit when
+// ANY of the ratio^3 hi-res cells under it is solid.
+//
+// "Traversal mip" is a RESOLUTION level of one field, not the coarse FIELD - both fields run this,
+// each over its own box (see _OccFieldWordOffset).
+//
+// OR, never majority, and never an independent low-res raster. A traversal level is only sound if it
+// is CONSERVATIVE: an empty cell lets the march skip its children untested, so under-estimating is a
+// silently missed occluder, while over-estimating only costs a wasted descent.
+// Majority is not merely worse here, it is catastrophic on this geometry: in a 4x4x4 block an
+// axis-aligned wall one hi-res cell thick is 16 of 64 cells (25%), a diagonal ~35%, a two-cell wall
+// exactly 50% - a >50% rule would delete every wall in the scene.
+//
+// C# zeroes the buffer first; this kernel only ORs, so the two fields can be dispatched in any order
+// and a partially-covered word is never clobbered.
+// ----------------------------------------------------------
+[numthreads(64, 1, 1)]
+void CSBuildTraversalMip(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+
+    // Ratio is a power of two >= 1 by construction (both grids are powers of two and the hi-res one
+    // is never coarser), so this is a shift count, not a divide.
+    uint ratioLog2 = BGI_OCC_GRID_LOG2 - BGI_GRID_LOG2;
+    uint ratio = 1u << ratioLog2;
+    uint3 base_ = BgiCoord(i) << ratioLog2;
+
+    bool any_ = false;
+    [loop]
+    for (uint z = 0u; z < ratio && !any_; z++)
+    [loop]
+    for (uint y = 0u; y < ratio && !any_; y++)
+    [loop]
+    for (uint x = 0u; x < ratio && !any_; x++) {
+        if (BgiHiSolidBit(base_ + uint3(x, y, z))) any_ = true;
+    }
+    if (!any_) return;
+
+    uint slot = _FieldOffset + i;
+    InterlockedOr(_OccupancyTraversal[slot >> 5], 1u << (slot & 31u));
+}
+
+// ----------------------------------------------------------
+// BUILD NEIGHBOUR MASK (bake-time, after CSBuildOccupancy): the gate for the read-side
+// contaminated-axis snap (P9). Seven bits per LIGHTING cell in an R8_UInt volume, so the fragment
+// answers "does my trilinear pair straddle a wall on this axis" with one Load and no buffer read.
+//
+//   bit 0        this cell is solid
+//   bits 1,2     -X, +X neighbour is solid
+//   bits 3,4     -Y, +Y
+//   bits 5,6     -Z, +Z
+//
+// WHY SEVEN AND NOT SIX. Trilinear on axis a blends c0 = floor(t - 0.5) with c0 + 1. Which pair that
+// is depends on where in the cell the tap sits: below the centre it is (this cell - 1, this cell),
+// above it is (this cell, this cell + 1). So the tap needs its own cell's solidity as well as both
+// neighbours', and all six neighbour bits must be present because which two are consulted is a
+// runtime decision (it depends on the surface normal and the sub-cell position).
+//
+// WHY ITS OWN TEXTURE and not a channel of an existing one: every other volume here is FILTERED, and
+// a bilinearly interpolated bitmask is meaningless. This one is point-loaded.
+//
+// WHY AT BAKE: it is pure geometry. Recomputing it when the sun moves would be waste, and worse, it
+// would make a read-side gate depend on lighting state.
+//
+// Out of bounds counts as AIR - outside the field there is nothing to snap away from, and treating it
+// as solid would snap every tap at the volume boundary inward.
+// ----------------------------------------------------------
+RWTexture3D<uint> _BgiNeighbourMaskWrite;
+
+[numthreads(64, 1, 1)]
+void CSBuildNeighbourMask(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    if (i >= BGI_COUNT) return;
+    int3 c = (int3)BgiCoord(i);
+
+    uint mask = BgiSolidBit(BgiSlot((uint3)c)) ? 1u : 0u;
+    const int3 offs[6] = {
+        int3(-1, 0, 0), int3(1, 0, 0),
+        int3(0, -1, 0), int3(0, 1, 0),
+        int3(0, 0, -1), int3(0, 0, 1)
+    };
+    [unroll]
+    for (uint k = 0u; k < 6u; k++) {
+        int3 n = c + offs[k];
+        if (!BgiInBounds(n)) continue;
+        if (BgiSolidBit(BgiSlot((uint3)n))) mask |= 1u << (k + 1u);
+    }
+    _BgiNeighbourMaskWrite[(uint3)c] = mask;
 }
 
 // ----------------------------------------------------------
@@ -244,42 +367,13 @@ void CSBuildNormalOccupancy(uint3 id : SV_DispatchThreadID)
 }
 
 // ----------------------------------------------------------
-// Static front-hemisphere ambient occlusion for a solid voxel with surface normal `n`: the
-// COSINE-WEIGHTED fraction of the front hemisphere within a small radius that is blocked by other
-// solid voxels. A flat/convex surface's front hemisphere is all air -> openness 1 (no AO); a concave
-// corner or near-contact gap (e.g. under a hovering object) has front-solid neighbours -> openness < 1.
-// Cosine weighting (contribution = dot(dir_hat, n)) plus the coplanar cutoff makes a flat wall robust
-// to a slightly-tilted gradient normal: its own coplanar neighbours weigh ~0 instead of counting as
-// occluders, so a voxelized diagonal/curved wall no longer self-shadows into a grid of false AO.
-#define BGI_AO_RADIUS 2
-#define BGI_AO_MIN_COS 0.15h // ignore near-coplanar dirs (a flat wall must not occlude itself)
-// Weights are cosines and the accumulators top out around the neighbourhood size (~125), so fp16
-// carries this comfortably - the result is stored as 8 bits anyway.
-half BgiComputeOpenness(int3 cell, float3 n)
-{
-    half total = 0.0h, blocked = 0.0h;
-    [loop]
-    for (int z = -BGI_AO_RADIUS; z <= BGI_AO_RADIUS; z++)
-    for (int y = -BGI_AO_RADIUS; y <= BGI_AO_RADIUS; y++)
-    for (int x = -BGI_AO_RADIUS; x <= BGI_AO_RADIUS; x++) {
-        int3 d = int3(x, y, z);
-        if (all(d == 0)) continue;
-        float3 dir = (float3)d;
-        half w = (half)(dot(dir, n) * rsqrt(dot(dir, dir))); // cosine of dir to the surface normal
-        if (w <= BGI_AO_MIN_COS) continue;                   // back hemisphere + near-coplanar self-neighbours
-        total += w;
-        int3 nb = cell + d;
-        if (BgiInBounds(nb) && BgiSolidBit(BgiSlot((uint3)nb))) blocked += w;
-    }
-    return (total > 0.0h) ? 1.0h - blocked / total : 1.0h;
-}
-
-// ----------------------------------------------------------
 // BUILD SURFACE (bake-time, after CSBuildOccupancy so it reads a complete _Occupancy): per SOLID
-// voxel, write the surface word = normal (bits 0-15) + static openness/AO (bits 16-23) + flags and
-// the baked sun-ray origin (bits 24-30). The normal is the occupancy gradient, computed here ONCE
-// rather than every solve frame; the voxelizer's triangle normal is consulted only where that
-// gradient cancels. Runs per voxel for the neighbour math.
+// voxel, write the surface word = normal (bits 0-15) + flags and the baked sun-ray origin
+// (bits 24-30). Bits 16-23 are left ZERO on a solid voxel: they carried the static openness / AO
+// scalar until AO was removed, and nothing reads them there now (the AIR branch still uses them for
+// the air-distance). The normal is the occupancy gradient, computed here ONCE rather than every
+// solve frame; the voxelizer's triangle normal is consulted only where that gradient cancels. Runs
+// per voxel for the neighbour math.
 // ----------------------------------------------------------
 [numthreads(64, 1, 1)]
 void CSBuildSurface(uint3 id : SV_DispatchThreadID)
@@ -304,12 +398,11 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
     // the choice is made per voxel now, by which source can actually answer for that voxel.
     //
     // This word is read only by the SOLVER. The fragment takes its shading normal from vertex data
-    // (geoN in VoxelLit) and never calls BgiSurfaceNormal at all; it touches _Surface solely for the
-    // openness bits. And every solver consumer asks a VOXEL-SPACE question: which way does this cell
-    // open (the sun-ray origin), which neighbours count as in front (CSBlur's dilation gate), how
-    // blocked is the front hemisphere (openness). A gradient built from the same occupancy those
-    // consumers march is the self-consistent answer; a triangle normal can disagree with the voxel it
-    // lives in, sending a ray back into the wall it just left.
+    // (geoN in VoxelLit) and, since AO was removed, does not read _Surface at all. And every solver
+    // consumer asks a VOXEL-SPACE question: which way does this cell open (the sun-ray origin), which
+    // neighbours count as in front (CSBlur's dilation gate). A gradient built from the same occupancy
+    // those consumers march is the self-consistent answer; a triangle normal can disagree with the
+    // voxel it lives in, sending a ray back into the wall it just left.
     //
     // The gradient's own SIGN is kept. An earlier revision flipped it to agree with the voxelizer's
     // triangle normal wherever the two disagreed, on the strength of a measurement saying the gradient
@@ -352,14 +445,13 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
                       : float3(0, 1, 0); // fully enclosed: no face exists, and nothing ever reads it
         }
     }
-    half openness = BgiComputeOpenness(cell, n);
 
-    // TWO-SIDED: solid, with AIR on both sides along its own normal axis - i.e. a wall, slab or
-    // railing thinner than a voxel, whose two faces had to share this one cell. Derived from
-    // occupancy rather than from the voxelizer's triangles: race-free (the two faces' fragments
-    // contend for the cell during rasterization), independent of draw order, and it tests the
-    // condition that actually matters - whether there is a second side to serve at all. A cell with
-    // solid behind it has no back face to light, however many triangles landed in it.
+    // TWO-SIDED: solid, with AIR on both sides along SOME axis - i.e. a wall, slab or railing thinner
+    // than a voxel, whose two faces had to share this one cell. Derived from occupancy rather than
+    // from the voxelizer's triangles: race-free (the two faces' fragments contend for the cell during
+    // rasterization), independent of draw order, and it tests the condition that actually matters -
+    // whether there is a second side to serve at all. A cell with solid behind it has no back face to
+    // light, however many triangles landed in it.
     // Out-of-grid counts as air, matching OccupancyNormal: a wall on the grid boundary is still thin.
     // With BGI_THICKEN on, the voxelizer grows walls inward, so this correctly (almost) never fires -
     // the wall is no longer thin, and there is no second side left to serve.
@@ -367,36 +459,61 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
     // those are recomputed below from this pass's own normal and occupancy, so carrying a stale index
     // would pin the ray to a cell chosen by an earlier bake (or to (-1,-1,-1) from a zeroed word).
     uint flags = word & BGI_SURFACE_FLAGS_MASK & ~BGI_SURFACE_ORIGIN_MASK;
-    // A sub-voxel wall: AIR on both sides along the DOMINANT normal axis - the same face pick
-    // BgiRadianceSlot and the fragment's plane-snap both use.
-    //
-    // Deliberately strict on both counts, both learned the hard way:
-    //   * round(n) instead of the dominant axis gives a DIAGONAL step for an off-axis normal
-    //     (.6,.6,.5 rounds to 1,1,1), testing a corner neighbour rather than the face.
-    //   * scanning the whole back HEMISPHERE for air instead of the one opposite face over-flags
-    //     badly: for a normal like (.7,.7,0) the -Y neighbour counts, so an ordinary wall cell with
-    //     air below it gains a spurious "back face", injects a second radiance and leaks. Measured
-    //     5x too bright through a Sponza wall (0.33 against 0.06) before this was reverted.
-    // A cell with solid behind it has no second side to light, however thin the wall looks.
-    float3 an = abs(n);
-    int3 step = (an.x >= an.y && an.x >= an.z) ? int3(n.x >= 0.0 ? 1 : -1, 0, 0)
-              : (an.y >= an.z)                 ? int3(0, n.y >= 0.0 ? 1 : -1, 0)
-                                               : int3(0, 0, n.z >= 0.0 ? 1 : -1);
-    {
-        int3 front = cell + step, back = cell - step;
-        // Out of grid counts as air, matching OccupancyNormal: a wall on the boundary is still thin.
-        bool frontAir = !BgiInBounds(front) || !BgiSolidBit(BgiSlot((uint3)front));
-        bool backAir  = !BgiInBounds(back)  || !BgiSolidBit(BgiSlot((uint3)back));
-        if (frontAir && backAir) flags |= BGI_SURFACE_FLAG_TWOSIDED;
-    }
 
-    // normal (0-15) + AO (16-23), carrying the flag bits (24-31) across - the baked-light injection
-    // ran before this pass and its EMISSIVE flag must survive the rewrite.
+    // Which axis is thin is decided from OCCUPANCY ALONE - all three axes tested, the stored normal
+    // consulted nowhere. That is the fix: the test used to run on the DOMINANT NORMAL AXIS only, so a
+    // cell whose thin axis was not the axis its gradient happened to favour was never flagged (232 of
+    // 5,693 thin voxels in Sponza, 37 of 4,551 in Playground). It is also circular in the bad
+    // direction - the flag decides which face CSInject serves, so deriving it from the normal means a
+    // wrong normal quietly justifies itself.
+    //
+    // Two conditions, and both are needed:
+    //   * AIR on both coarse sides along the axis. Strict, and deliberately not a back-HEMISPHERE
+    //     scan: for a normal like (.7,.7,0) the -Y neighbour would count, so an ordinary wall cell
+    //     with air below it would gain a spurious back face, inject a second radiance and leak.
+    //     Measured 5x too bright through a Sponza wall (0.33 against 0.06) before that was reverted.
+    //   * the smallest HI-RES slab extent among the axes that pass the first test. This is what the
+    //     hi-res field buys here: when more than one axis has air on both sides (a railing, a
+    //     free-standing post), the coarse grid cannot say which way the slab actually faces, and the
+    //     hi-res thickness can.
+    bool thinAxes[3] = { thinX, thinY, thinZ };
+    uint3 extent = BgiHiSlabExtent(cell);
+    uint extents[3] = { extent.x, extent.y, extent.z };
+    // extent == 0 on every axis means the hi-res field has nothing here at all: an unbaked or
+    // mismatched hi-res raster. Fall back to the pre-hi-res behaviour (the first thin axis) rather
+    // than silently dropping every two-sided flag in the scene.
+    bool hiResPresent = (extent.x | extent.y | extent.z) != 0u;
+    int thinAxis = -1;
+    uint bestExtent = 0xffffffffu;
+    [unroll]
+    for (int a = 0; a < 3; a++) {
+        if (!thinAxes[a]) continue;
+        uint e = hiResPresent ? extents[a] : 0u;
+        if (thinAxis >= 0 && e >= bestExtent) continue;
+        thinAxis = a;
+        bestExtent = e;
+    }
+    if (thinAxis >= 0) flags |= BGI_SURFACE_FLAG_TWOSIDED;
+
+    // The NORMAL is deliberately left alone here, including on the cells this newly flags. Snapping a
+    // two-sided cell's normal onto its thin axis - so that CSInject's `-normal` back face is
+    // guaranteed to point into the air - is the obvious companion change and it was built and
+    // measured: 104 of 12,644 solid Playground cells re-align (67 coarse, 37 fine), and the fixed-pose
+    // capture darkens by 4.94% mean luminance, up to 40/255 on a pixel, over a broad smooth region.
+    // Taking the sign from the triangle normal instead of the gradient gives 4.94% as well, so the
+    // sign is not what does it - re-aligning at all is. There is no reference that says which of the
+    // two images is more correct, and a 5% scene-wide swing out of 104 cells is not a change to make
+    // on the strength of "it should be better". Recorded in the plan's Appendix B; the flag fix below
+    // stands on its own measurement (misses 0, false positives 0).
+
+    // normal (0-15), carrying the flag bits (24-31) across - the baked-light injection ran before
+    // this pass and its EMISSIVE flag must survive the rewrite. Bits 16-23 stay ZERO: this is a solid
+    // voxel, and nothing reads them on one since AO was removed.
     // Sun-ray origin, decided here rather than per solve frame: this pass already holds the completed
     // occupancy and the normal, and a 26-neighbour search costs nothing in a one-shot derive.
     uint originBits = BgiPackShadowOrigin(BgiPickShadowOrigin(cell, n));
 
-    _Surface[slot] = BgiPackSurfaceNormal(n) | BgiPackOpenness(openness) | flags | originBits;
+    _Surface[slot] = BgiPackSurfaceNormal(n) | flags | originBits;
 }
 
 // ----------------------------------------------------------
@@ -405,7 +522,7 @@ void CSBuildSurface(uint3 id : SV_DispatchThreadID)
 // pushes the distance-to-nearest-solid outward by one voxel: dist = min(self, 1 + min neighbour),
 // where a SOLID neighbour counts as 0. In-place is safe (min-relaxation never underestimates: a
 // neighbour's stored value is always >= its true distance, so 1 + it is >= this voxel's true
-// distance). Solid voxels are the distance-0 seeds and keep their openness word untouched. Feeds the
+// distance). Solid voxels are the distance-0 seeds and are skipped entirely. Feeds the
 // far-air gather skip in CSGather (air no surface ever reads is never gathered).
 // ----------------------------------------------------------
 [numthreads(64, 1, 1)]
@@ -415,7 +532,7 @@ void CSBuildAirDistance(uint3 id : SV_DispatchThreadID)
     if (i >= BGI_COUNT) return;
 
     uint slot = _FieldOffset + i;
-    if (BgiSolidBit(slot)) return; // solid = distance-0 seed; its bits 16-23 hold openness, leave them
+    if (BgiSolidBit(slot)) return; // solid = distance-0 seed; nothing to store on it
 
     int3 cell = (int3)BgiCoord(i);
     const int3 axes[6] = {

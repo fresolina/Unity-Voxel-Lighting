@@ -28,10 +28,14 @@
 
 // Everything here is scoped to the GI_VOXEL_BUFFER variant. VoxelLit includes this header
 // unconditionally but only calls into it under GI_VOXEL_BUFFER, so the other variants
-// (GI_OFF / GI_UNITY) must not carry these fragment-stage StructuredBuffers: WebGPU
-// validates every declared global against the bound pipeline layout and fails pipeline creation
-// for a variant that declares _Occupancy / _Surface while they are unbound (null). D3D11/Vulkan
-// silently strip/tolerate them, which is why this only bites in a WebGPU (browser) build.
+// (GI_OFF / GI_UNITY) must not carry a fragment-stage StructuredBuffer: WebGPU validates every
+// declared global against the bound pipeline layout and fails pipeline creation for a variant that
+// declares one while it is unbound (null). D3D11/Vulkan silently strip/tolerate them, which is why
+// this only bites in a WebGPU (browser) build.
+//
+// Since AO was removed the SHIPPING fragment declares NO StructuredBuffer at all - every value it
+// reads arrives through the mirror Texture3D. _Occupancy comes back only under BGI_DEBUG_VIEWS, for
+// the footprint-contamination analysis view.
 #if defined(GI_VOXEL_BUFFER)
 
 #include "BufferGiField.hlsl"
@@ -45,14 +49,20 @@
 // global - _OccFieldTex / _BitmaskTex are already declared unconditionally in every variant via it.
 #include "VoxelOcclusion.hlsl"
 
-// Bound as globals by BufferGiUpdater. The buffers are concatenated over all fields (coarse at
-// offset 0, fine at offset BGI_COUNT); the *fine* field's bounds are the shared _BgiGrid* (above).
-// Occupancy is the 1-bit/voxel bitfield (grid^3/8 bytes per field).
-// These two are the ONLY buffers the fragment reads, and only for the AO face plane: all the actual
-// lighting arrives through the mirror textures below, so _Material / _Irradiance / _Radiance are
-// compute-side and are not declared (nor bound) here at all.
-StructuredBuffer<uint>  _Occupancy;  // 1 bit/voxel solidity - rejects air taps in the AO face read
-StructuredBuffer<uint>  _Surface;    // per-voxel surface word - static openness/AO in bits 16-23
+// ANALYSIS ONLY. Bound as a global by BufferGiUpdater; concatenated over all fields (coarse at
+// offset 0, fine at offset BGI_COUNT), the 1-bit/voxel solidity bitfield (grid^3/8 bytes per field).
+// The shipping fragment reads NO buffer - all lighting arrives through the mirror textures below, so
+// _Material / _Surface / _Irradiance / _Radiance are compute-side and are not declared (nor bound)
+// here at all. This one exists solely so BgiTapSolidWeight can report which pixels a leak fix could
+// move, and it is compiled out of every shipped variant with the keyword.
+#if defined(BGI_DEBUG_VIEWS)
+StructuredBuffer<uint>  _Occupancy;
+
+bool BgiSolidBit(uint slot)
+{
+    return (_Occupancy[slot >> 5] >> (slot & 31u)) & 1u;
+}
+#endif
 
 // Each field's blurred irradiance, written straight into a Texture3D by CSBlur (fused - no separate
 // copy pass). The read path taps these with ONE hardware-trilinear fetch - the Adreno win over the
@@ -63,10 +73,35 @@ SamplerState sampler_BgiIrradianceTex;
 Texture3D<float4> _BgiIrradianceTexCoarse;       // coarse field
 SamplerState sampler_BgiIrradianceTexCoarse;
 
-bool BgiSolidBit(uint slot)
-{
-    return (_Occupancy[slot >> 5] >> (slot & 31u)) & 1u;
-}
+// Each field's baked SUN VISIBILITY: an R16 scalar volume at the SHADOW grid (_BgiShadowGrid), which
+// is the occupancy resolution rather than the lighting one. Not slabbed, in either mode.
+//
+// It lived in the mirror's ALPHA, at the lighting grid, with six Z slabs in Cube so that a sub-voxel
+// wall's two sides did not have to share one number. Both of those went away together: CSSunVisibility
+// re-evaluates the scalar against the hi-res occupancy, and at that resolution the two sides of a wall
+// are DIFFERENT TEXELS - there is no ambiguity left for a slab index to resolve.
+//
+// Still one tap, still hardware-filtered, still the same normalized uvw over the field's box - so
+// raising the resolution changed nothing on this side except the offset scale below.
+Texture3D<float>  _BgiSunVisTex;                 // fine field
+SamplerState sampler_BgiSunVisTex;
+Texture3D<float>  _BgiSunVisTexCoarse;           // coarse field
+SamplerState sampler_BgiSunVisTexCoarse;
+
+// Each field's NEIGHBOUR SOLIDITY MASK at the LIGHTING grid: 7 bits per cell, R8_UInt, built once at
+// bake by CSBuildNeighbourMask (pure geometry - it must not move when the sun does).
+//
+//   bit 0    this cell is solid       bits 1,2  -X, +X    bits 3,4  -Y, +Y    bits 5,6  -Z, +Z
+//
+// Point-LOADED, never sampled: an interpolated bitmask is meaningless, which is also why it cannot
+// ride a spare channel of any volume above - all of those are filtered. No sampler is declared for
+// the same reason.
+//
+// Declared unconditionally alongside the other two pairs (not under the snap keyword) so the set of
+// fragment globals does not depend on a keyword: WebGPU fails pipeline creation on a declared-but-
+// unbound global, and BufferGiUpdater binds these whenever BufferGI is active.
+Texture3D<uint>   _BgiNeighbourMask;             // fine field
+Texture3D<uint>   _BgiNeighbourMaskCoarse;       // coarse field
 
 // Minimum n^2 weight for an axis tap to be taken (BGI_TAP_AXIS_SNAPPED). 0.01 keeps a face within
 // ~5.7 degrees of an axis on ONE tap - which is most of a built environment - while the error from
@@ -83,11 +118,8 @@ float3 _BgiCoarseVoxelSize;
 // Indirect gain on the GI contribution = the sun's Light.bounceIntensity (Unity's Indirect
 // Multiplier). Scales only the bounce, leaving direct lighting and emission untouched.
 float _BgiIntensity;
-// Strength of the baked static AO (0 = off). Darkens the GI in concave/contact regions using the
-// surface voxel's precomputed openness - restores the contact shadowing the omni gather reads weakly.
-float _BgiAoStrength;
 // Sun-shadow mode PER FIELD: 0 = off (caller falls back to its GetShadow source), 1 = baked
-// (the pre-marched visibility CSBlur mirrored into the irradiance texture's alpha), 2 = SDF (crisp
+// (the pre-marched visibility CSBlur mirrored into the R16 sun-visibility texture), 2 = SDF (crisp
 // per-pixel raymarch of the hi-res SDF, VoxelGI-parity, independent of the shadow-source keyword).
 // The fragment picks fine vs coarse by whether the shading point is inside the fine volume.
 int _BgiShadowModeFine;
@@ -98,7 +130,7 @@ float _BgiShadowSharpness;
 // 1.0 = the historical value.
 float _BgiShadowNormalOffset;
 // ANALYSIS view selector (BufferGiUpdater.DebugView): 0 = off (normal shading), 1 = GI only,
-// 2 = sun visibility, 3 = baked AO, 4 = direct only. Applied in the lit shader's fragment, so it
+// 2 = sun visibility, 4 = direct only, 5 = GI tap solid weight. Applied in the lit shader's fragment, so it
 // isolates the term AS THE FRAGMENT ACTUALLY READ IT - which is what separates a bake artifact from
 // a read artifact when compared against the BufferGiDebug cubes showing the same quantity per voxel.
 // Loose global like the rest; unbound it reads 0 and everything below is the identity.
@@ -138,62 +170,51 @@ void BgiSelectField(float3 worldPos, out bool insideFine, out float3 origin, out
     baseOffset = insideFine ? BGI_FINE_OFFSET    : BGI_COARSE_OFFSET;
 }
 
-// Baked sun visibility from the displayed field's mirror texture ALPHA (the air-layer sun-vis CSBlur
-// wrote): ONE hardware trilinear tap, replacing the 4-8 StructuredBuffer face taps this used to cost.
-// Offset ~1 voxel along the normal into the air layer in front (same as the GI texture read), so
-// the tap sits in the air voxels that actually carry sun-vis rather than the solid cell. Fine field
-// inside its box, coarse outside (its grid size = coarse voxel size * grid - only the voxel size is
-// published). This keeps the tunable continuous offset rather than the GI tap's snap-to-layer: alpha
-// is a coverage signal the sharpening below reconstructs an edge from, and snapping would quantise it.
+// Baked sun visibility: ONE hardware trilinear tap of the displayed field's SUN-VIS texture, at the
+// SHADOW grid. Fine field inside its box, coarse outside (its grid size = coarse voxel size * grid -
+// only the voxel size is published).
+//
+// The offset steps SHADOW cells, not lighting voxels. That is the whole point of the finer texture:
+// the shading point sits on a solid/air boundary, so 0.5 lands at the first shadow texel's centre in
+// front of the surface, and at the occupancy resolution that is a few centimetres out rather than
+// most of a metre. The over-reach that made a floor beside a tall occluder read shadowed scales down
+// with the cell, so the same `_BgiShadowNormalOffset` is a far smaller world displacement than it was.
+//
+// Still a continuous offset rather than the GI tap's snap-to-layer: the stored value is a coverage
+// FRACTION the sharpening below reconstructs an edge from, and snapping would quantise it.
+//
+// No Cube branch. The six Z slabs existed so one lighting-grid texel could answer for both sides of a
+// sub-voxel wall; at the shadow grid those sides are different texels, so there is nothing to
+// disambiguate and the read is the same single tap in both modes.
 // Returns 1 (lit) outside the sampled field: no baked info is read as unshadowed.
 half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
 {
     float3 origin   = insideFine ? _BgiGridOrigin   : _BgiCoarseOrigin;
-    float3 vox      = insideFine ? _BgiVoxelSize     : _BgiCoarseVoxelSize;
     float3 gridSize = insideFine ? _BgiGridSize      : _BgiCoarseVoxelSize * (float)BGI_GRID;
-    // Offset off the surface into the air layer that carries sun-vis. The shading point sits ON the
-    // solid/air voxel boundary, so 0.5 voxel lands exactly at the FIRST air voxel's centre; the
-    // historical 1.0 lands on the boundary between the first and second air layers, so the trilinear
-    // tap blends in air a whole voxel further out. That over-reach is why a floor next to a tall
-    // occluder reads shadowed - the tap is sampling air inside the occluder's shadow rather than the
-    // air just above the floor - and at a grazing sun it doubles the along-surface displacement.
-    float3 uvw = (worldPos + normal * vox * _BgiShadowNormalOffset - origin) / max(gridSize, 1e-6);
+    float3 shadowVox = gridSize / (float)BGI_SHADOW_GRID;
+    // NORMAL-OFFSET BIAS, and it must clear a WHOLE texel on the dominant axis.
+    //
+    // `normal * shadowVox` moves less than one texel on EVERY axis for any normal that is not axis
+    // aligned - a 45-degree wall gets 0.71 texels, and the trilinear footprint then still straddles
+    // the solid layer behind the surface. That layer does not hold a neutral value: CSSunVisibility
+    // marches solid texels too, from jittered origins inside their own geometry, so they store some
+    // arbitrary partial coverage (0.25 on the Sponza wall this was found on). Blending a varying
+    // fraction of that into a fully lit surface is textbook shadow acne, and because the fraction
+    // depends on where the surface sits inside its texel it appears as soft MOTTLING rather than as a
+    // uniform darkening.
+    //
+    // Scaling the normal so its largest component is exactly 1 makes `_BgiShadowNormalOffset` mean
+    // "texels cleared on the dominant axis" whatever the orientation, while the other two axes move
+    // proportionally. Same construction and the same reason as the Fast GI tap's offset above; the
+    // shadow tap simply never got it, and it matters more here because the shadow grid is anisotropic
+    // (0.169 x 0.117 x 0.267 m on Sponza - a 2.3x spread).
+    float3 aN = abs(normal);
+    float3 biasDir = normal / max(max(aN.x, aN.y), max(aN.z, 1e-4));
+    float3 uvw = (worldPos + biasDir * shadowVox * _BgiShadowNormalOffset - origin) / max(gridSize, 1e-6);
     if (any(uvw < 0.0) || any(uvw > 1.0)) return 1.0h; // outside the field -> lit (no baked info)
-    // In Cube the texture is six Z-stacked slabs, so a raw [0,1] z would sweep across all of them.
-    uint idirs = BgiIrradianceDirs();
-    half a;
-    if (idirs == 1u) {
-        a = insideFine
-            ? (half)_BgiIrradianceTex.SampleLevel(sampler_BgiIrradianceTex, uvw, 0).a
-            : (half)_BgiIrradianceTexCoarse.SampleLevel(sampler_BgiIrradianceTexCoarse, uvw, 0).a;
-    } else {
-        // CUBE: read the alpha the same way the GI reads the rgb - the three slabs in the normal's
-        // hemisphere, weighted by n^2. Sun visibility at a point is a scalar, but which FACE's
-        // visibility applies is not, and the slabs are exactly that distinction: CSBlur stores each
-        // face's own value in the slab pointing that way, so an interior surface weights the
-        // interior-facing slabs and never picks up the sunlit exterior across a sub-voxel wall. A
-        // single-slab alpha cannot say which side, which is why Single leaks a bright seam along such
-        // a join; this is hardware-filtered too, so the edge stays smooth and _BgiShadowSharpness applies.
-        //
-        // Air cells carry the same value in every slab (a point in air has no sides), so nothing is
-        // lost there; only solid shell cells differ per slab, which is where the ambiguity lived.
-        float invSlabs = 1.0 / (float)idirs;
-        float zLocal = clamp(uvw.z, 0.5 / (float)BGI_GRID, 1.0 - 0.5 / (float)BGI_GRID);
-        float3 n2 = normal * normal;
-        float accA = 0.0, wsum = 0.0;
-        [unroll]
-        for (uint s = 0u; s < 3u; s++) {
-            float d  = (s == 0u) ? normal.x : ((s == 1u) ? normal.y : normal.z);
-            float w2 = (s == 0u) ? n2.x     : ((s == 1u) ? n2.y     : n2.z);
-            uint slab = s * 2u + (d >= 0.0 ? 1u : 0u);
-            float3 suvw = float3(uvw.x, uvw.y, ((float)slab + zLocal) * invSlabs);
-            accA += (insideFine
-                ? _BgiIrradianceTex.SampleLevel(sampler_BgiIrradianceTex, suvw, 0).a
-                : _BgiIrradianceTexCoarse.SampleLevel(sampler_BgiIrradianceTexCoarse, suvw, 0).a) * w2;
-            wsum += w2;
-        }
-        a = (half)(accA / max(wsum, 1e-4));
-    }
+    half a = insideFine
+        ? (half)_BgiSunVisTex.SampleLevel(sampler_BgiSunVisTex, uvw, 0).r
+        : (half)_BgiSunVisTexCoarse.SampleLevel(sampler_BgiSunVisTexCoarse, uvw, 0).r;
 
     // Sharpen the reconstructed edge. Near a shadow boundary the stored value is the voxel's sun
     // COVERAGE, and coverage is a local signed distance to that boundary - so re-centring on 0.5 and
@@ -204,31 +225,30 @@ half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
     return saturate((a - 0.5h) * (half)_BgiShadowSharpness + 0.5h);
 }
 
-// The buffer-GI surface read for a shading point: the main-light sun visibility (from whichever
-// per-field ShadowMode is selected) plus the baked static AO (openness, _Surface bits 16-23).
-//   ao          : AO multiplier for the GI term (1 = no AO), already faded by _BgiAoStrength. Read
-//                 from the 4 face voxels around the point; non-solid / out-of-bounds taps are SKIPPED
-//                 and the weights RENORMALISED, so a face edge takes the value of the surface voxels
-//                 actually present. Skipped entirely (no buffer traffic at all) when AO is off.
-//   shadow      : main-light sun visibility. This function is the SOLE authority for the buffer-GI
-//                 main-light shadow: Off (0) leaves it 1.0 = OFF means genuinely no sun shadow (full
-//                 direct light), NOT a fall-through to any other shadow source; Baked (1) is one
-//                 trilinear tap of the mirror texture's alpha; Sdf (2) is the per-pixel SDF raymarch.
+// The buffer-GI main-light sun visibility for a shading point, from whichever per-field ShadowMode is
+// selected. This function is the SOLE authority for the buffer-GI main-light shadow: Off (0) returns
+// 1.0 = genuinely no sun shadow (full direct light), NOT a fall-through to any other shadow source;
+// Baked (1) is one trilinear tap of the sun-visibility texture; Sdf (2) is the per-pixel SDF raymarch.
+//
+// It used to resolve a baked static AO from the same call, off a 4-tap _Surface read on the face
+// plane. That is gone: a 32^3 openness scalar is the wrong spatial scale for contact occlusion, it
+// double-counted against the gather's own occlusion, and it was the fragment's only StructuredBuffer
+// consumer - so removing it makes this whole path purely texture-based (see the architecture doc).
+//
 // lightDir is the UNIT direction TOWARD the main light (used only by the Sdf mode's raymarch).
-// `normal` MUST be the geometric (vertex) normal, never a normal-mapped one - it both offsets the
-// sample off the surface and picks the dominant face-plane axis, and the voxel grid knows nothing
-// about normal maps. Feeding it a per-texel normal makes both jump within a single flat face.
-void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out half ao, out half shadow)
+// `normal` MUST be the geometric (vertex) normal, never a normal-mapped one - it offsets the sample
+// off the surface, and the voxel grid knows nothing about normal maps. Feeding it a per-texel normal
+// makes the sampled point jump within a single flat face.
+half BgiSampleSunShadow(float3 worldPos, float3 normal, float3 lightDir)
 {
-    ao = 1.0h;
-    shadow = 1.0h; // Off (mode 0) keeps this: no sun shadow, full direct light.
+    half shadow = 1.0h; // Off (mode 0) keeps this: no sun shadow, full direct light.
 
     bool insideFine; float3 origin, voxelSize; uint baseOffset;
     BgiSelectField(worldPos, insideFine, origin, voxelSize, baseOffset);
     int mode = insideFine ? _BgiShadowModeFine : _BgiShadowModeCoarse;
 
     // Shadow source per BufferGI field. Each is fully resolved here - no fall-through:
-    //   Baked (1)          : one hardware-trilinear tap of the mirror texture's ALPHA (see
+    //   Baked (1)          : one hardware-trilinear tap of the R16 SUN-VIS texture (see
     //                        BgiSampleShadowTexture). In Cube each Z slab carries its own face's
     //                        visibility, so a sub-voxel wall's two sides resolve separately and still
     //                        hardware-filtered - no StructuredBuffer face taps anywhere on this path,
@@ -246,46 +266,7 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out 
     else if (mode == 2) shadow = GetShadowFromSdf(lightDir, worldPos, 1.0e+10f); // lightDir is unit
     else if (mode == 3) shadow = saturate(GetOccFieldShadow(worldPos, normal));
     else if (mode == 4) shadow = saturate(GetBitmaskShadow(worldPos, normal));
-
-    if (_BgiAoStrength <= 0.0) return; // AO off -> nothing to read from the face plane
-
-    // Face plane: the dominant normal axis is fixed; u,v are the two in-plane axes we interpolate over.
-    float3 aN = abs(normal);
-    int3 uDir, vDir;
-    if (aN.x >= aN.y && aN.x >= aN.z)  { uDir = int3(0, 1, 0); vDir = int3(0, 0, 1); }
-    else if (aN.y >= aN.z)             { uDir = int3(1, 0, 0); vDir = int3(0, 0, 1); }
-    else                               { uDir = int3(1, 0, 0); vDir = int3(0, 1, 0); }
-    int3 absAxis = int3(1, 1, 1) - abs(uDir) - abs(vDir); // the remaining (normal) axis
-
-    // The solid surface voxel is the cell CONTAINING the shading point (same layer the GI read treats
-    // as solid). Continuous in-plane position; -0.5 puts voxel centres on integers so the fraction is
-    // the bilinear weight between a voxel and its neighbour.
-    float3 g = BgiWorldToGridAt(worldPos, origin, voxelSize);
-    int nN = (int)floor(dot(g, (float3)absAxis));
-    float u = dot(g, (float3)uDir) - 0.5; int u0 = (int)floor(u); half fu = (half)(u - u0);
-    float v = dot(g, (float3)vDir) - 0.5; int v0 = (int)floor(v); half fv = (half)(v - v0);
-
-    half opennessAcc = 0.0h;
-    half wsum        = 0.0h;
-    [unroll]
-    for (int du = 0; du <= 1; du++) {
-        [unroll]
-        for (int dv = 0; dv <= 1; dv++) {
-            int3 c = nN * absAxis + (u0 + du) * uDir + (v0 + dv) * vDir;
-            if (!BgiInBounds(c)) continue;
-            uint slot = baseOffset + BgiIndex((uint3)c);
-            if (!BgiSolidBit(slot)) continue; // skip air taps: don't let "off-surface" pull the result
-            half wgt = (du == 0 ? 1.0h - fu : fu) * (dv == 0 ? 1.0h - fv : fv);
-            opennessAcc += BgiSurfaceOpenness(_Surface[slot]) * wgt;
-            wsum += wgt;
-        }
-    }
-
-    // wsum == 0: not one of the four in-plane taps was SOLID (a surface whose own cell the voxelizer
-    // did not mark - detail finer than a voxel), so there is no openness to report. AO keeps its 1.0:
-    // no occlusion information is a fair "unoccluded".
-    if (wsum > (half)1e-3)
-        ao = lerp(1.0h, opennessAcc / wsum, (half)_BgiAoStrength);
+    return shadow;
 }
 
 // One hardware-trilinear tap of a field's mirrored irradiance texture at a surface point, taken at
@@ -297,11 +278,91 @@ void BgiSampleFaceAoShadow(float3 worldPos, float3 normal, float3 lightDir, out 
 // voxel size of a non-cubic volume), so its footprint kept straddling the solid cell. The two
 // in-plane coordinates stay continuous, so the tap still interpolates smoothly across the face;
 // the sampled plane jumps one cell where the dominant axis flips.
-// `normal` MUST be the geometric normal (see BgiSampleFaceAoShadow) - it picks the axis.
+// `normal` MUST be the geometric normal (see BgiSampleSunShadow) - it picks the axis.
 // In-plane neighbours can still be solid at a concave corner; CSBlur dilates the first solid shell
 // with its air neighbours' irradiance so those taps read a plausible value instead of a hole.
-half3 BgiSampleFieldTexture(Texture3D<float4> tex, SamplerState smp, float3 worldPos, float3 normal,
-                            float3 origin, float3 voxelSize)
+#if defined(BGI_TAP_SNAP_INPLANE)
+// P9 - CONTAMINATED-AXIS SNAP.
+//
+// BGI_TAP_AXIS_SNAPPED clears the solid layer BEHIND the surface, along the normal. This clears the
+// solid layer BESIDE it: where the trilinear kernel spans a one-voxel wall IN THE SURFACE PLANE, the
+// tap's footprint straddles a shell cell whose value belongs to a surface facing some other way, and
+// the far side reads the near side's light. The two in-plane coordinates are exactly the ones the
+// existing snap leaves continuous, which is why this is the other half of the same idea and not a
+// competing one.
+//
+// Trilinear on axis a blends c0 = floor(t - 0.5) with c0 + 1, weight f on c0 + 1:
+//     c0 + 1 solid -> f = 0        c0 solid -> f = 1        both air -> LEAVE IT ALONE
+//
+// The condition is BINARY, not a tuned threshold, and the snap engages where it is a NO-OP: the
+// moment c0 + 1 becomes the wall cell is the moment the tap crossed a cell boundary, where f is
+// already 0. So the sample position is continuous across the engage point - which is what both
+// earlier attempts at this lacked, and why they read as blocky.
+//
+// `skipAxis` is the tap's OWN axis (the one BGI_TAP_AXIS_SNAPPED already placed at a cell centre, or
+// the dominant normal axis on the Fast path). Snapping it here would move the tap off that centre
+// and undo the normal-axis guarantee: f is 0 there, so c0 IS the tapped cell, and a solid tapped cell
+// would push the sample to the next one.
+// Written BRANCHLESS AND VECTORISED, all three axes at once, deliberately. The obvious form - an
+// [unroll]ed loop over the axes with `continue` on skipAxis, dynamic `?:` component reads and
+// per-component write-back - CRASHED the FXC compiler process outright ("Lost connection with shader
+// compiler process. Suspected crash in FXC", which surfaces as a magenta error shader and names no
+// line). This form has no loop, no dynamic component indexing and no branch except the early-out, and
+// it is also simply less work.
+float3 BgiSnapContaminatedAxes(float3 ga, Texture3D<uint> maskTex, int skipAxis)
+{
+    int3 ci = (int3)floor(ga);
+    uint mask = maskTex.Load(int4(ci, 0));
+
+    float3 c0 = floor(ga - 0.5);                  // the low cell of each axis' trilinear pair
+    bool3 below = (ga - floor(ga)) < 0.5;         // below the cell centre -> the pair is (ci-1, ci)
+    bool3 selfSolid  = (mask & 1u) != 0u;
+    bool3 minusSolid = bool3((mask & 2u) != 0u, (mask & 8u)  != 0u, (mask & 32u) != 0u);
+    bool3 plusSolid  = bool3((mask & 4u) != 0u, (mask & 16u) != 0u, (mask & 64u) != 0u);
+    bool3 c0Solid = below ? minusSolid : selfSolid;
+    bool3 c1Solid = below ? selfSolid  : plusSolid;
+
+    //   c0+1 solid -> all weight on c0        c0 solid -> all weight on c0+1        else leave it
+    //
+    // BOTH SOLID MUST NOT SNAP. The first version resolved that case to c0 + 0.5 - "prefer the near
+    // side" - which puts the whole trilinear weight on a cell that is itself solid, and an undilated
+    // solid cell holds BLACK. It painted hard black rectangles into the atrium floor and the column
+    // bases, which is exactly the blockiness this technique is supposed to avoid. When neither cell of
+    // the pair is a clean read there is nothing to snap TO, so the tap stays continuous and the
+    // footprint keeps whatever contamination it had.
+    bool3 exactlyOne = c0Solid != c1Solid;
+    float3 snapped = exactlyOne ? (c1Solid ? (c0 + 0.5) : (c0 + 1.5)) : ga;
+    // CLAMP INTO THE FIELD. Both tap paths treat an out-of-range uvw as "no data" - the Fast path
+    // returns black outright, the axis-snapped one drops the tap - so a snap that pushes the sample
+    // past the last cell centre does not read a neighbour, it reads NOTHING. High up in the atrium
+    // that painted hard black rectangles across the clerestory. The valid range is the centre of the
+    // first cell to the centre of the last, which is also exactly the clamp the Cube path already
+    // applies to its slab-local Z.
+    snapped = clamp(snapped, 0.5, (float)BGI_GRID - 0.5);
+
+    // The tap's own axis keeps its continuous coordinate - see the note above on why.
+    bool3 keep = bool3(skipAxis == 0, skipAxis == 1, skipAxis == 2);
+    // mask == 0 means nothing solid in the whole 6-neighbourhood, so no pair can straddle a wall.
+    // In open space that is every pixel, and it is why the mask is worth a texture of its own.
+    return (mask == 0u) ? ga : (keep ? ga : snapped);
+}
+
+// Field-selecting wrapper. A Texture3D CANNOT be chosen with a ternary - the same rule that makes
+// BgiGatherIndirect branch over whole calls instead of over the texture - and doing it anyway does
+// not produce a clean error: it CRASHED the FXC compiler process, which surfaces as
+// "Lost connection with shader compiler process" and a magenta error shader, with nothing naming the
+// line. Single-exit for the usual out-param/return-value warning reason.
+float3 BgiSnapForField(float3 ga, bool insideFine, int skipAxis)
+{
+    float3 r;
+    if (insideFine) r = BgiSnapContaminatedAxes(ga, _BgiNeighbourMask, skipAxis);
+    else            r = BgiSnapContaminatedAxes(ga, _BgiNeighbourMaskCoarse, skipAxis);
+    return r;
+}
+#endif
+
+half3 BgiSampleFieldTexture(Texture3D<float4> tex, SamplerState smp, Texture3D<uint> maskTex,
+                            float3 worldPos, float3 normal, float3 origin, float3 voxelSize)
 {
     float3 g = (worldPos - origin) / max(voxelSize, 1e-6); // continuous grid coords
     uint idirs = BgiIrradianceDirs();
@@ -350,6 +411,9 @@ half3 BgiSampleFieldTexture(Texture3D<float4> tex, SamplerState smp, float3 worl
             float gA = dot(g, axisMask);
             // This tap's plane: centre of the cell one step along its axis, in that component's sign.
             float3 ga = g + axisMask * ((floor(gA) + (d >= 0.0 ? 1.0 : -1.0) + 0.5) - gA);
+#if defined(BGI_TAP_SNAP_INPLANE)
+            ga = BgiSnapContaminatedAxes(ga, maskTex, (int)a);
+#endif
             float3 uvw = ga * (1.0 / (float)BGI_GRID);
             if (any(uvw < 0.0) || any(uvw > 1.0)) continue;
             acc += (float3)tex.SampleLevel(smp, uvw, 0).rgb * w2;
@@ -382,6 +446,12 @@ half3 BgiSampleFieldTexture(Texture3D<float4> tex, SamplerState smp, float3 worl
         float3 aN = abs(normal);
         g += normal / max(max(aN.x, aN.y), max(aN.z, 1e-4));
 
+#if defined(BGI_TAP_SNAP_INPLANE)
+        // The Fast path has no snapped axis of its own, so the one to protect is the DOMINANT normal
+        // axis - the one its continuous offset is clearing. Snapping that here would fight the offset.
+        int dom = (aN.x >= aN.y) ? ((aN.x >= aN.z) ? 0 : 2) : ((aN.y >= aN.z) ? 1 : 2);
+        g = BgiSnapContaminatedAxes(g, maskTex, dom);
+#endif
         // Voxel centre c+0.5 maps to (c+0.5)/GRID, exactly texel c's centre - no half-texel fixup.
         float3 uvw = g * (1.0 / (float)BGI_GRID);
         if (any(uvw < 0.0) || any(uvw > 1.0)) return 0.0h;
@@ -419,6 +489,9 @@ half3 BgiSampleFieldTexture(Texture3D<float4> tex, SamplerState smp, float3 worl
         float gA = dot(g, axisMask);
         // This bucket's own plane: centre of the cell one step along ITS axis, in the bucket's sign.
         float3 ga = g + axisMask * ((floor(gA) + (d >= 0.0 ? 1.0 : -1.0) + 0.5) - gA);
+#if defined(BGI_TAP_SNAP_INPLANE)
+        ga = BgiSnapContaminatedAxes(ga, maskTex, (int)a);
+#endif
         float3 uvw = ga * (1.0 / (float)BGI_GRID);
         if (any(uvw < 0.0) || any(uvw > 1.0)) continue;
         uint slab = a * 2u + (d >= 0.0 ? 1u : 0u);
@@ -454,6 +527,9 @@ float BgiTapSolidWeight(float3 worldPos, float3 normal)
             float3 axisMask = (a == 0u) ? float3(1, 0, 0) : ((a == 1u) ? float3(0, 1, 0) : float3(0, 0, 1));
             float d = dot(normal, axisMask), gA = dot(g, axisMask);
             float3 ga = g + axisMask * ((floor(gA) + (d >= 0.0 ? 1.0 : -1.0) + 0.5) - gA);
+#if defined(BGI_TAP_SNAP_INPLANE)
+            ga = BgiSnapForField(ga, insideFine, (int)a);
+#endif
             if (any(ga < 0.0) || any(ga > (float)BGI_GRID)) continue;
             acc += BgiSolidWeightAt(ga, baseOff) * w2;
             wsum += w2;
@@ -462,6 +538,10 @@ float BgiTapSolidWeight(float3 worldPos, float3 normal)
 #else
         float3 aN = abs(normal);
         float3 ga = g + normal / max(max(aN.x, aN.y), max(aN.z, 1e-4));
+#if defined(BGI_TAP_SNAP_INPLANE)
+        int dom = (aN.x >= aN.y) ? ((aN.x >= aN.z) ? 0 : 2) : ((aN.y >= aN.z) ? 1 : 2);
+        ga = BgiSnapForField(ga, insideFine, dom);
+#endif
         if (any(ga < 0.0) || any(ga > (float)BGI_GRID)) return 0.0;
         return BgiSolidWeightAt(ga, baseOff);
 #endif
@@ -476,6 +556,9 @@ float BgiTapSolidWeight(float3 worldPos, float3 normal)
         float3 axisMask = (a2 == 0u) ? float3(1, 0, 0) : ((a2 == 1u) ? float3(0, 1, 0) : float3(0, 0, 1));
         float d = dot(normal, axisMask), w2 = dot(n2c, axisMask), gA = dot(g, axisMask);
         float3 ga = g + axisMask * ((floor(gA) + (d >= 0.0 ? 1.0 : -1.0) + 0.5) - gA);
+#if defined(BGI_TAP_SNAP_INPLANE)
+        ga = BgiSnapForField(ga, insideFine, (int)a2);
+#endif
         if (any(ga < 0.0) || any(ga > (float)BGI_GRID)) continue;
         accC += BgiSolidWeightAt(ga, baseOff) * w2;
         wsumC += w2;
@@ -485,7 +568,7 @@ float BgiTapSolidWeight(float3 worldPos, float3 normal)
 #endif // BGI_DEBUG_VIEWS
 
 // Raw buffer-GI irradiance at a surface point (NO AO - the caller multiplies in the merged AO from
-// BgiSampleFaceAoShadow). Fine field inside its box, coarse outside; scaled by _BgiIntensity.
+// BgiSampleSunShadow). Fine field inside its box, coarse outside; scaled by _BgiIntensity.
 half3 BgiGatherIndirect(float3 worldPos, float3 normal)
 {
     bool insideFine; float3 origin, voxelSize; uint baseOff;
@@ -496,10 +579,10 @@ half3 BgiGatherIndirect(float3 worldPos, float3 normal)
     // world-space extent is never needed (which also drops the coarse box's voxelSize * GRID rebuild).
     // A Texture3D can't be selected by a ternary, so the branch picks the sampler pair.
     half3 result = insideFine
-        ? BgiSampleFieldTexture(_BgiIrradianceTex, sampler_BgiIrradianceTex,
+        ? BgiSampleFieldTexture(_BgiIrradianceTex, sampler_BgiIrradianceTex, _BgiNeighbourMask,
                                 worldPos, normal, origin, voxelSize)
         : BgiSampleFieldTexture(_BgiIrradianceTexCoarse, sampler_BgiIrradianceTexCoarse,
-                                worldPos, normal, origin, voxelSize);
+                                _BgiNeighbourMaskCoarse, worldPos, normal, origin, voxelSize);
 
     // Final safety net: guarantee finite, non-negative GI so the additive term can never darken a
     // surface (a NaN/negative here renders black even over directly-lit pixels). The threshold is

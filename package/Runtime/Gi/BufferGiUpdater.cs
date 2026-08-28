@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 using UnityEngine.Serialization;
 
@@ -46,6 +47,40 @@ namespace Lotec.Lighting {
         /// <summary>Voxels across all concatenated fields (FieldCount * VoxelCount).</summary>
         public int TotalVoxels => _totalVoxels;
 
+        // Hi-res OCCUPANCY grid: a second, finer subdivision of the SAME world box, carrying solidity
+        // and nothing else. Instance state like _grid, resolved by SyncOccResolution.
+        int _occGrid = 128;
+        int _occGridLog2 = 7;
+        // Words of hi-res occupancy per field. 4x4x4 blocks of two contiguous uints, so
+        // (occGrid/4)^3 * 2. See BGI_OCC_BLOCK_LOG2 in BufferGiField.hlsl for why blocks and why 4.
+        int _occWordsPerField;
+
+        /// <summary>Cubic resolution of the hi-res occupancy grid (power of two, &gt;= <see cref="Grid"/>).</summary>
+        public int OccGrid => _occGrid;
+        /// <summary>log2(OccGrid).</summary>
+        public int OccGridLog2 => _occGridLog2;
+        /// <summary>4x4x4 occupancy blocks per axis.</summary>
+        public int OccBlockGrid => _occGrid >> 2;
+        /// <summary>Hi-res occupancy words in ONE field (two per 4x4x4 block).</summary>
+        public int OccWordsPerField => _occWordsPerField;
+        /// <summary>Hi-res occupancy words across all concatenated fields.</summary>
+        public int TotalOccWords => FieldCount * _occWordsPerField;
+
+        // Baked sun-shadow grid: a THIRD resolution over the same box, never finer than the occupancy
+        // grid it is marched against.
+        int _shadowGrid = 128;
+        int _shadowGridLog2 = 7;
+        /// <summary>Cubic resolution of the baked sun-visibility texture (power of two, &lt;= <see cref="OccGrid"/>).</summary>
+        public int ShadowGrid => _shadowGrid;
+        // 1-bit/voxel occupancy at the hi-res grid, blocked; and its OR-downsample onto the lighting
+        // grid. For the containment check and the debug viewer.
+        public ComputeBuffer OccupancyHiBuffer => _occupancyHiBuffer;
+        public ComputeBuffer OccupancyTraversalBuffer => _occupancyTraversalBuffer;
+        /// <summary>Bake scratch: real solids plus the cell behind each surfaced voxel. Exposed for
+        /// analysis - it is the input to the gradient normal, so comparing a candidate normal source
+        /// against anything else is comparing against the wrong thing.</summary>
+        public ComputeBuffer OccupancyThickBuffer => _occupancyThickBuffer;
+
         // Per-field voxel sun-shadow mode (matches _BgiShadowMode* in BufferGiRead.hlsl). Each field picks
         // its main-light sun shadow explicitly - nothing is a hidden fall-through:
         //   Off (0)            : genuinely NO sun shadow (full direct light).
@@ -58,12 +93,6 @@ namespace Lotec.Lighting {
         // read unbound data. They also have no effect where their source doesn't reach (e.g. the coarse
         // field beyond the fine SDF bounds).
         public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2, OcclusionField = 3, Bitmask = 4 }
-
-        // How the Baked mode estimates per-voxel sun visibility (matches _BgiSunShadowMode in
-        // BufferGiSolve.compute). Centre stores a single BIT per voxel - no filter downstream can recover
-        // a sub-voxel edge from that, which is why Baked shadows look blocky. The other two spend
-        // either rays (Supersampled) or frames (Temporal) to make it a real area fraction.
-        public enum SunShadowSampling { Centre = 0, Supersampled = 1, Temporal = 2 }
 
         // How many DIRECTIONS of outgoing radiance each solid voxel stores (matches _BgiRadianceDirs).
         // A voxel is one cell, but the geometry inside it can face more than one way: any wall, floor
@@ -96,6 +125,11 @@ namespace Lotec.Lighting {
         /// </summary>
         public enum SingleTapFilter { Fast = 0, AxisSnapped = 1 }
 
+        // Which occupancy level the SOLVE's rays march (matches _BgiSolveMarchLevel in
+        // BufferGiSolve.compute). All three stay resident so the comparison is a uniform write rather
+        // than a recompile; the branch is uniform across the dispatch and sits outside the march loop.
+        public enum SolveMarchLevel { Coarse = 0, Flat = 1, TwoLevel = 2 }
+
         /// <summary>
         /// ANALYSIS views for the lit shader: show one term of the shaded result on its own, so an
         /// artifact can be attributed to the GI bounce, the sun visibility or the baked AO rather
@@ -103,9 +137,10 @@ namespace Lotec.Lighting {
         /// </summary>
         public enum DebugView {
             Off = 0,
-            GiOnly = 1,        // indirect bounce * AO, tonemapped (HDR)
+            GiOnly = 1,        // indirect bounce, tonemapped (HDR)
             SunVisibility = 2, // raw 0..1 greyscale, no display transform
-            Ao = 3,            // raw 0..1 greyscale, no display transform
+            // 3 was Ao, removed with the baked openness scalar. The remaining values keep their
+            // numbers so a serialized selection does not silently become a different view.
             DirectOnly = 4,    // direct term only, tonemapped (HDR)
             /// <summary>Fraction of the GI tap's trilinear footprint that lands on SOLID cells -
             /// the contamination the in-plane leak is made of. Black = the pixel physically cannot
@@ -156,11 +191,6 @@ namespace Lotec.Lighting {
                  "thin walls no longer thin, which retires the two-sided (Cube) handling for them.\n " +
                  "Changing it re-bakes.")]
         [SerializeField] bool _thickenWalls;
-        [Tooltip("Strength of the baked static ambient occlusion (0 = off). Darkens the GI in concave " +
-                 "corners and near-contact gaps (e.g. under a hovering object) using each surface " +
-                 "voxel's precomputed openness - restores contact shadowing the omnidirectional gather " +
-                 "reads only weakly. Requires a re-bake to recompute openness after a geometry change.")]
-        [Range(0f, 1f)][SerializeField] float _aoStrength;
         [Tooltip("Sun-shadow for the FINE volume (the active, detailed field). None fall through - each " +
                  "is explicit.\n Off: no sun shadow at all - full direct light.\n Baked: the solve's " +
                  "pre-marched sun visibility, interpolated across the surface - soft and cheap (no " +
@@ -175,37 +205,44 @@ namespace Lotec.Lighting {
                  "the far field.\n OcclusionField / Bitmask: the volume's baked occlusion source, if its " +
                  "binder covers the far field.")]
         [SerializeField] ShadowMode _coarseShadow = ShadowMode.Off;
-        [Tooltip("Baked shadow mode ONLY: how the solve estimates each voxel's sun visibility.\n " +
-                 "Centre: one ray from the voxel centre - a single bit per voxel, which is what makes " +
-                 "the Baked shadow blocky. The original behaviour.\n " +
-                 "Supersampled: several stratified rays inside the voxel, averaged into a sub-voxel " +
-                 "fraction. Instant and stable when the sun moves, but costs that many sun rays.\n " +
-                 "Temporal: one jittered ray per frame folded into the running average - converges to " +
-                 "the same fraction for NO extra rays, but STATIC SUN ONLY. Every sun change restarts " +
-                 "the average, and a restarted average is a single binary sample, so a moving sun keeps " +
-                 "it near 0/1 and visibly volatile. Use Supersampled if the sun moves.")]
-        [SerializeField] SunShadowSampling _sunShadowSampling = SunShadowSampling.Supersampled;
-        [Tooltip("Supersampled only: rays per voxel per frame. 1 is identical to Centre.")]
+        [Tooltip("Baked shadow mode ONLY: stratified sun rays per texel of the shadow texture. This is " +
+                 "the setting that controls what the baked sun shadow LOOKS like - supersampling is " +
+                 "what turns a per-texel bit into the coverage fraction Baked Shadow Sharpness needs " +
+                 "to reconstruct an edge, and at 1 the field is strictly binary.\n " +
+                 "It only ever affects texels ON a shadow boundary. Measured on Sponza at a 128 shadow " +
+                 "grid: 1 leaves 0.00% of texels fractional, 4 leaves 1.91%, 16 leaves 2.92%, and the " +
+                 "field mean does not move. Cost is linear and paid only when the sun moves: 330 / 621 " +
+                 "/ 1497 ms to re-march the volume.")]
         [Range(1, 16)][SerializeField] int _sunShadowSamples = 4;
+        [Tooltip("Stratified sun rays for the direct term a SOLID voxel then BOUNCES (CSInject). A " +
+                 "different pass at a different resolution from the setting above: this one runs on " +
+                 "the GI grid, where a voxel is metres across, so the shadow texture's resolution " +
+                 "buys it nothing.\n " +
+                 "Not a look setting - it feeds indirect light, so changing it moves overall " +
+                 "brightness rather than shadow edges. Dropping it to 1 measured 4.90% brighter " +
+                 "overall on Sponza (96% of pixels), because a centre ray reads 'lit' too often near " +
+                 "a shadow boundary.")]
+        [Range(1, 16)][SerializeField] int _injectSunSamples = 4;
         [Tooltip("Baked shadow mode ONLY: steepens the shadow edge the fragment reconstructs from the " +
                  "voxel grid. Near a boundary the stored value is the voxel's sun coverage, which is a " +
                  "local distance to that boundary - so steepening it rebuilds an edge finer than the " +
-                 "voxel. 1 = off. Needs Supersampled or Temporal: against a 0/1 field this only hardens " +
-                 "the staircase. Too high re-introduces hard voxel edges.")]
+                 "texel. 1 = off. The sun-visibility pass always supersamples, so there is always a " +
+                 "real fraction here to steepen. Too high re-introduces hard texel edges.")]
         [Range(1f, 16f)][SerializeField] float _bakedShadowSharpness = 1f;
-        [Tooltip("Baked shadow mode ONLY: box-blur the sun visibility along with the irradiance. Worth " +
-                 "it when each voxel holds a noisy bit (Centre); with a coverage fraction it mostly " +
-                 "widens the edge and works against Shadow Sharpness.")]
-        [SerializeField] bool _blurSunVisibility = true;
-        [Tooltip("Baked shadow mode ONLY: how far off the surface the shadow tap sits, in voxels.\n " +
-                 "0.5 is the geometrically correct value - the shading point lies on the solid/air voxel " +
-                 "boundary, so half a voxel lands at the first air voxel's centre.\n " +
-                 "1.0 (the historical value) lands on the boundary between the first and second air " +
-                 "layers, so the tap blends in air a whole voxel further out: floors read shadowed next " +
-                 "to tall occluders, and a grazing sun displaces the shadow twice as far along the " +
-                 "surface. Lower if shadows look detached or over-reaching; raise if surfaces " +
-                 "self-shadow.")]
-        [Range(0.25f, 2f)][SerializeField] float _shadowNormalOffset = 1f;
+        [Tooltip("Baked shadow mode ONLY: how far off the surface the shadow tap sits, in SHADOW " +
+                 "texels (not lighting voxels - the shadow texture has its own, much finer grid).\n " +
+                 "1.0 is the MINIMUM that reconstructs correctly, and the floor of the range for that " +
+                 "reason. Half a texel puts a POINT sample at the first air texel's centre, but the " +
+                 "tap is TRILINEAR: its footprint still reaches a full texel back into the solid " +
+                 "layer, and solid texels do not hold a neutral value (CSSunVisibility marches them " +
+                 "too, from origins inside their own geometry, so they store an arbitrary partial " +
+                 "coverage). Blending a varying fraction of that into a lit surface is shadow acne, " +
+                 "and it reads as soft MOTTLING because the fraction depends on where the surface " +
+                 "sits inside its texel. Measured on a sunlit Sponza wall: 0.5 left 91% of it " +
+                 "spuriously dark, 1.0 leaves 3%.\n " +
+                 "Raise toward 2 if surfaces still self-shadow; the cost is shadows detaching from " +
+                 "their casters, which at this resolution is centimetres rather than most of a metre.")]
+        [Range(1f, 3f)][SerializeField] float _shadowNormalOffset = 1f;
         [Tooltip("Directions of radiance stored per voxel - what a voxel can say about geometry that " +
                  "faces more than one way inside it.\n " +
                  "Single: one value; a wall thinner than a voxel gets one side right and the other dark.\n " +
@@ -230,6 +267,15 @@ namespace Lotec.Lighting {
                  "Neither fixes the thin-wall bounce leak or the shared AO - those are baked before a " +
                  "pixel is drawn and need Cube (or a two-voxel-thick wall).")]
         [SerializeField] SingleTapFilter _singleTapFilter = SingleTapFilter.Fast;
+        [Tooltip("Snap the GI tap to a voxel centre on any IN-PLANE axis whose trilinear pair spans a " +
+                 "one-voxel wall - the light that bleeds sideways through a sub-voxel curtain or " +
+                 "railing. The tap filter above clears the solid layer BEHIND the surface; this clears " +
+                 "the one BESIDE it, and the two compose (this also applies in Cube).\n " +
+                 "The condition is binary and engages exactly where it is a no-op, so it does not " +
+                 "introduce the blockiness a tuned threshold would. Costs one point Load of the baked " +
+                 "neighbour-solidity mask per shaded pixel, which is why it is a keyword and off by " +
+                 "default.")]
+        [SerializeField] bool _inPlaneSnap;
         [Tooltip("ANALYSIS: mute all direct lighting (sun + point + spot) in VoxelLit, leaving only " +
                  "the indirect bounce (and emission) on screen. Direct light is normally an order of " +
                  "magnitude brighter than the bounce, so it buries exactly the differences a GI A/B is " +
@@ -268,6 +314,51 @@ namespace Lotec.Lighting {
                  "resolution), so this can be low without softening shadows. Snapped to a power of two, " +
                  "clamped 4..256; a change reallocates the buffers and re-bakes.")]
         [Min(4)][SerializeField] int _giResolution = 32;
+        [Tooltip("Voxel resolution of the OCCUPANCY grid - geometry only, no lighting. Independent of " +
+                 "GI Resolution and normally much higher: solidity is 0.125 bits per voxel against the " +
+                 "irradiance field's 8-48 BYTES, so accuracy here costs neither rays nor convergence " +
+                 "time. Snapped to a power of two, clamped 64..256, and never below GI Resolution.\n " +
+                 "64: Quest / WebGL (64 KB). 128: desktop default (512 KB). 256: high-end PC (4 MB).\n " +
+                 "Changing it reallocates and re-bakes. The disk bake stores whatever it was baked at " +
+                 "and is OR-downsampled at load, so ONE asset serves every platform.")]
+        [Min(64)][SerializeField] int _occupancyResolution = 128;
+        [Tooltip("Occupancy resolution used on mobile / Quest / WebGL instead of the value above. 0 = " +
+                 "no override. This is a LOAD-TIME downsample of the same bake asset, not a second " +
+                 "bake - so it costs a build variant of nothing.")]
+        [SerializeField] int _occupancyResolutionMobile = 64;
+        [Tooltip("Voxel resolution of the baked SUN-SHADOW texture. Its own setting because sun " +
+                 "visibility and geometry have very different budgets: 2 bytes a texel against " +
+                 "occupancy's 0.125 bits, so 256 is 67 MB of shadow next to 4 MB of occupancy.\n " +
+                 "Clamped to the Occupancy Resolution and never above it - the shadow is evaluated " +
+                 "by marching the occupancy field, so detail beyond it would be fabricated.\n " +
+                 "This is what makes the Baked shadow sharp: it is re-evaluated at this resolution " +
+                 "when the sun moves, not upsampled from the 32^3 solve.")]
+        [Min(64)][SerializeField] int _shadowResolution = 128;
+        [Tooltip("Sun-shadow resolution used on mobile / Quest / WebGL instead of the value above. " +
+                 "0 = no override. At 64 the texture is 1 MB for both fields; at 128 it is 8.4 MB.")]
+        [SerializeField] int _shadowResolutionMobile = 64;
+        [Tooltip("Which occupancy level the SOLVE's rays are traced against (gather rays, sun rays, " +
+                 "point/spot shadow rays). This is the accuracy of the GI itself, not of the baked " +
+                 "shadow texture, which always marches the hi-res grid.\n " +
+                 "Coarse: the 32^3 lighting grid - a sub-voxel curtain casts a whole-voxel shadow.\n " +
+                 "Flat: straight over the hi-res occupancy. Correct, and the slowest.\n " +
+                 "TwoLevel: the same result as Flat, skipping empty lighting cells wholesale.\n " +
+                 "The origin cell stays exempt at LIGHTING resolution at every level, so a surface " +
+                 "voxel never occludes its own rays.")]
+        [SerializeField] SolveMarchLevel _solveMarchLevel = SolveMarchLevel.Flat;
+        [Tooltip("Gate CSBlur's shell dilation on the GROWN occupancy: a solid voxel takes its " +
+                 "displayed value only from air no surface grew into, so it cannot be filled from the " +
+                 "far side of the wall or roof beside it.\n " +
+                 "Why on: at a concave corner the stored normal is the LIGHTING-grid occupancy " +
+                 "gradient, so it points at whichever air volume is biggest - the sky, outside a " +
+                 "closed room - and the dilation fills the corner cell from outdoors. Measured on " +
+                 "Playground's wall/ceiling junction: 0.045 against the 0.24 of the room it borders, " +
+                 "which is the dark line down every corner. With the gate on it reads 0.252.\n " +
+                 "Why off: the grown set is BGI_THICKEN's geometry, so it inherits that setting's " +
+                 "assumption that growing one voxel inward never closes anything that matters. " +
+                 "Off restores the pre-gate behaviour exactly - it is a display-side read, so the " +
+                 "raster, the air field and every ray are byte-identical either way.")]
+        [SerializeField] bool _grownDilationGate = true;
         // FormerlySerializedAs: this was _computeShader until the bake kernels moved to their own
         // asset, at which point "the compute shader" stopped naming one of two.
         [FormerlySerializedAs("_computeShader")]
@@ -335,7 +426,26 @@ namespace Lotec.Lighting {
         // scratch read by OccupancyNormal only - see _OccupancyThick in BufferGiBake.compute for why the
         // gradient needs a backed wall that the real occupancy cannot supply.
         ComputeBuffer _occupancyThickBuffer;
+        // GROWN occupancy, 1 bit/voxel on the LIGHTING grid: every rasterized voxel plus the one behind
+        // each FRAGMENT along its triangle normal, written by the voxelizer to its own UAV. A raster
+        // product like _Material, so it is captured into and uploaded from the bake asset. Read by
+        // CSBlur alone - see _OccupancyGrown in BufferGiVoxelData.hlsl for why it is not _OccupancyThick
+        // and not BGI_THICKEN.
+        ComputeBuffer _occupancyGrownBuffer;
+        // Hi-res occupancy (4x4x4 blocks, two uints each) at _occGrid, and its OR-downsample onto the
+        // lighting grid - the always-hot coarse level a two-level march reads first. Both are bake
+        // products; nothing per-frame writes them.
+        ComputeBuffer _occupancyHiBuffer;
+        ComputeBuffer _occupancyTraversalBuffer;
         uint[] _occupancyClear;
+        uint[] _occHiClear;      // TotalOccWords zeros (the raster only ORs, so it needs a cleared target)
+        uint[] _occHiReadback;   // TotalOccWords scratch for the capture / containment readback
+        uint[] _grownReadback;   // TotalVoxels/32 scratch for the grown-bitfield capture readback
+        uint[] _grownUpload;     // TotalVoxels/32 scratch assembling both fields' grown slices for upload
+        uint[] _occHiUpload;     // TotalOccWords scratch assembled from field assets at load
+        // Occupancy resolution the current buffers were allocated with, so a settings change is caught
+        // the same way a radiance-stride change is.
+        int _allocatedOccGrid;
         const string ThickenKeyword = "BGI_THICKEN";
         bool _materialBaked;
         // The fine field's volume (the manager's active volume); its Bounds already carry the
@@ -356,6 +466,16 @@ namespace Lotec.Lighting {
         int _blurKernel = -1;
         RenderTexture _irradianceTex;          // fine field's blurred irradiance as a Texture3D (default read source)
         RenderTexture _irradianceTexCoarse;    // coarse field's blurred irradiance as a Texture3D
+        // Baked sun visibility, split out of the irradiance mirror's alpha into its own R16 volume per
+        // field (same dimensions, so Cube keeps its per-slab values). See _BgiSunVisTexWrite in
+        // BufferGiSolve.compute for why it is a texture of its own rather than a channel.
+        RenderTexture _sunVisTex;              // fine field
+        RenderTexture _sunVisTexCoarse;        // coarse field
+        // Each field's 7-bit neighbour-solidity mask at the LIGHTING grid (R8_UInt), the gate for the
+        // in-plane snap. Built once per bake by CSBuildNeighbourMask - it is pure geometry, so it must
+        // not be rebuilt when the sun moves. Point-loaded, never filtered.
+        RenderTexture _neighbourMaskTex;       // fine field
+        RenderTexture _neighbourMaskTexCoarse; // coarse field
         // Radiance slots per voxel the CURRENT _radianceBuffer was allocated with. Compared against
         // RadianceSlots each frame (SyncRadianceDirections) to catch an inspector/script mode change.
         int _allocatedRadianceSlots;
@@ -364,9 +484,12 @@ namespace Lotec.Lighting {
         // always publishes: global keywords survive play-mode exits and domain reloads, so "the field
         // says Fast" is not evidence that the keyword is off.
         SingleTapFilter? _appliedTapFilter;
+        int _sunVisKernel = -1;
         int _initFineKernel = -1;
         int _averageLuminanceKernel = -1;
         int _buildOccupancyKernel = -1;
+        int _buildTraversalMipKernel = -1;
+        int _buildNeighbourMaskKernel = -1;
         int _buildNormalOccupancyKernel = -1;
         int _buildSurfaceKernel = -1;
         int _buildAirDistanceKernel = -1;
@@ -374,6 +497,9 @@ namespace Lotec.Lighting {
         // Air-distance relaxation passes at bake (one voxel of city-block reach each). MUST match
         // BGI_MAX_AIR_DIST in BufferGiField.hlsl so the whole capped field converges.
         const int AirDistancePasses = 5;
+        // The baked sun shadow needs re-marching: set at allocation and after every bake, cleared once
+        // CSSunVisibility has run. A sun MOVE is caught separately by HasSunChanged.
+        bool _sunVisDirty = true;
         bool _resetFineField;
         // Zero EVERY field's dynamic slices before the next solve (fresh/re-enabled buffers). Deferred
         // to Update rather than done at allocation time so the grid constants are bound first - CSClear's
@@ -435,36 +561,35 @@ namespace Lotec.Lighting {
             set => _confidenceCurve = Mathf.Clamp(value, 1f, 8f);
         }
 
-        /// <summary>Strength of the baked static ambient occlusion applied to the displayed GI (0 = off .. 1).</summary>
-        public float AoStrength {
-            get => _aoStrength;
-            set => _aoStrength = Mathf.Clamp01(value);
-        }
-
         /// <summary>Sun-shadow mode for the FINE (active) volume: Off, Baked pre-marched visibility, or a per-pixel SDF raymarch.</summary>
         public ShadowMode FineShadow {
             get => _fineShadow;
             set => _fineShadow = value;
         }
 
-        /// <summary>A/B: how the Baked shadow mode estimates sun visibility. Changing it restarts the
-        /// progressive average, since Temporal's stored value is only meaningful once re-converged.</summary>
-        public SunShadowSampling SunShadowMode {
-            get => _sunShadowSampling;
-            set {
-                if (_sunShadowSampling == value) return;
-                _sunShadowSampling = value;
-                _collectedSamples = 0;
-            }
-        }
-
-        /// <summary>Supersampled rays per voxel per frame. 1 is identical to Centre.</summary>
+        /// <summary>Stratified sun rays per texel of the shadow TEXTURE (CSSunVisibility) - the setting
+        /// that controls what the baked shadow looks like. See InjectSunSamples for the bounce.</summary>
         public int SunShadowSamples {
             get => _sunShadowSamples;
             set {
                 int clamped = Mathf.Clamp(value, 1, 16);
                 if (_sunShadowSamples == clamped) return;
                 _sunShadowSamples = clamped;
+                _collectedSamples = 0;
+                _sunVisDirty = true;   // ditto - scripted A/B must not depend on the sun moving
+            }
+        }
+
+        /// <summary>Sun rays for the direct term a solid voxel BOUNCES (CSInject). Feeds indirect
+        /// light, so it moves overall brightness rather than shadow edges - unlike
+        /// <see cref="SunShadowSamples"/>, which is the shadow texture's. Restarts the solve; the sun
+        /// visibility texture is not involved, so it needs no re-march.</summary>
+        public int InjectSunSamples {
+            get => _injectSunSamples;
+            set {
+                int clamped = Mathf.Clamp(value, 1, 16);
+                if (_injectSunSamples == clamped) return;
+                _injectSunSamples = clamped;
                 _collectedSamples = 0;
             }
         }
@@ -478,18 +603,7 @@ namespace Lotec.Lighting {
         /// <summary>Baked-shadow tap offset off the surface, in voxels. Fragment-side only.</summary>
         public float ShadowNormalOffset {
             get => _shadowNormalOffset;
-            set => _shadowNormalOffset = Mathf.Clamp(value, 0.25f, 2f);
-        }
-
-        /// <summary>Blur the sun visibility alongside the irradiance. Restarts the solve, since the
-        /// mirrored texture alpha is only rewritten while the solve is dispatching.</summary>
-        public bool BlurSunVisibility {
-            get => _blurSunVisibility;
-            set {
-                if (_blurSunVisibility == value) return;
-                _blurSunVisibility = value;
-                _collectedSamples = 0;
-            }
+            set => _shadowNormalOffset = Mathf.Clamp(value, 1f, 3f);
         }
 
         /// <summary>Directions of radiance stored per voxel. Reallocates on change.</summary>
@@ -578,6 +692,12 @@ namespace Lotec.Lighting {
         static readonly int s_bgiIrradianceTexWrite = Shader.PropertyToID("_BgiIrradianceTexWrite");
         static readonly int s_bgiIrradianceTex = Shader.PropertyToID("_BgiIrradianceTex");
         static readonly int s_bgiIrradianceTexCoarse = Shader.PropertyToID("_BgiIrradianceTexCoarse");
+        static readonly int s_bgiSunVisTexWrite = Shader.PropertyToID("_BgiSunVisTexWrite");
+        static readonly int s_bgiSunVisTex = Shader.PropertyToID("_BgiSunVisTex");
+        static readonly int s_bgiSunVisTexCoarse = Shader.PropertyToID("_BgiSunVisTexCoarse");
+        static readonly int s_bgiNeighbourMaskWrite = Shader.PropertyToID("_BgiNeighbourMaskWrite");
+        static readonly int s_bgiNeighbourMask = Shader.PropertyToID("_BgiNeighbourMask");
+        static readonly int s_bgiNeighbourMaskCoarse = Shader.PropertyToID("_BgiNeighbourMaskCoarse");
         static readonly int s_voxAlbedo = Shader.PropertyToID("_VoxAlbedo");
         static readonly int s_voxEmission = Shader.PropertyToID("_VoxEmission8");
         static readonly int s_voxBaseMap = Shader.PropertyToID("_VoxBaseMap");
@@ -601,6 +721,16 @@ namespace Lotec.Lighting {
         static readonly int s_surface = Shader.PropertyToID("_Surface");
         static readonly int s_occupancy = Shader.PropertyToID("_Occupancy");
         static readonly int s_occupancyThick = Shader.PropertyToID("_OccupancyThick");
+        static readonly int s_occupancyHi = Shader.PropertyToID("_OccupancyHi");
+        static readonly int s_occupancyHiWrite = Shader.PropertyToID("_OccupancyHiWrite");
+        static readonly int s_occupancyTraversal = Shader.PropertyToID("_OccupancyTraversal");
+        static readonly int s_occupancyGrown = Shader.PropertyToID("_OccupancyGrown");
+        static readonly int s_bgiOccGrid = Shader.PropertyToID("_BgiOccGrid");
+        static readonly int s_bgiOccGridLog2 = Shader.PropertyToID("_BgiOccGridLog2");
+        static readonly int s_occFieldWordOffset = Shader.PropertyToID("_OccFieldWordOffset");
+        static readonly int s_bgiShadowGrid = Shader.PropertyToID("_BgiShadowGrid");
+        static readonly int s_bgiShadowGridLog2 = Shader.PropertyToID("_BgiShadowGridLog2");
+        static readonly int s_bgiShadowSliceBase = Shader.PropertyToID("_BgiShadowSliceBase");
         static readonly int s_frameCount = Shader.PropertyToID("_FrameCount");
         static readonly int s_samplesPerFrame = Shader.PropertyToID("_SamplesPerFrame");
         static readonly int s_sampleBase = Shader.PropertyToID("_SampleBase");
@@ -608,9 +738,10 @@ namespace Lotec.Lighting {
         static readonly int s_reachBoost = Shader.PropertyToID("_ReachBoost");
         static readonly int s_bgiRadianceDirs = Shader.PropertyToID("_BgiRadianceDirs");
         static readonly int s_bgiIrradianceDirs = Shader.PropertyToID("_BgiIrradianceDirs");
-        static readonly int s_sunShadowMode = Shader.PropertyToID("_BgiSunShadowMode");
-        static readonly int s_sunShadowSamples = Shader.PropertyToID("_BgiSunShadowSamples");
-        static readonly int s_blurSunVis = Shader.PropertyToID("_BgiBlurSunVis");
+        static readonly int s_solveMarchLevel = Shader.PropertyToID("_BgiSolveMarchLevel");
+        static readonly int s_grownGate = Shader.PropertyToID("_BgiGrownGate");
+        static readonly int s_shadowTexSamples = Shader.PropertyToID("_BgiShadowTexSamples");
+        static readonly int s_injectSunSamples = Shader.PropertyToID("_BgiInjectSunSamples");
         static readonly int s_shadowSharpness = Shader.PropertyToID("_BgiShadowSharpness");
         static readonly int s_shadowNormalOffset = Shader.PropertyToID("_BgiShadowNormalOffset");
         static readonly int s_directLightDir = Shader.PropertyToID("_DirectLightDir");
@@ -622,7 +753,6 @@ namespace Lotec.Lighting {
         };
         static readonly int s_ambientFloor = Shader.PropertyToID("_AmbientFloor");
         static readonly int s_intensity = Shader.PropertyToID("_BgiIntensity");
-        static readonly int s_aoStrength = Shader.PropertyToID("_BgiAoStrength");
         // Not a _Bgi* name: it lives in VoxelDirectLighting.hlsl and mutes the DIRECT term, which is
         // present in every GI variant - it is not part of the buffer-GI read the _Bgi prefix marks.
         static readonly int s_directMute = Shader.PropertyToID("_VoxelDirectMute");
@@ -730,20 +860,23 @@ namespace Lotec.Lighting {
                 "     nothing, occupancy stays empty, and the solve runs to completion producing no light\n" +
                 $"  keyword {LightingKeywords.GiBuffer}={keyword}   <- false means the lit shader is " +
                 "compiling its GI_OFF variant, so nothing this updater publishes can be read\n" +
-                $"  bound buffers _Occupancy={(_occupancyBuffer != null && _occupancyBuffer.IsValid() ? "valid" : "NULL/INVALID")} " +
-                $"_Surface={(_surfaceBuffer != null && _surfaceBuffer.IsValid() ? "valid" : "NULL/INVALID")}\n" +
-                "     <- on WebGPU these two MUST be bound whenever GI_VOXEL_BUFFER is claimed: the driver\n" +
-                "        validates every declared global against the pipeline layout and FAILS PIPELINE\n" +
-                "        CREATION for a variant declaring them while unbound, which renders the object BLACK\n" +
+                $"  bound buffers _Occupancy={(_occupancyBuffer != null && _occupancyBuffer.IsValid() ? "valid" : "NULL/INVALID")}\n" +
+                "     <- the shipping fragment reads no buffer at all, but the BGI_DEBUG_VIEWS variant\n" +
+                "        declares _Occupancy, and on WebGPU a declared-but-unbound global FAILS PIPELINE\n" +
+                "        CREATION, which renders the object BLACK\n" +
                 $"  irradianceTex fine={(_irradianceTex != null ? _irradianceTex.name + " created=" + _irradianceTex.IsCreated() : "NULL")} " +
                 $"coarse={(_irradianceTexCoarse != null ? _irradianceTexCoarse.name + " created=" + _irradianceTexCoarse.IsCreated() : "NULL")}\n" +
+                $"  sunVisTex fine={(_sunVisTex != null ? _sunVisTex.name + " created=" + _sunVisTex.IsCreated() : "NULL")} " +
+                $"coarse={(_sunVisTexCoarse != null ? _sunVisTexCoarse.name + " created=" + _sunVisTexCoarse.IsCreated() : "NULL")}\n" +
                 $"  solveShader={(_solveShader != null ? _solveShader.name : "NULL")} " +
                 $"bakeShader={(_bakeShader != null ? _bakeShader.name : "NULL")} " +
                 $"voxelizeShader={(_voxelizeShader != null ? _voxelizeShader.name : "NULL")}\n" +
                 $"  kernels solve(inject={_injectKernel} gather={_gatherKernel} blur={_blurKernel}) " +
                 $"bake(occ={_buildOccupancyKernel} surface={_buildSurfaceKernel})   <- -1 means the kernel " +
                 "was not found and its dispatch is skipped\n" +
-                $"  grid={Grid} volume={(_volume != null ? _volume.name : "NULL")} fields={(_fields != null ? _fields.name : "NULL")} " +
+                $"  grid={Grid} occGrid={OccGrid} (requested={_occupancyResolution} mobileOverride={_occupancyResolutionMobile}) " +
+                $"occWords/field={OccWordsPerField} shadowGrid={ShadowGrid}\n" +
+                $"  volume={(_volume != null ? _volume.name : "NULL")} fields={(_fields != null ? _fields.name : "NULL")} " +
                 $"hasCoarse={HasCoarse} directions={_radianceDirections}",
                 this);
         }
@@ -757,6 +890,9 @@ namespace Lotec.Lighting {
             // Drop the tap keyword with the GI group so a disabled updater doesn't leave a variant of a
             // shader it no longer drives resident. Re-published by SyncTapFilterKeyword next SetGlobals.
             if (!on) SetTapKeyword(SingleTapFilter.Fast);
+            // Same for the snap: a disabled updater must not leave its variant resident on a shader it
+            // no longer drives (and its mask textures are about to be released).
+            if (!on) SetSnapKeyword(false);
             // Same for the analysis variant: a disabled updater must not leave BGI_DEBUG_VIEWS resident
             // on a shader it no longer drives. Re-claimed by SetGlobals if a view is still selected.
             if (!on) SetDebugKeyword(false);
@@ -790,6 +926,31 @@ namespace Lotec.Lighting {
                 filter == SingleTapFilter.AxisSnapped ? LightingKeywords.BgiTapAxisSnapped : null);
         }
 
+        // BGI_TAP_SNAP_INPLANE, change-only for the same reason as SetTapKeyword. NOT gated on Single -
+        // unlike the tap filter, the snap applies in Cube too (its per-bucket taps leave the same two
+        // in-plane coordinates continuous).
+        bool? _appliedSnapKeyword;
+        void SetSnapKeyword(bool on) {
+            if (_appliedSnapKeyword == on) return;
+            _appliedSnapKeyword = on;
+            LightingKeywords.BgiSnap.Set(on ? LightingKeywords.BgiTapSnapInPlane : null);
+        }
+
+        /// <summary>Contaminated-axis snap (BGI_TAP_SNAP_INPLANE). Public so a debug panel can A/B it
+        /// without the inspector; takes effect the next frame.</summary>
+        public bool InPlaneSnap {
+            get => _inPlaneSnap;
+            set => _inPlaneSnap = value;
+        }
+
+        /// <summary>Gate the shell dilation on the grown occupancy (see the serialized tooltip).
+        /// Public so the A/B can be driven from a script or an eval; takes effect on the next solve
+        /// step, and since only the displayed shell changes, a re-solve is enough - no re-bake.</summary>
+        public bool GrownDilationGate {
+            get => _grownDilationGate;
+            set => _grownDilationGate = value;
+        }
+
         void OnValidate() {
             // This component is dominated by display/solve settings (exposure, tonemap, shadows, AO,
             // samples...) - none of which affect the VOXELIZATION. So an inspector change only restarts
@@ -797,6 +958,15 @@ namespace Lotec.Lighting {
             // would needlessly re-voxelize + re-warn on every tweak). The bake's real inputs - the normal
             // source and the field bounds - are watched in Update by SyncBakeInputs instead.
             _collectedSamples = 0;
+            // ...but restarting the SOLVE is no longer enough for everything on this component. P6 moved
+            // sun visibility out of the per-frame solve into CSSunVisibility, which re-runs only on a sun
+            // MOVE or on _sunVisDirty - so a setting that feeds it (samples, estimator) changed in the
+            // inspector had no effect at all until the sun moved or the scene was re-baked, and the field
+            // silently kept its old contents. Found by fs testing _sunShadowSamples and correctly
+            // reporting that it did nothing. The inspector writes the backing FIELD and then calls this,
+            // so it bypasses the property setters entirely; this is the only place that catches it.
+            // Cheap to be unconditional: the pass is chunked across frames and only re-runs the volume.
+            _sunVisDirty = true;
         }
 
         // Wake the solver when the sun changes. Local lights are intentionally excluded (GI may drop
@@ -834,8 +1004,67 @@ namespace Lotec.Lighting {
         // bake resolution); on a change, release the buffers so they re-alloc + re-bake at the new size.
         void SyncGridResolution() {
             int grid = SnapGridResolution(_giResolution);
-            if (grid == _grid) return;
-            SetGridResolution(grid);
+            if (grid != _grid) {
+                SetGridResolution(grid);
+                ReleaseBuffers();
+            }
+            SyncOccResolution();
+        }
+
+        // The occupancy resolution this build actually runs at: the mobile override where one applies,
+        // else the authored value. Snapped to a power of two in [64, 256] and never below the lighting
+        // grid - the traversal mip is an OR-DOWNSAMPLE of the hi-res field, so a hi-res grid coarser
+        // than the field it feeds has nothing to downsample and the ratio shift would go negative.
+        //
+        // WebGL and the mobile players are the platforms the override exists for; the check is a
+        // runtime one rather than a #if so an editor session can be told which it is simulating.
+        public int ResolvedOccupancyResolution {
+            get {
+                bool mobile = Application.isMobilePlatform
+                    || Application.platform == RuntimePlatform.WebGLPlayer;
+                int requested = mobile && _occupancyResolutionMobile > 0
+                    ? _occupancyResolutionMobile : _occupancyResolution;
+                return SnapOccResolution(requested);
+            }
+        }
+
+        // Same snap as the field grid, clamped to the three supported occupancy resolutions.
+        static int SnapOccResolution(int resolution) {
+            return Mathf.Clamp(Mathf.ClosestPowerOfTwo(Mathf.Max(64, resolution)), 64, 256);
+        }
+
+        void SetOccResolution(int occGrid) {
+            _occGrid = occGrid;
+            _occGridLog2 = 0;
+            while ((1 << _occGridLog2) < occGrid) _occGridLog2++;
+            int blocks = occGrid >> 2;
+            _occWordsPerField = blocks * blocks * blocks * 2;
+        }
+
+        // The shadow-texture resolution this build runs at. Same mobile-override shape as the
+        // occupancy one, and CAPPED at the occupancy resolution: the texture is produced by marching
+        // the occupancy field, so texels finer than that carry no information the geometry has.
+        public int ResolvedShadowResolution {
+            get {
+                bool mobile = Application.isMobilePlatform
+                    || Application.platform == RuntimePlatform.WebGLPlayer;
+                int requested = mobile && _shadowResolutionMobile > 0
+                    ? _shadowResolutionMobile : _shadowResolution;
+                return SnapOccResolution(requested);
+            }
+        }
+
+        // Resolve + apply the occupancy and shadow resolutions. Called from SyncGridResolution, AFTER
+        // the field grid is set: occupancy's floor is Grid and shadow's ceiling is occupancy, so the
+        // three cannot be resolved independently.
+        void SyncOccResolution() {
+            int occ = Mathf.Max(ResolvedOccupancyResolution, _grid);
+            int shadow = Mathf.Min(ResolvedShadowResolution, occ);
+            if (occ == _occGrid && shadow == _shadowGrid && _occWordsPerField > 0) return;
+            SetOccResolution(occ);
+            _shadowGrid = shadow;
+            _shadowGridLog2 = 0;
+            while ((1 << _shadowGridLog2) < shadow) _shadowGridLog2++;
             ReleaseBuffers();
         }
 
@@ -901,6 +1130,13 @@ namespace Lotec.Lighting {
             cs.SetInt(s_bgiGrid, _grid);
             cs.SetInt(s_bgiGridLog2, _gridLog2);
             cs.SetInt(s_bgiCount, _voxelCount);
+            // Hi-res occupancy grid. Bound with the field constants for the same reason the radiance
+            // stride is: BgiOccWord's index math depends on it exactly the way BgiIndex depends on the
+            // field grid, and a kernel that missed it would address the wrong words silently.
+            cs.SetInt(s_bgiOccGrid, _occGrid);
+            cs.SetInt(s_bgiOccGridLog2, _occGridLog2);
+            cs.SetInt(s_bgiShadowGrid, _shadowGrid);
+            cs.SetInt(s_bgiShadowGridLog2, _shadowGridLog2);
             // Radiance stride. Bound alongside the grid constants because BgiRadianceSlot's index math
             // depends on it exactly the way BgiIndex depends on the grid.
             cs.SetInt(s_bgiRadianceDirs, _allocatedRadianceSlots);
@@ -985,9 +1221,28 @@ namespace Lotec.Lighting {
             // Gate the solve: keep gathering until the ray budget is spent (_collectedSamples == maxSamples),
             // or always if _continuousGi. Otherwise idle so a static, settled scene costs no GI compute.
             // Samples are accumulated BEFORE the dispatch so the first solved frame's weight is ~1.
-            if (HasSunChanged()) {
+            // The baked sun shadow is re-marched when the sun moves or the geometry changed, and at
+            // no other time - its lifecycle is the sun, not the solve frame. Checked BEFORE the solve
+            // gate so a moved sun starts reaching the screen in the same frame it moved.
+            if (HasSunChanged() || _sunVisDirty) {
                 _collectedSamples = 0;
+                _sunVisDirty = false;
+                // NEVER restart a sweep that is already running. A CONTINUOUSLY moving sun (a sun
+                // rotator) makes HasSunChanged fire every single frame, and resetting the slice cursor
+                // here meant the sweep never got past its first chunk: measured 2 of 128 slices after
+                // 120 frames of rotation, so 126 slices kept whatever the last completed sweep left
+                // and the shadow was effectively frozen. Queue instead, and start the next sweep the
+                // moment this one lands.
+                if (SunVisibilityPending) _sunVisRestartQueued = true;
+                else StartSunVisibilitySweep();
             }
+            // Spend one bounded chunk per frame until the volume is covered. Deliberately not one
+            // dispatch: see SunVisTexelsPerDispatch.
+            if (!SunVisibilityPending && _sunVisRestartQueued) {
+                _sunVisRestartQueued = false;
+                StartSunVisibilitySweep();
+            }
+            if (SunVisibilityPending) DispatchSunVisibilityChunk();
             if (_collectedSamples < _maxSamples || _continuousGi) {
                 // Rays already gathered BEFORE this frame. The gather indexes its sample sequence by
                 // the ray ordinal (_SampleBase + rayIndex) rather than by the frame, so the same ray
@@ -1051,8 +1306,8 @@ namespace Lotec.Lighting {
 
         /// <summary>
         /// The one combination WebGPU turns into a black screen: GI_VOXEL_BUFFER claimed - so the lit
-        /// shader compiles the variant that DECLARES _Occupancy / _Surface - while those buffers are
-        /// not actually bound. The driver validates declared globals against the pipeline layout and
+        /// shader compiles a variant that DECLARES a global - while that global is not actually
+        /// bound. The driver validates declared globals against the pipeline layout and
         /// fails pipeline creation outright; D3D11 and Vulkan tolerate it, so this only ever shows up
         /// in a browser build, and it shows up as unlit geometry rather than as an error.
         ///
@@ -1063,10 +1318,16 @@ namespace Lotec.Lighting {
         /// of BufferGiRead.hlsl - a global declared there but missing here is exactly the black screen
         /// this guard exists to prevent.</summary>
         bool GiVariantGlobalsBound(out string missing) {
+            // _Occupancy is declared only by the BGI_DEBUG_VIEWS variant now, but the check stays
+            // unconditional: the keyword can be flipped from script mid-frame, and a null buffer here
+            // is a bug either way.
             if (_occupancyBuffer == null || !_occupancyBuffer.IsValid()) { missing = "_Occupancy"; return false; }
-            if (_surfaceBuffer == null || !_surfaceBuffer.IsValid()) { missing = "_Surface"; return false; }
             if (_irradianceTex == null || !_irradianceTex.IsCreated()) { missing = "_BgiIrradianceTex"; return false; }
             if (_irradianceTexCoarse == null || !_irradianceTexCoarse.IsCreated()) { missing = "_BgiIrradianceTexCoarse"; return false; }
+            if (_sunVisTex == null || !_sunVisTex.IsCreated()) { missing = "_BgiSunVisTex"; return false; }
+            if (_sunVisTexCoarse == null || !_sunVisTexCoarse.IsCreated()) { missing = "_BgiSunVisTexCoarse"; return false; }
+            if (_neighbourMaskTex == null || !_neighbourMaskTex.IsCreated()) { missing = "_BgiNeighbourMask"; return false; }
+            if (_neighbourMaskTexCoarse == null || !_neighbourMaskTexCoarse.IsCreated()) { missing = "_BgiNeighbourMaskCoarse"; return false; }
             missing = null;
             return true;
         }
@@ -1102,11 +1363,18 @@ namespace Lotec.Lighting {
             Shader.SetGlobalInt(s_bgiGrid, _grid);
             Shader.SetGlobalInt(s_bgiGridLog2, _gridLog2);
             Shader.SetGlobalInt(s_bgiCount, _voxelCount);
-            // The only two buffers the lit shader reads, and only for the AO face plane: solidity from
-            // the 8 KB bitfield, openness from the surface word (bits 16-23). Everything else it needs
-            // arrives through the mirrored irradiance textures below.
+            // The SHADOW grid, for BgiSampleShadowTexture's offset. Easy to forget because the other
+            // two grids are only needed compute-side - and forgetting it is silent: unbound it reads
+            // 0, the offset divides by it, and every uvw goes out of range, which the tap reports as
+            // LIT. The whole baked shadow disappears with no error anywhere.
+            Shader.SetGlobalInt(s_bgiShadowGrid, _shadowGrid);
+            Shader.SetGlobalInt(s_bgiShadowGridLog2, _shadowGridLog2);
+            // The lit shader reads NO buffer in a shipping variant - everything it needs arrives
+            // through the mirrored irradiance textures below. _Occupancy is still published because
+            // the BGI_DEBUG_VIEWS variant declares it (BgiTapSolidWeight), and a declared-but-unbound
+            // global fails pipeline creation on WebGPU. _Surface is no longer declared anywhere in the
+            // fragment, so it is no longer published either.
             Shader.SetGlobalBuffer(s_occupancy, _occupancyBuffer);
-            Shader.SetGlobalBuffer(s_surface, _surfaceBuffer);
             // Fine field bounds + coarse field bounds for the fragment read (hard fine/coarse switch).
             Shader.SetGlobalVector(s_gridOrigin, GridOrigin);
             Shader.SetGlobalVector(s_gridSize, GridSize);
@@ -1117,7 +1385,6 @@ namespace Lotec.Lighting {
             // Unity control for indirect strength, used instead of a custom field.
             Light sun = RenderSettings.sun;
             Shader.SetGlobalFloat(s_intensity, sun != null ? sun.bounceIntensity : 1f);
-            Shader.SetGlobalFloat(s_aoStrength, _aoStrength);
             // Analysis mute for the lit shader's direct term (see _muteDirectLighting). Published every
             // frame like the other read parameters - it is one float and takes effect immediately, with
             // no solve restart, which is what lets it be flipped in the middle of an A/B.
@@ -1142,16 +1409,25 @@ namespace Lotec.Lighting {
             // tap implementations whose register footprints differ - the Fast variant must not be
             // compiled alongside the other. Change-only (see SyncTapFilterKeyword).
             SyncTapFilterKeyword();
+            SetSnapKeyword(_inPlaneSnap);
             Shader.SetGlobalInt(s_shadowModeFine, (int)_fineShadow);
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
             // Fragment-side knobs for the Baked mode (BgiSampleShadowTexture). Both are pure read
             // parameters, so they take effect immediately without a re-solve.
             Shader.SetGlobalFloat(s_shadowSharpness, Mathf.Max(1f, _bakedShadowSharpness));
-            Shader.SetGlobalFloat(s_shadowNormalOffset, Mathf.Clamp(_shadowNormalOffset, 0.25f, 2f));
+            Shader.SetGlobalFloat(s_shadowNormalOffset, Mathf.Clamp(_shadowNormalOffset, 1f, 3f));
             PublishOcclusionSources();
-            // Mirrored irradiance textures (the fragment read source), one per field.
+            // Mirrored irradiance textures (the fragment read source), one per field, plus the R16
+            // sun-visibility volumes the Baked shadow mode taps. All four are declared unconditionally
+            // by the GI_VOXEL_BUFFER variant, so all four must be bound whenever it is claimed.
             Shader.SetGlobalTexture(s_bgiIrradianceTex, _irradianceTex);
             Shader.SetGlobalTexture(s_bgiIrradianceTexCoarse, _irradianceTexCoarse);
+            Shader.SetGlobalTexture(s_bgiSunVisTex, _sunVisTex);
+            Shader.SetGlobalTexture(s_bgiSunVisTexCoarse, _sunVisTexCoarse);
+            // Bound whether or not the snap keyword is on: BufferGiRead declares these unconditionally
+            // (a keyword-dependent global set fails WebGPU pipeline creation for the other variant).
+            Shader.SetGlobalTexture(s_bgiNeighbourMask, _neighbourMaskTex);
+            Shader.SetGlobalTexture(s_bgiNeighbourMaskCoarse, _neighbourMaskTexCoarse);
             // The display transform (_ExposureLinear + the TONEMAP_* keyword) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value can't darken it.
         }
@@ -1204,7 +1480,10 @@ namespace Lotec.Lighting {
             // the native buffer is gone, and the early-return would then keep a dead buffer forever.
             if (_materialBuffer != null && _materialBuffer.IsValid()
                 && _radianceBuffer != null && _radianceBuffer.IsValid()
-                && _irradianceBuffer != null && _irradianceBuffer.IsValid()) {
+                && _irradianceBuffer != null && _irradianceBuffer.IsValid()
+                // The hi-res field is sized by its OWN resolution, so a change there must reallocate
+                // even though every lighting buffer is still the right size.
+                && _occupancyHiBuffer != null && _occupancyHiBuffer.IsValid() && _allocatedOccGrid == _occGrid) {
                 return;
             }
             ReleaseBuffers();
@@ -1215,9 +1494,12 @@ namespace Lotec.Lighting {
             _injectKernel = RequireKernel(_solveShader, "CSInject");
             _gatherKernel = RequireKernel(_solveShader, "CSGather");
             _blurKernel = RequireKernel(_solveShader, "CSBlur");
+            _sunVisKernel = RequireKernel(_solveShader, "CSSunVisibility");
             _initFineKernel = RequireKernel(_solveShader, "CSInitFineFromCoarse");
             _averageLuminanceKernel = RequireKernel(_solveShader, "CSAverageLuminance");
             _buildOccupancyKernel = RequireKernel(_bakeShader, "CSBuildOccupancy");
+            _buildTraversalMipKernel = RequireKernel(_bakeShader, "CSBuildTraversalMip");
+            _buildNeighbourMaskKernel = RequireKernel(_bakeShader, "CSBuildNeighbourMask");
             _buildNormalOccupancyKernel = RequireKernel(_bakeShader, "CSBuildNormalOccupancy");
             _buildSurfaceKernel = RequireKernel(_bakeShader, "CSBuildSurface");
             _buildAirDistanceKernel = RequireKernel(_bakeShader, "CSBuildAirDistance");
@@ -1237,13 +1519,28 @@ namespace Lotec.Lighting {
             _surfaceBuffer = new ComputeBuffer(TotalVoxels, sizeof(uint));      // 32-bit surface word/voxel
             _occupancyBuffer = new ComputeBuffer(TotalVoxels / 32, sizeof(uint)); // 1 bit/voxel
             _occupancyThickBuffer = new ComputeBuffer(TotalVoxels / 32, sizeof(uint)); // ditto, bake-only
-            // Each field's blurred irradiance mirrored into a Texture3D for the default trilinear read.
+            _occupancyGrownBuffer = new ComputeBuffer(TotalVoxels / 32, sizeof(uint));  // ditto, raster product
+            // Hi-res occupancy + its traversal mip. Both are filled by the bake (raster or asset
+            // upload) before anything reads them, but a fresh ComputeBuffer holds GARBAGE, and garbage
+            // in an occupancy field reads as scene-wide phantom geometry - so clear at allocation.
+            _allocatedOccGrid = _occGrid;
+            _occupancyHiBuffer = new ComputeBuffer(TotalOccWords, sizeof(uint));
+            _occupancyTraversalBuffer = new ComputeBuffer(TotalVoxels / 32, sizeof(uint));
+            ClearOccupancyHi();
+            ClearTraversalMip();
+            // Each field's blurred irradiance mirrored into a Texture3D for the default trilinear read,
+            // plus the matching R16 sun-visibility volume the Baked shadow mode taps.
             _irradianceTex = CreateIrradianceTexture("BgiIrradianceTex");
             _irradianceTexCoarse = CreateIrradianceTexture("BgiIrradianceTexCoarse");
+            _sunVisTex = CreateSunVisTexture("BgiSunVisTex");
+            _sunVisTexCoarse = CreateSunVisTexture("BgiSunVisTexCoarse");
+            _neighbourMaskTex = CreateNeighbourMaskTexture("BgiNeighbourMaskTex");
+            _neighbourMaskTexCoarse = CreateNeighbourMaskTexture("BgiNeighbourMaskTexCoarse");
             _materialBaked = false;
             // A freshly allocated ComputeBuffer holds undefined data: request the whole-field clear.
             // Update runs it once the grid constants are bound (CSClear's bounds test needs them).
             _resetAllFields = true;
+            _sunVisDirty = true;   // fresh textures hold nothing yet
         }
 
         // Invalidate the voxelization when one of its actual inputs changed since the last bake:
@@ -1360,12 +1657,20 @@ namespace Lotec.Lighting {
             // Whole-buffer transfers only - the sliced 4-arg SetData/GetData overloads are avoided.
             if (_uploadMaterial == null || _uploadMaterial.Length != TotalVoxels) _uploadMaterial = new uint[TotalVoxels];
             if (_uploadSurface == null || _uploadSurface.Length != TotalVoxels) _uploadSurface = new uint[TotalVoxels];
+            if (_occHiUpload == null || _occHiUpload.Length != TotalOccWords) _occHiUpload = new uint[TotalOccWords];
+            if (_grownUpload == null || _grownUpload.Length != TotalVoxels / 32) _grownUpload = new uint[TotalVoxels / 32];
             System.Array.Clear(_uploadMaterial, 0, TotalVoxels);
             System.Array.Clear(_uploadSurface, 0, TotalVoxels);
+            System.Array.Clear(_occHiUpload, 0, TotalOccWords);
+            System.Array.Clear(_grownUpload, 0, TotalVoxels / 32);
             CopyFieldSlice(fine, FineField * VoxelCount);
             if (coarse != null) CopyFieldSlice(coarse, CoarseField * VoxelCount);
+            UploadOccupancyHiSlice(fine, FineField);
+            if (coarse != null) UploadOccupancyHiSlice(coarse, CoarseField);
             _materialBuffer.SetData(_uploadMaterial);
             _surfaceBuffer.SetData(_uploadSurface); // mesh-mode normals; derive rebuilds the rest
+            _occupancyHiBuffer.SetData(_occHiUpload);
+            _occupancyGrownBuffer.SetData(_grownUpload);
             // The assets carry GEOMETRY only - the baked lights are re-stamped here, live, from the
             // scene's VoxelLights lists. That is what lets a player switch one off (and an author retune
             // one without re-baking); freezing them into the asset would rule out both, and would make a
@@ -1379,6 +1684,64 @@ namespace Lotec.Lighting {
         void CopyFieldSlice(BufferGiBakeAsset a, int fieldOffset) {
             System.Array.Copy(a.material, 0, _uploadMaterial, fieldOffset, VoxelCount);
             System.Array.Copy(a.surface, 0, _uploadSurface, fieldOffset, VoxelCount);
+            // Grown bits, same slice, in WORDS rather than voxels. BakeAssetValid has already checked
+            // the length, so a v6 asset always carries this.
+            int grownWords = VoxelCount / 32;
+            System.Array.Copy(a.occupancyGrown, 0, _grownUpload, (fieldOffset / Mathf.Max(1, VoxelCount)) * grownWords, grownWords);
+        }
+
+        // Place one field asset's hi-res occupancy into the upload scratch, OR-DOWNSAMPLING it when
+        // the asset was baked finer than this platform runs. That downsample is the whole reason there
+        // is one asset instead of one per platform: bake at 256, run at 64 on Quest, 128 on desktop.
+        //
+        // OR, not majority - the same conservatism the traversal mip needs, and for a sharper reason
+        // here. The geometry is thin shells: in a 4x4x4 block an axis-aligned wall one cell thick is
+        // 16 of 64 cells, so any >50% rule deletes every wall in the scene. Over-occluding is the safe
+        // error; deleting geometry is not.
+        void UploadOccupancyHiSlice(BufferGiBakeAsset a, int field) {
+            int dst = field * OccWordsPerField;
+            if (a.occGrid == OccGrid) {
+                System.Array.Copy(a.occupancyHi, 0, _occHiUpload, dst, OccWordsPerField);
+                return;
+            }
+            // Per-cell rather than per-word: the block layout interleaves the axes, so there is no
+            // word-level shortcut. Runs once at load, over at most 16.7M cells at 256^3.
+            int ratioLog2 = 0;
+            while ((OccGrid << ratioLog2) < a.occGrid) ratioLog2++;
+            int ratio = 1 << ratioLog2;
+            int srcBlocks = a.occGrid >> 2, dstBlocks = OccGrid >> 2;
+            for (int z = 0; z < OccGrid; z++)
+            for (int y = 0; y < OccGrid; y++)
+            for (int x = 0; x < OccGrid; x++) {
+                bool any = false;
+                for (int sz = 0; sz < ratio && !any; sz++)
+                for (int sy = 0; sy < ratio && !any; sy++)
+                for (int sx = 0; sx < ratio && !any; sx++) {
+                    if (OccBit(a.occupancyHi, 0, srcBlocks,
+                               (x << ratioLog2) + sx, (y << ratioLog2) + sy, (z << ratioLog2) + sz)) any = true;
+                }
+                if (any) SetOccBit(_occHiUpload, dst, dstBlocks, x, y, z);
+            }
+        }
+
+        // The block-layout addressing, shared by the two helpers below and mirroring BgiOccWord /
+        // BgiOccBitMask in BufferGiField.hlsl. Keep the two in step: a divergence here silently
+        // reinterprets every baked bit.
+        static void OccAddress(int blocksPerAxis, int x, int y, int z, out int word, out uint mask) {
+            int block = (x >> 2) + (y >> 2) * blocksPerAxis + (z >> 2) * blocksPerAxis * blocksPerAxis;
+            int bit = (x & 3) | ((y & 3) << 2) | ((z & 3) << 4);
+            word = block * 2 + (bit >> 5);
+            mask = 1u << (bit & 31);
+        }
+
+        static bool OccBit(uint[] words, int baseWord, int blocksPerAxis, int x, int y, int z) {
+            OccAddress(blocksPerAxis, x, y, z, out int w, out uint m);
+            return (words[baseWord + w] & m) != 0u;
+        }
+
+        static void SetOccBit(uint[] words, int baseWord, int blocksPerAxis, int x, int y, int z) {
+            OccAddress(blocksPerAxis, x, y, z, out int w, out uint m);
+            words[baseWord + w] |= m;
         }
 
         // Structurally usable (right version/grid/size/thickening); bounds are matched separately.
@@ -1386,7 +1749,18 @@ namespace Lotec.Lighting {
             return a.version == BufferGiBakeAsset.Version && a.grid == Grid
                 && a.material != null && a.material.Length == VoxelCount
                 && a.surface != null && a.surface.Length == VoxelCount
-                && a.thickened == _thickenWalls;
+                && a.thickened == _thickenWalls
+                // The hi-res slice must be present, self-consistent, and at least as fine as this
+                // platform runs. A coarser asset is REJECTED rather than upsampled: upsampling would
+                // invent the sub-voxel detail the field exists to record, and the failure would be
+                // invisible - geometry that simply is not there.
+                && a.occGrid >= OccGrid
+                && a.occupancyHi != null
+                && a.occupancyHi.Length == BufferGiBakeAsset.OccWordsFor(a.occGrid)
+                // The grown bitfield is a v6 raster product and has no reconstruction path, so an asset
+                // missing it is rejected rather than loaded with the gate silently disabled.
+                && a.occupancyGrown != null
+                && a.occupancyGrown.Length == VoxelCount / 32;
         }
 
         // One-shot dump of WHY no disk bake matched, so a bundle/build discrepancy (unresolved
@@ -1397,7 +1771,7 @@ namespace Lotec.Lighting {
             var sb = new System.Text.StringBuilder();
             string missing = fine == null ? "the active FINE volume" : "the COARSE field";
             sb.AppendLine($"Buffer GI: no matching disk bake for {missing}; voxelizing at runtime instead. Diagnostics:");
-            sb.AppendLine($"  expected: grid={Grid} version={BufferGiBakeAsset.Version} VoxelCount={VoxelCount} thickened={_thickenWalls}");
+            sb.AppendLine($"  expected: grid={Grid} version={BufferGiBakeAsset.Version} VoxelCount={VoxelCount} thickened={_thickenWalls} occGrid>={OccGrid}");
             sb.AppendLine($"  expected FINE   origin={GridOrigin.ToString("F4")} size={GridSize.ToString("F4")}");
             sb.AppendLine($"  HasCoarse={HasCoarse}" + (HasCoarse ? $" expected COARSE origin={CoarseOrigin.ToString("F4")} size={CoarseSize.ToString("F4")}" : ""));
             List<BufferGiBakeAsset> bakeAssets = BakeAssets;
@@ -1417,6 +1791,7 @@ namespace Lotec.Lighting {
                         $"content=0x{a.ContentHash():X8} " +
                         $"material={(a.material == null ? "null" : a.material.Length.ToString())} " +
                         $"surface={(a.surface == null ? "null" : a.surface.Length.ToString())} " +
+                        $"occGrid={a.occGrid} occupancyHi={(a.occupancyHi == null ? "null" : a.occupancyHi.Length.ToString())} " +
                         $"thickened={a.thickened} " +
                         $"origin={a.origin.ToString("F4")} size={a.size.ToString("F4")} " +
                         $"=> valid={BakeAssetValid(a)} boundsMatch={boundsMatch}");
@@ -1467,6 +1842,29 @@ namespace Lotec.Lighting {
             System.Array.Copy(_fullReadback, fieldOffset, asset.material, 0, VoxelCount);
             _surfaceBuffer.GetData(_fullReadback);
             System.Array.Copy(_fullReadback, fieldOffset, asset.surface, 0, VoxelCount);
+
+            // Hi-res occupancy: store ONLY the finest level that was baked, at its own resolution. A
+            // platform running coarser OR-downsamples it at load (see UploadOccupancyHiSlice), which is
+            // what lets ONE asset serve 64 / 128 / 256 instead of multiplying build variants. 2 MB per
+            // field on disk at 256^3 - the cheapest field in the system by a wide margin.
+            asset.occGrid = OccGrid;
+            if (asset.occupancyHi == null || asset.occupancyHi.Length != OccWordsPerField)
+                asset.occupancyHi = new uint[OccWordsPerField];
+            if (_occHiReadback == null || _occHiReadback.Length != TotalOccWords) _occHiReadback = new uint[TotalOccWords];
+            _occupancyHiBuffer.GetData(_occHiReadback);
+            System.Array.Copy(_occHiReadback, (fieldOffset / Mathf.Max(1, VoxelCount)) * OccWordsPerField,
+                asset.occupancyHi, 0, OccWordsPerField);
+
+            // Grown occupancy, the other raster product. Word-aligned per field: VoxelCount is a power
+            // of two >= 32, so a field slice never starts mid-word and the copy is a plain range.
+            int grownWords = VoxelCount / 32;
+            if (asset.occupancyGrown == null || asset.occupancyGrown.Length != grownWords)
+                asset.occupancyGrown = new uint[grownWords];
+            if (_grownReadback == null || _grownReadback.Length != TotalVoxels / 32)
+                _grownReadback = new uint[TotalVoxels / 32];
+            _occupancyGrownBuffer.GetData(_grownReadback);
+            System.Array.Copy(_grownReadback, (fieldOffset / Mathf.Max(1, VoxelCount)) * grownWords,
+                asset.occupancyGrown, 0, grownWords);
             return true;
         }
 
@@ -1501,6 +1899,46 @@ namespace Lotec.Lighting {
             else _voxelizeMaterial.DisableKeyword(ThickenKeyword);
         }
 
+        // The bit-only HI-RES occupancy raster (pass 1). A second command buffer rather than more draws
+        // in the first: it needs its own dummy render target, sized to the OCCUPANCY grid, or the
+        // rasterizer generates one fragment per lighting cell and most hi-res cells are never visited.
+        //
+        // Always on. A conditional hi-res bake creates a "did I bake?" failure mode - a scene that
+        // renders correctly in the editor and drops every sub-voxel occluder in a build - which is a
+        // far worse trade than the bake time. Revisit only if bake time actually hurts authoring.
+        //
+        // `fields` lists (root, origin, size, field index) so both fields go into one command buffer
+        // and one clear: the clear covers ALL fields, and the kernel only ORs, so a per-field clear
+        // would wipe the field rasterized before it.
+        void RasterizeOccupancyHi(CommandBuffer cmd, Transform root, Vector3 origin, Vector3 size, int field) {
+            if (root == null) return;
+            VoxelizeFieldInto(cmd, root, origin, size, size / OccGrid, field * VoxelCount, 1);
+        }
+
+        // Set up, run and tear down the hi-res raster for a list of fields. Separate from the material
+        // raster because the render target differs; shares _voxelizeMaterial, which the caller must
+        // already have created (this is called from paths that do not go through VoxelizeScene).
+        void RunOccupancyHiRaster(System.Action<CommandBuffer> record) {
+            if (_occupancyHiBuffer == null || _voxelizeShader == null) return;
+            if (_voxelizeMaterial == null) {
+                _voxelizeMaterial = new Material(_voxelizeShader) { hideFlags = HideFlags.HideAndDontSave };
+            }
+            ApplyVoxelizeKeywords();
+            ClearOccupancyHi();
+
+            RenderTexture dummy = RenderTexture.GetTemporary(OccGrid, OccGrid, 0,
+                RenderTextureFormat.R8, RenderTextureReadWrite.Linear);
+            var cmd = new CommandBuffer { name = "BufferGI Voxelize Occupancy (hi-res)" };
+            cmd.SetRenderTarget(dummy);
+            cmd.SetViewProjectionMatrices(Matrix4x4.identity, Matrix4x4.identity);
+            cmd.SetRandomWriteTarget(1, _occupancyHiBuffer); // u1, the slot pass 0 uses for _MaterialWrite
+            record(cmd);
+            cmd.ClearRandomWriteTargets();
+            Graphics.ExecuteCommandBuffer(cmd);
+            cmd.Release();
+            RenderTexture.ReleaseTemporary(dummy);
+        }
+
         void RasterizeFieldSlice(Transform root, Vector3 origin, Vector3 size, int fieldOffset) {
             if (_voxelizeMaterial == null) {
                 _voxelizeMaterial = new Material(_voxelizeShader) { hideFlags = HideFlags.HideAndDontSave };
@@ -1510,6 +1948,7 @@ namespace Lotec.Lighting {
             if (_materialClear == null || _materialClear.Length != TotalVoxels) _materialClear = new uint[TotalVoxels];
             _materialBuffer.SetData(_materialClear);
             _surfaceBuffer.SetData(_materialClear);
+            ClearGrown();
 
             RenderTexture dummy = RenderTexture.GetTemporary(Grid, Grid, 0, RenderTextureFormat.R8, RenderTextureReadWrite.Linear);
             CommandBuffer cmd = new CommandBuffer { name = "BufferGI Voxelize Field" };
@@ -1517,11 +1956,16 @@ namespace Lotec.Lighting {
             cmd.SetViewProjectionMatrices(Matrix4x4.identity, Matrix4x4.identity);
             cmd.SetRandomWriteTarget(1, _materialBuffer);
             cmd.SetRandomWriteTarget(2, _surfaceBuffer);
+            cmd.SetRandomWriteTarget(3, _occupancyGrownBuffer); // u3 = _GrownWrite
             VoxelizeFieldInto(cmd, root, origin, size, size / Grid, fieldOffset);
             cmd.ClearRandomWriteTargets();
             Graphics.ExecuteCommandBuffer(cmd);
             cmd.Release();
             RenderTexture.ReleaseTemporary(dummy);
+            // Hi-res occupancy for the same field, so the capture below can store it. The clear inside
+            // covers every field, which is correct here: this method rasterizes ONE field and reads
+            // back only that field's slice.
+            RunOccupancyHiRaster(hi => RasterizeOccupancyHi(hi, root, origin, size, fieldOffset / Mathf.Max(1, VoxelCount)));
             // No baked-light injection: the asset this capture reads back stores GEOMETRY only, and the
             // lights are stamped on top of it every time it is uploaded (see TryLoadBakeAssets).
         }
@@ -1544,6 +1988,7 @@ namespace Lotec.Lighting {
             // Clear _Surface (zeros = a valid default normal via BgiSurfaceNormal) so a solid voxel a
             // degenerate-normal triangle leaves unwritten (mesh mode) reads a deterministic value.
             _surfaceBuffer.SetData(_materialClear);
+            ClearGrown();
 
             RenderTexture dummy = RenderTexture.GetTemporary(Grid, Grid, 0, RenderTextureFormat.R8, RenderTextureReadWrite.Linear);
             CommandBuffer cmd = new CommandBuffer { name = "BufferGI Voxelize" };
@@ -1552,6 +1997,7 @@ namespace Lotec.Lighting {
             cmd.SetViewProjectionMatrices(Matrix4x4.identity, Matrix4x4.identity);
             cmd.SetRandomWriteTarget(1, _materialBuffer);
             cmd.SetRandomWriteTarget(2, _surfaceBuffer); // u2 = _SurfaceWrite
+            cmd.SetRandomWriteTarget(3, _occupancyGrownBuffer); // u3 = _GrownWrite
 
             // Each field rasterizes its OWN volume's geometry into its slice (coarse = a separate,
             // scene-covering MeshBounds with its own root).
@@ -1565,6 +2011,12 @@ namespace Lotec.Lighting {
             Graphics.ExecuteCommandBuffer(cmd);
             cmd.Release();
             RenderTexture.ReleaseTemporary(dummy);
+
+            // The same geometry again, bit only, at the occupancy grid.
+            RunOccupancyHiRaster(hi => {
+                RasterizeOccupancyHi(hi, fineRoot, GridOrigin, GridSize, FineField);
+                if (coarseRoot != null) RasterizeOccupancyHi(hi, coarseRoot, CoarseOrigin, CoarseSize, CoarseField);
+            });
 
             // Baked lights become emissive voxels in each field, after the raster (geometry must not
             // overwrite a light voxel) and before the derive passes (which turn _Material into the
@@ -1656,6 +2108,11 @@ namespace Lotec.Lighting {
         // field, 3) relax the air-distance transform to convergence. Shared by both voxelize paths.
         void RunDerivePasses() {
             for (int f = 0; f < FieldCount; f++) BuildOccupancy(f * VoxelCount);
+            // The traversal mip is derived, never rasterized: OR-downsampling the hi-res field is the
+            // only construction that cannot under-estimate, and a coarse level that under-estimates
+            // silently skips occluders. Zeroed once for ALL fields - the kernel only ORs.
+            ClearTraversalMip();
+            for (int f = 0; f < FieldCount; f++) BuildTraversalMip(f);
             // Zero the normal-occupancy scratch once for ALL fields: its kernel only ORs bits in, and
             // it is dispatched per field below.
             int occWords = TotalVoxels / 32;
@@ -1664,6 +2121,10 @@ namespace Lotec.Lighting {
             for (int f = 0; f < FieldCount; f++) BuildNormalOccupancy(f * VoxelCount);
             for (int f = 0; f < FieldCount; f++) BuildSurface(f * VoxelCount);
             for (int f = 0; f < FieldCount; f++) BuildAirDistance(f * VoxelCount);
+            // Pure geometry, so it belongs here with the rest of the bake and NOT on the sun-change
+            // path: a read-side gate that moved when the light moved would be a different feature.
+            BuildNeighbourMask(CoarseField, _neighbourMaskTexCoarse);
+            BuildNeighbourMask(FineField, _neighbourMaskTex);
             // Snapshot the inputs this voxelization used, so SyncBakeInputs can tell when they change.
             _thickenWallsBaked = _thickenWalls;
             _bakedFineOrigin = GridOrigin; _bakedFineSize = GridSize;
@@ -1676,6 +2137,8 @@ namespace Lotec.Lighting {
 #endif
             WarnIfBakedLightAlsoRealtime();
             _materialBaked = true;
+            // New geometry: the baked sun shadow is stale whatever the sun is doing.
+            _sunVisDirty = true;
             // A fresh voxelization invalidates the solved field (new geometry, or a baked light that
             // moved/changed): spend the ray budget again, or a settled solve would idle on the old one.
             _collectedSamples = 0;
@@ -1689,6 +2152,55 @@ namespace Lotec.Lighting {
             _bakeShader.SetBuffer(_buildOccupancyKernel, s_material, _materialBuffer);
             _bakeShader.SetBuffer(_buildOccupancyKernel, s_occupancy, _occupancyBuffer);
             _bakeShader.Dispatch(_buildOccupancyKernel, Mathf.CeilToInt(VoxelCount / 32f / 64f), 1, 1);
+        }
+
+        // Zero the hi-res occupancy (all fields). The raster only ORs bits in, so its target has to
+        // start empty; a fresh ComputeBuffer holds garbage rather than zeros.
+        void ClearOccupancyHi() {
+            if (_occupancyHiBuffer == null) return;
+            if (_occHiClear == null || _occHiClear.Length != TotalOccWords) _occHiClear = new uint[TotalOccWords];
+            _occupancyHiBuffer.SetData(_occHiClear);
+        }
+
+        // Zero the traversal mip (all fields). Same reason: CSBuildTraversalMip only ORs.
+        void ClearTraversalMip() {
+            if (_occupancyTraversalBuffer == null) return;
+            int words = TotalVoxels / 32;
+            if (_occupancyClear == null || _occupancyClear.Length != words) _occupancyClear = new uint[words];
+            _occupancyTraversalBuffer.SetData(_occupancyClear);
+        }
+
+        // Zero the grown bitfield (all fields) before a raster. The voxelizer only ORs bits in - it has
+        // to, since neighbouring fragments share bit words - so a stale bit would never be cleared and
+        // would permanently seal a cell the geometry no longer covers.
+        void ClearGrown() {
+            if (_occupancyGrownBuffer == null) return;
+            int words = TotalVoxels / 32;
+            if (_occupancyClear == null || _occupancyClear.Length != words) _occupancyClear = new uint[words];
+            _occupancyGrownBuffer.SetData(_occupancyClear);
+        }
+
+        // OR-downsample one field's hi-res occupancy onto the lighting grid. Runs after the hi-res
+        // field is filled (raster or asset upload) and needs no other derive product, so it sits at
+        // the front of the chain beside BuildOccupancy.
+        void BuildTraversalMip(int field) {
+            if (_buildTraversalMipKernel < 0 || _occupancyHiBuffer == null) return;
+            _bakeShader.SetInt(s_fieldOffset, field * VoxelCount);
+            _bakeShader.SetInt(s_occFieldWordOffset, field * OccWordsPerField);
+            _bakeShader.SetBuffer(_buildTraversalMipKernel, s_occupancyHi, _occupancyHiBuffer);
+            _bakeShader.SetBuffer(_buildTraversalMipKernel, s_occupancyTraversal, _occupancyTraversalBuffer);
+            _bakeShader.Dispatch(_buildTraversalMipKernel, Groups, 1, 1);
+        }
+
+        // One field's 7-bit neighbour-solidity mask, for the in-plane snap's read-side gate. Reads the
+        // finished lighting-grid bitfield, so it must run after BuildOccupancy; nothing else depends on
+        // it, so it can sit anywhere after that. Writes every texel, so the volume needs no clear.
+        void BuildNeighbourMask(int field, RenderTexture tex) {
+            if (_buildNeighbourMaskKernel < 0 || tex == null) return;
+            _bakeShader.SetInt(s_fieldOffset, field * VoxelCount);
+            _bakeShader.SetBuffer(_buildNeighbourMaskKernel, s_occupancy, _occupancyBuffer);
+            _bakeShader.SetTexture(_buildNeighbourMaskKernel, s_bgiNeighbourMaskWrite, tex);
+            _bakeShader.Dispatch(_buildNeighbourMaskKernel, Groups, 1, 1);
         }
 
         // Fill one field's _OccupancyThick: real solids + the cell behind each surfaced voxel, along
@@ -1709,8 +2221,13 @@ namespace Lotec.Lighting {
         void BuildSurface(int fieldOffset) {
             if (_buildSurfaceKernel < 0) return;
             _bakeShader.SetInt(s_fieldOffset, fieldOffset);
+            // The two-sided test measures real slab thickness on the HI-RES grid, so this pass needs
+            // the hi-res field and its per-field word offset alongside the lighting-grid ones.
+            _bakeShader.SetInt(s_occFieldWordOffset,
+                (fieldOffset / Mathf.Max(1, VoxelCount)) * OccWordsPerField);
             _bakeShader.SetBuffer(_buildSurfaceKernel, s_occupancy, _occupancyBuffer);
             _bakeShader.SetBuffer(_buildSurfaceKernel, s_occupancyThick, _occupancyThickBuffer);
+            _bakeShader.SetBuffer(_buildSurfaceKernel, s_occupancyHi, _occupancyHiBuffer);
             _bakeShader.SetBuffer(_buildSurfaceKernel, s_surface, _surfaceBuffer);
             _bakeShader.Dispatch(_buildSurfaceKernel, Groups, 1, 1);
         }
@@ -1729,7 +2246,9 @@ namespace Lotec.Lighting {
 
         // Rasterize a volume's geometry into one field's slice. The voxelize shader reads the grid +
         // field offset as globals (BgiWorldToGrid / BgiSlot), so set them before the draws.
-        void VoxelizeFieldInto(CommandBuffer cmd, Transform root, Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset) {
+        // `pass` picks the shader pass: 0 = material + surface normal at the LIGHTING grid,
+        // 1 = the bit-only hi-res occupancy at the OCCUPANCY grid (see BufferGiVoxelize.shader).
+        void VoxelizeFieldInto(CommandBuffer cmd, Transform root, Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset, int pass = 0) {
             // Same eligibility as the volume bounds / SDF bake (active + static + casts shadows):
             // inactive meshes must not light the scene, non-static ones wouldn't track movement anyway
             // (the voxelization only reruns on a re-bake), and a Cast Shadows = Off renderer is a VFX
@@ -1743,6 +2262,11 @@ namespace Lotec.Lighting {
             cmd.SetGlobalInt(s_bgiGrid, _grid);
             cmd.SetGlobalInt(s_bgiGridLog2, _gridLog2);
             cmd.SetGlobalInt(s_bgiCount, _voxelCount);
+            // The hi-res pass indexes a different grid AND a different per-field word offset (the two
+            // grids have different counts), so both go out here rather than being derived shader-side.
+            cmd.SetGlobalInt(s_bgiOccGrid, _occGrid);
+            cmd.SetGlobalInt(s_bgiOccGridLog2, _occGridLog2);
+            cmd.SetGlobalInt(s_occFieldWordOffset, (fieldOffset / Mathf.Max(1, VoxelCount)) * OccWordsPerField);
 
             for (int axis = 0; axis < 3; axis++) {
                 cmd.SetGlobalInt(s_voxAxis, axis);
@@ -1765,7 +2289,7 @@ namespace Lotec.Lighting {
                         mpb.SetTexture(s_voxBaseMap, baseMap != null ? baseMap : Texture2D.whiteTexture);
                         mpb.SetVector(s_voxBaseMapST, baseMapST);
                         mpb.SetFloat(s_voxCutoff, cutoff);
-                        cmd.DrawMesh(mesh, l2w, _voxelizeMaterial, sm, 0, mpb);
+                        cmd.DrawMesh(mesh, l2w, _voxelizeMaterial, sm, pass, mpb);
                     }
                 }
             }
@@ -1843,10 +2367,13 @@ namespace Lotec.Lighting {
             _solveShader.SetFloat(s_reachBoost, _reachBoost);
             // Baked sun-shadow estimator. Samples only matter in Supersampled; Centre and Temporal both
             // cast one ray, so pass 1 there to keep the compute's loop bound honest.
-            _solveShader.SetInt(s_sunShadowMode, (int)_sunShadowSampling);
-            _solveShader.SetInt(s_sunShadowSamples,
-                _sunShadowSampling == SunShadowSampling.Supersampled ? Mathf.Clamp(_sunShadowSamples, 1, 16) : 1);
-            _solveShader.SetInt(s_blurSunVis, _blurSunVisibility ? 1 : 0);
+            _solveShader.SetInt(s_solveMarchLevel, (int)_solveMarchLevel);
+            // Display-side only: it changes which air the shell dilation averages, nothing that traces
+            // a ray. A uniform, not a keyword - the branch is uniform across the dispatch and sits
+            // outside the 26-neighbour walk, so keeping both paths resident costs nothing and makes
+            // the A/B a write rather than a recompile (same argument as _BgiSolveMarchLevel).
+            _solveShader.SetInt(s_grownGate, _grownDilationGate ? 1 : 0);
+            _solveShader.SetInt(s_injectSunSamples, Mathf.Clamp(_injectSunSamples, 1, 16));
             _solveShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
             SetDirectionalLightUniforms();
             LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_solveShader);
@@ -1857,19 +2384,105 @@ namespace Lotec.Lighting {
             // means the coarse texture is never sampled with a valid uvw outside the fine box.
             SolveField(GridOrigin, GridSize, VoxelSize, FineField * VoxelCount, _irradianceTex);
             if (HasCoarse) {
-                SolveField(CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount, _irradianceTexCoarse);
+                SolveField(CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField * VoxelCount,
+                    _irradianceTexCoarse);
             }
         }
 
+        // Texels one CSSunVisibility dispatch may cover, per field. The pass is bounded by this and
+        // spent over as many frames as it takes, because the whole volume in one submission is an
+        // over-long dispatch at the higher resolutions: 256^3 is 16.7M texels x _sunShadowSamples rays
+        // x up to 3*256 DDA steps, and it TDR'd the device outright when it was written that way.
+        // 2^15 measured ~10 ms a chunk for both fields on an AMD iGPU. The TOTAL sweep is fixed by the
+        // work (~80 ms at 64^3, ~650 ms at 128^3 there); the chunk size only trades how big a
+        // per-frame hitch that arrives in. 2^18 was tried first, measured 81 ms in ONE dispatch, and
+        // 64 of those back to back at 256^3 is what killed the device.
+        const int SunVisTexelsPerDispatch = 1 << 15;
+
+        // Slice of the shadow volume the next chunk starts at. >= ShadowGrid means the current sun
+        // direction is fully marched and there is nothing to do.
+        int _sunVisSliceBase;
+        // The sun moved while a sweep was in flight. The sweep is allowed to finish first (see Update)
+        // and the next one starts immediately after, so a moving sun converges within two sweeps
+        // instead of restarting forever.
+        bool _sunVisRestartQueued;
+        // The sun direction the in-flight sweep is marching against, LATCHED at its start. The whole
+        // volume has to be marched against ONE direction: reading the live sun per chunk would give
+        // slices at the front of the sweep a different sun from slices at the back, and the seam
+        // between them is a sheared shadow rather than a stale one.
+        Vector3 _sunVisDir = Vector3.down;
+
+        void StartSunVisibilitySweep() {
+            _sunVisSliceBase = 0;
+            Light sun = RenderSettings.sun;
+            _sunVisDir = sun != null ? -sun.transform.forward : Vector3.down;
+        }
+
+        /// <summary>True while the baked sun shadow is still being re-marched after a sun move or a
+        /// re-bake. The texture holds a mix of old and new slices until it clears.</summary>
+        public bool SunVisibilityPending => _sunVisSliceBase < ShadowGrid;
+
+        // Re-evaluate the baked sun visibility for both fields, at the SHADOW grid, by marching the
+        // hi-res occupancy. NOT part of the solve: it depends only on geometry and sun direction, so
+        // it runs when one of those changes and idles otherwise - which is also why it can afford a
+        // supersampled estimator per texel where the solve could not.
+        //
+        // One bounded chunk per call. The caller keeps calling while SunVisibilityPending.
+        void DispatchSunVisibilityChunk() {
+            if (_sunVisKernel < 0 || _occupancyHiBuffer == null || _sunVisTex == null) {
+                _sunVisSliceBase = ShadowGrid; // nothing to march into; don't spin
+                return;
+            }
+            // The LATCHED direction, not the live sun (see _sunVisDir). This kernel needs nothing else
+            // from SetDirectionalLightUniforms, and DispatchSolve republishes the live values for the
+            // solve later in the same frame.
+            _solveShader.SetVector(s_directLightDir, _sunVisDir);
+            // Whole Z slices at a time, at least one - a single slice is grid^2 texels, which is
+            // 65,536 even at 256, comfortably inside the budget.
+            int slicesPerDispatch = Mathf.Max(1, SunVisTexelsPerDispatch / (ShadowGrid * ShadowGrid));
+            int slices = Mathf.Min(slicesPerDispatch, ShadowGrid - _sunVisSliceBase);
+            // Always supersampled: one centre ray per texel is a BIT, and no filter downstream can
+            // turn a bit back into the coverage fraction _BgiShadowSharpness reconstructs an edge
+            // from. The solve's own Centre/Temporal estimators do not apply here - this pass is not a
+            // progressive average, each texel is finished the moment it is written.
+            _solveShader.SetInt(s_shadowTexSamples, Mathf.Clamp(_sunShadowSamples, 1, 16));
+            _solveShader.SetInt(s_bgiShadowSliceBase, _sunVisSliceBase);
+            _solveShader.SetBuffer(_sunVisKernel, s_occupancyHi, _occupancyHiBuffer);
+
+            int groups = Mathf.CeilToInt(slices * ShadowGrid * ShadowGrid / 64f);
+            DispatchSunVisibilityField(GridOrigin, GridSize, VoxelSize, FineField, _sunVisTex, groups);
+            if (HasCoarse) {
+                DispatchSunVisibilityField(CoarseOrigin, CoarseSize, CoarseVoxelSize, CoarseField,
+                    _sunVisTexCoarse, groups);
+            }
+            _sunVisSliceBase += slices;
+        }
+
+        void DispatchSunVisibilityField(Vector3 origin, Vector3 size, Vector3 voxelSize, int field,
+                                        RenderTexture tex, int groups) {
+            SetGridUniforms(origin, size, voxelSize);
+            _solveShader.SetInt(s_occFieldWordOffset, field * OccWordsPerField);
+            _solveShader.SetTexture(_sunVisKernel, s_bgiSunVisTexWrite, tex);
+            _solveShader.Dispatch(_sunVisKernel, groups, 1, 1);
+        }
+
         // Inject -> gather -> blur for one field's slice; blur also mirrors the result into irradianceTex.
-        void SolveField(Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset, RenderTexture irradianceTex) {
+        void SolveField(Vector3 origin, Vector3 size, Vector3 voxelSize, int fieldOffset,
+                        RenderTexture irradianceTex) {
             SetGridUniforms(origin, size, voxelSize);
             _solveShader.SetInt(s_fieldOffset, fieldOffset);
+            // This field's slice of the hi-res occupancy, for the P7 march levels. Set unconditionally
+            // even at march level 0: the buffers are DECLARED in the kernel whatever the level, and an
+            // unbound declared buffer fails pipeline creation on WebGPU (the same trap _Occupancy hit).
+            _solveShader.SetInt(s_occFieldWordOffset,
+                (fieldOffset / Mathf.Max(1, VoxelCount)) * OccWordsPerField);
 
             // Inject: solid voxels emit/reflect. Bounce = the surface's own last-frame incident
             // irradiance (its _Irradiance slot, built by gather). The ONLY kernel that still reads
             // _Material (albedo/emission); solidity comes from the bitfield.
             _solveShader.SetBuffer(_injectKernel, s_occupancy, _occupancyBuffer);
+            _solveShader.SetBuffer(_injectKernel, s_occupancyHi, _occupancyHiBuffer);
+            _solveShader.SetBuffer(_injectKernel, s_occupancyTraversal, _occupancyTraversalBuffer);
             _solveShader.SetBuffer(_injectKernel, s_material, _materialBuffer);
             _solveShader.SetBuffer(_injectKernel, s_radiance, _radianceBuffer);
             _solveShader.SetBuffer(_injectKernel, s_irradiance, _irradianceBuffer);
@@ -1882,6 +2495,8 @@ namespace Lotec.Lighting {
             // (the read field), SOLID voxels over their front hemisphere (next frame's inject bounce).
             // All its solidity (DDA + gates) is the bitfield; it never touches _Material.
             _solveShader.SetBuffer(_gatherKernel, s_occupancy, _occupancyBuffer);
+            _solveShader.SetBuffer(_gatherKernel, s_occupancyHi, _occupancyHiBuffer);
+            _solveShader.SetBuffer(_gatherKernel, s_occupancyTraversal, _occupancyTraversalBuffer);
             _solveShader.SetBuffer(_gatherKernel, s_radiance, _radianceBuffer);
             _solveShader.SetBuffer(_gatherKernel, s_irradiance, _irradianceBuffer);
             _solveShader.SetBuffer(_gatherKernel, s_surface, _surfaceBuffer);
@@ -1893,13 +2508,17 @@ namespace Lotec.Lighting {
             // warm-up, written to _IrradianceBlur AND mirrored into this field's Texture3D (the fragment's
             // 1-tap read source) in the same pass - no separate SSBO->texture copy dispatch.
             _solveShader.SetBuffer(_blurKernel, s_occupancy, _occupancyBuffer);
+            // The shell dilation's grown gate. CSBlur is the ONLY consumer - binding it here rather
+            // than beside the march buffers is the point: nothing that traces a ray may see it, or it
+            // becomes BGI_THICKEN with all of thickening's costs.
+            _solveShader.SetBuffer(_blurKernel, s_occupancyGrown, _occupancyGrownBuffer);
             _solveShader.SetBuffer(_blurKernel, s_irradiance, _irradianceBuffer);
             _solveShader.SetBuffer(_blurKernel, s_irradianceBlur, _irradianceBlurBuffer);
             // Surface flags: the blur reads them only for SOLID voxels, to let a baked-light voxel take
             // the air path instead of being zeroed into a hole (CSBlur).
             _solveShader.SetBuffer(_blurKernel, s_surface, _surfaceBuffer);
-            // Solid voxels' texture alpha = their baked sun visibility (radiance.w), so the fragment's
-            // shadow tap isn't washed to lit by a constant near surfaces (see CSBlur).
+            // CSBlur reads _Radiance only for the emissive/two-sided shell logic now - the sun
+            // visibility it used to mirror moved to CSSunVisibility.
             _solveShader.SetBuffer(_blurKernel, s_radiance, _radianceBuffer);
             _solveShader.SetTexture(_blurKernel, s_bgiIrradianceTexWrite, irradianceTex);
             BufferGiSolveProfiler.Begin(BufferGiSolveProfiler.Stage.Blur);
@@ -1947,10 +2566,41 @@ namespace Lotec.Lighting {
         // trilinear footprint can never reach a neighbouring slab's texels with nonzero weight, and
         // X/Y filtering stays inside the slab regardless. That clamp is also what wrapMode.Clamp
         // already did at the volume's own Z extremes, so it costs nothing else.
-        RenderTexture CreateIrradianceTexture(string name) {
-            var desc = new RenderTextureDescriptor(Grid, Grid, RenderTextureFormat.ARGBHalf, 0) {
+        RenderTexture CreateIrradianceTexture(string name) =>
+            CreateFieldVolume(name, RenderTextureFormat.ARGBHalf, Grid, Grid * IrradianceSlots);
+
+        // The sun-visibility volume: a plain cube at the SHADOW grid, one scalar per texel, NOT
+        // slabbed in either mode (see _BgiSunVisTex in BufferGiRead.hlsl for why Cube stopped needing
+        // slabs). RHalf (fp16) and not R8 because _BgiShadowSharpness amplifies quantisation along
+        // with the signal, and it is clamped at the bottom but not at the top.
+        RenderTexture CreateSunVisTexture(string name) =>
+            CreateFieldVolume(name, RenderTextureFormat.RHalf, ShadowGrid, ShadowGrid);
+
+        // The neighbour-solidity mask: 7 bits per LIGHTING cell, so a plain cube at Grid, R8_UInt, and
+        // POINT filtered - it is Load()ed, and an interpolated bitmask would be nonsense. 32 KB per
+        // field at Grid 32. Integer format, so the shared CreateFieldVolume's GL.Clear does not apply;
+        // CSBuildNeighbourMask writes every texel of every slice on the first bake, and the field is
+        // not read before that bake completes (BufferGI does not publish until _materialBaked).
+        RenderTexture CreateNeighbourMaskTexture(string name) {
+            var desc = new RenderTextureDescriptor(Grid, Grid, GraphicsFormat.R8_UInt, 0) {
                 dimension = TextureDimension.Tex3D,
-                volumeDepth = Grid * IrradianceSlots,
+                volumeDepth = Grid,
+                enableRandomWrite = true,
+                msaaSamples = 1
+            };
+            var rt = new RenderTexture(desc) {
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp,
+                name = name
+            };
+            rt.Create();
+            return rt;
+        }
+
+        RenderTexture CreateFieldVolume(string name, RenderTextureFormat format, int size, int depth) {
+            var desc = new RenderTextureDescriptor(size, size, format, 0) {
+                dimension = TextureDimension.Tex3D,
+                volumeDepth = depth,
                 enableRandomWrite = true,
                 msaaSamples = 1
             };
@@ -1960,6 +2610,16 @@ namespace Lotec.Lighting {
                 name = name
             };
             rt.Create();
+            // A freshly created RenderTexture holds undefined data, exactly like a fresh ComputeBuffer.
+            // CSBlur does rewrite every texel of every slice, so this only covers the window before the
+            // first solve lands - but that window is real (a field whose bake was rejected never
+            // dispatches a solve at all), and garbage there reads as uncorrelated noise on screen.
+            RenderTexture prev = RenderTexture.active;
+            for (int z = 0; z < desc.volumeDepth; z++) {
+                Graphics.SetRenderTarget(rt, 0, CubemapFace.Unknown, z);
+                GL.Clear(false, true, Color.clear);
+            }
+            RenderTexture.active = prev;
             return rt;
         }
 
@@ -1971,6 +2631,9 @@ namespace Lotec.Lighting {
             _surfaceBuffer?.Release();
             _occupancyBuffer?.Release();
             _occupancyThickBuffer?.Release();
+            _occupancyGrownBuffer?.Release(); _occupancyGrownBuffer = null;
+            _occupancyHiBuffer?.Release();
+            _occupancyTraversalBuffer?.Release();
             _materialBuffer = null;
             _radianceBuffer = null;
             _irradianceBuffer = null;
@@ -1978,8 +2641,15 @@ namespace Lotec.Lighting {
             _surfaceBuffer = null;
             _occupancyBuffer = null;
             _occupancyThickBuffer = null;
+            _occupancyHiBuffer = null;
+            _occupancyTraversalBuffer = null;
+            _allocatedOccGrid = 0;
             if (_irradianceTex != null) { _irradianceTex.Release(); _irradianceTex = null; }
             if (_irradianceTexCoarse != null) { _irradianceTexCoarse.Release(); _irradianceTexCoarse = null; }
+            if (_sunVisTex != null) { _sunVisTex.Release(); _sunVisTex = null; }
+            if (_sunVisTexCoarse != null) { _sunVisTexCoarse.Release(); _sunVisTexCoarse = null; }
+            if (_neighbourMaskTex != null) { _neighbourMaskTex.Release(); _neighbourMaskTex = null; }
+            if (_neighbourMaskTexCoarse != null) { _neighbourMaskTexCoarse.Release(); _neighbourMaskTexCoarse = null; }
             _materialBaked = false;
             _resetFineField = false;
             _allocatedRadianceSlots = 0; // no buffer -> no stride; forces EnsureInitialized to size it

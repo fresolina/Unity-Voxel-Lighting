@@ -35,6 +35,24 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
             // the one color render target (u0).
             RWStructuredBuffer<uint> _MaterialWrite : register(u1);
             RWStructuredBuffer<uint> _SurfaceWrite : register(u2); // per-voxel surface word (normal in low bits)
+            // GROWN occupancy, 1 bit per voxel: every covered voxel PLUS the one voxel behind it along
+            // this fragment's triangle normal. Exactly what BGI_THICKEN does to _MaterialWrite, but
+            // written to its own bitfield and ALWAYS - so the grown set exists without the raster
+            // itself gaining bulk. Only CSBlur's shell-dilation neighbour test reads it; the DDA, the
+            // gather and the hi-res march keep the honest raster, so none of thickening's costs
+            // (+59% solid cells here, closed gaps, an 8% brighter air field) are paid for it.
+            //
+            // PER FRAGMENT is the whole point, and it is why this cannot be derived later.
+            // CSBuildNormalOccupancy already grows one cell per VOXEL along that voxel's single stored
+            // triangle normal, and _OccupancyThick is the result - it was measured on this defect and
+            // does nothing (0.0570 -> 0.0545), because a corner cell holds two surfaces and only one
+            // normal survives last-write-wins. Here both the roof fragment and the wall fragment grow,
+            // because both are still fragments.
+            //
+            // InterlockedOr, not a plain store: neighbouring fragments share bit words (32 voxels per
+            // word), so a read-modify-write would drop bits. Order-independent, so the raster's
+            // fragment order does not matter.
+            RWStructuredBuffer<uint> _GrownWrite : register(u3);
 
             TEXTURE2D(_VoxBaseMap); SAMPLER(sampler_VoxBaseMap); // material base map (white if none)
 
@@ -94,6 +112,22 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                     if (dot(i.wn, i.wn) > 1e-6)
                         _SurfaceWrite[BgiSlot((uint3)c)] = BgiPackSurfaceNormal(normalize(i.wn));
 
+                    // GROWN set: this voxel, plus the one behind it along this fragment's normal.
+                    // Independent of BGI_THICKEN - with thickening ON the two agree, and the gate below
+                    // is then a no-op rather than a conflict.
+                    {
+                        uint gslot = BgiSlot((uint3)c);
+                        uint ignored;
+                        InterlockedOr(_GrownWrite[gslot >> 5], 1u << (gslot & 31u), ignored);
+                        if (dot(i.wn, i.wn) > 1e-6) {
+                            int3 gback = c - int3(round(normalize(i.wn)));
+                            if (all(gback >= 0) && all(gback < (int)BGI_GRID)) {
+                                uint bslot = BgiSlot((uint3)gback);
+                                InterlockedOr(_GrownWrite[bslot >> 5], 1u << (bslot & 31u), ignored);
+                            }
+                        }
+                    }
+
                 #if defined(BGI_THICKEN)
                     // Thicken one voxel INWARD (opposite the surface normal) so a wall is solid-backed
                     // instead of a 1-voxel hollow shell. LEAK BLOCKING is the reason: a sub-voxel
@@ -116,6 +150,74 @@ Shader "Hidden/Lotec/BufferGiVoxelize" {
                             _MaterialWrite[BgiSlot((uint3)back)] = packed;
                     }
                 #endif
+                }
+                return 0;
+            }
+            ENDHLSL
+        }
+
+        // PASS 1 - HI-RES OCCUPANCY, bit only. The same three-axis raster as pass 0, at _BgiOccGrid
+        // instead of _BgiGrid, writing ONE BIT per covered cell and nothing else.
+        //
+        // A dedicated pass rather than a transient hi-res _Material buffer: at 128^3 a uint material
+        // field would be 8 MB per field to produce 512 KB of bits, and at 256^3 it would be 64 MB.
+        // The bit target is the output, so there is nothing to downsample and release.
+        //
+        // Coverage MUST agree with pass 0's, or the containment invariant breaks - so the alpha /
+        // cutoff test below is the same test, applied to the same interpolated values. What it must
+        // NOT do is reproduce BGI_THICKEN: thickening is a leak control on the LIGHTING grid, stated
+        // in whole _BgiGrid cells, and growing by one HI-RES cell instead would be a different and
+        // much smaller amount of geometry. The hi-res field is the honest raster; the thickened
+        // low-res field stays what it is.
+        Pass {
+            Name "OccupancyHi"
+            Cull Off
+            ZWrite Off
+            ZTest Always
+            ColorMask 0
+
+            HLSLPROGRAM
+            #pragma target 4.5
+            #pragma vertex vert
+            #pragma fragment frag
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "../ShaderLibrary/BufferGiField.hlsl"
+
+            // u1, the same slot pass 0 uses for _MaterialWrite - only one of the two passes is ever
+            // bound at a time, and keeping the slot identical keeps the C# side symmetric.
+            RWStructuredBuffer<uint> _OccupancyHiWrite : register(u1);
+
+            TEXTURE2D(_VoxBaseMap); SAMPLER(sampler_VoxBaseMap);
+
+            float4 _VoxAlbedo;
+            float4 _VoxBaseMap_ST;
+            float  _VoxCutoff;
+            int    _VoxAxis;
+
+            struct Attrib { float3 positionOS : POSITION; float2 uv : TEXCOORD0; };
+            struct Vary { float4 positionCS : SV_POSITION; float3 ws : TEXCOORD0; float2 uv : TEXCOORD1; };
+
+            Vary vert(Attrib i) {
+                Vary o;
+                float3 ws = TransformObjectToWorld(i.positionOS);
+                o.ws = ws;
+                o.uv = i.uv * _VoxBaseMap_ST.xy + _VoxBaseMap_ST.zw;
+                float3 g = (ws - _BgiGridOrigin) / max(_BgiGridSize, 1e-6);
+                float2 ndc = (_VoxAxis == 2) ? g.xy : ((_VoxAxis == 1) ? g.xz : g.yz);
+                o.positionCS = float4(ndc * 2.0 - 1.0, 0.5, 1.0);
+                return o;
+            }
+
+            float4 frag(Vary i) : SV_Target {
+                half4 tex = (half4)SAMPLE_TEXTURE2D(_VoxBaseMap, sampler_VoxBaseMap, i.uv);
+                int3 c = (int3)floor(BgiWorldToOccGrid(i.ws));
+                if (BgiOccInBounds(c)) {
+                    if ((half)_VoxAlbedo.a * tex.a < (half)_VoxCutoff) return 0;
+                    // Pass 0's "black texels stay occupied" floor has no analogue here: solidity is
+                    // its own bit, so colour cannot make a covered cell disappear.
+                    // Atomic because the three axis passes - and neighbouring triangles within one -
+                    // contend for the same 32-bit word. Order-independent, so no race to lose.
+                    InterlockedOr(_OccupancyHiWrite[BgiOccWord((uint3)c)], BgiOccBitMask((uint3)c));
                 }
                 return 0;
             }
