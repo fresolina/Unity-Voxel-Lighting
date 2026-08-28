@@ -1344,6 +1344,14 @@ namespace Lotec.Lighting {
             // LIT. The whole baked shadow disappears with no error anywhere.
             Shader.SetGlobalInt(s_bgiShadowGrid, _shadowGrid);
             Shader.SetGlobalInt(s_bgiShadowGridLog2, _shadowGridLog2);
+            // The OCCUPANCY grid, for the Raymarch mode's fragment DDA. Same trap as the shadow grid
+            // above and it caught us: this was only ever bound PER COMPUTE SHADER (BindGridConstants)
+            // plus transiently as a command-buffer global during voxelize, so the fragment was reading
+            // a leftover. After an editor restart it read 0, and a zero grid makes the march's bounds
+            // test true on the first line - every pixel returned LIT and the mode produced no shadow
+            // at all, silently.
+            Shader.SetGlobalInt(s_bgiOccGrid, _occGrid);
+            Shader.SetGlobalInt(s_bgiOccGridLog2, _occGridLog2);
             // The lit shader reads NO buffer in a shipping variant - everything it needs arrives
             // through the mirrored irradiance textures below. _Occupancy is still published because
             // the BGI_DEBUG_VIEWS variant declares it (BgiTapSolidWeight), and a declared-but-unbound

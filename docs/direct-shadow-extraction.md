@@ -11,7 +11,7 @@
 | [S2 Kernel](#s2--move-the-kernel) | **done 2026-08-28** — sun-vis volumes bit-identical at 1/4/16 samples, render unchanged; found a serialized-field aliasing hazard that S3 must plan around |
 | [S3 Driver](#s3--move-the-driver) | **done 2026-08-28** — `VoxelSunShadow` component; volumes and render still bit-identical; settings migrate |
 | [S4 Provider + Unity shadowmap](#s4--provider-interface--unity-shadowmap) | **done 2026-08-28** — mode 5 ships and agrees with `Baked` to 1.7/255; needed a `ShadowCaster` pass the package never had. Provider interface **deferred, deliberately** |
-| [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | **built, NOT accepted 2026-08-28** — resource problem solved and the mirror is bit-exact, but the phase's founding premise was wrong: the OCCLUDER geometry is still a lattice, so the shadow boundary is quantised to it and corners show a hard sawtooth. `Baked` looks better today. Needs per-pixel supersampling |
+| [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | **built, NOT accepted 2026-08-28** — origin bias replaced by slope-scaled skip-cells (courtyard now matches `Baked` to 0.07); found and fixed a real latent bug (`_BgiOccGrid` never published to the fragment). Still leaks light through thin geometry: **one ray per pixel needs supersampling**, as CORRECTION 2 said |
 
 **Goal.** Make the main-light sun shadow a **self-contained subsystem with a swappable backend**, so
 that a Unity shadowmap, the current baked voxel-visibility volume, and a future **per-pixel raymarch**

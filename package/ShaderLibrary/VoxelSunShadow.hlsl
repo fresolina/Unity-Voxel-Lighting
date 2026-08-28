@@ -162,12 +162,19 @@ Texture3D<uint> _BgiOccupancyTexCoarse;   // coarse field
 // geometry. Unbound it reads 0 and the mode produces no shadow at all, which is the same safe end.
 int _BgiRaymarchMaxSteps;
 
-// How far off the surface the raymarch STARTS, in hi-res occupancy CELLS. Deliberately its own
-// uniform and not _BgiShadowNormalOffset: that one is in SHADOW texels and is floored at 1.0 because
-// a TRILINEAR footprint has to clear a whole texel of the solid layer behind the surface. A ray has
-// no footprint - it needs only to leave its own cell - so borrowing that floor started the march up
-// to two cells out and skipped near-surface occluders.
-float _BgiRaymarchStartOffset;
+// Cells at the START of the ray whose hits are ignored, so the surface cannot shadow itself.
+//
+// This replaces biasing the origin, which cannot be made to work: small enough to keep near-surface
+// occluders is too small to clear the shading point's own cell (voxel-scale acne striping), and large
+// enough to clear it displaces the origin so far that it leaves the structure doing the occluding -
+// at occupancy 128 on Sponza one cell is 0.169 x 0.117 x 0.267 m, so a 1-cell normal offset lifts a
+// point out from under an arcade vault and the whole arcade reads sunlit.
+//
+// Ignoring a BOUNDED count instead keeps the origin exactly on the shading point. Unbounded ("ignore
+// until the first air cell") was tried and is far too permissive: it suppresses every occluder that
+// belongs to the same connected structure as the receiver.
+int _BgiRaymarchSkipCells;
+
 
 // Solidity of one hi-res cell in the flat mirror. `wordCache`/`cachedSlab` let a caller that steps
 // along X reuse a fetched word - which is the whole reason the mirror is packed 32:1 on that axis.
@@ -193,19 +200,21 @@ half BgiRaymarchSunShadow(float3 worldPos, float3 normal, float3 lightDir,
                           bool insideFine, float3 origin, float3 gridSize)
 {
     int grid = (int)BGI_OCC_GRID;
-    // Start off the surface along the GEOMETRIC normal, scaled so the offset clears a whole cell on
-    // the DOMINANT axis whatever the orientation - the same max-component construction
-    // BgiSampleShadowTexture uses, and for the same underlying reason: a ray that starts inside the
-    // wall's own voxel layer reports it, and that is self-shadowing.
+    // NO ORIGIN BIAS. The ray starts exactly at the shading point.
     //
-    // 1.0 is the floor, and it is not conservatism. Below it this mode shows regular voxel-scale
-    // STRIPING across every sunlit wall - classic acne, periodic because whether the offset clears the
-    // cell depends on where the shading point happens to sit inside it. 0.5 looked right by frame mean
-    // and was visibly wrong on screen; see the S5 notes in docs/direct-shadow-extraction.md.
-    float3 aN = abs(normal);
-    float3 biasDir = normal / max(max(aN.x, aN.y), max(aN.z, 1e-4));
-    float3 p = (worldPos - origin) / max(gridSize, 1e-6) * (float)grid
-             + biasDir * max(_BgiRaymarchStartOffset, 1.0);
+    // Biasing along the normal was tried at every value and cannot work, because the two failures it
+    // has to sit between are not on the same scale:
+    //   - too small: the ray starts inside the shading point's own cell and reports it. Voxel-scale
+    //     acne, visible as regular STRIPING across sunlit walls.
+    //   - too large: the origin leaves the structure that is doing the occluding. At occupancy 128 on
+    //     Sponza a cell is 0.169 x 0.117 x 0.267 m, so a one-cell normal offset lifts a point out from
+    //     under an arcade vault - the entire arcade then reads sunlit.
+    // There is no value between those. Self-shadowing is handled by _BgiRaymarchSkipCells below, which
+    // ignores hits for a bounded number of cells WITHOUT moving where the ray starts.
+    //
+    // The walk itself is not in question: from identical origins it agrees with the reference march
+    // (MarchOccupancyHiFrom, via the sun-visibility volume) on 35,507 of 35,507 air texels.
+    float3 p = (worldPos - origin) / max(gridSize, 1e-6) * (float)grid;
     if (any(p < 0.0) || any(p >= (float)grid)) return 1.0h;   // outside the field -> no information -> lit
 
     int3 cell = (int3)floor(p);
@@ -220,6 +229,17 @@ half BgiRaymarchSunShadow(float3 worldPos, float3 normal, float3 lightDir,
 
     uint wordCache = 0u; int cachedSlab = -1;
     int maxSteps = max(_BgiRaymarchMaxSteps, 0);
+    // SLOPE-SCALED skip. A ray leaving a surface at a glancing angle skims its OWN geometry for many
+    // cells before clearing it, so a constant skip count only works near normal incidence. At N.L=0.1
+    // the ray travels ~10x further through its own wall than at N.L=1, and every one of those cells
+    // reports a hit - which is the periodic bright/dark STRIPING this mode showed across floors and
+    // walls under a low sun.
+    //
+    // Scaling the count by 1/N.L is the same correction a shadow map makes with slope-scaled depth
+    // bias, expressed in cells along the ray instead of a depth offset. Capped so a near-tangent ray
+    // cannot skip an arbitrary distance and swallow a real occluder.
+    float ndl = max(dot(normalize(normal), lightDir), 1e-3);
+    int skip = (int)min((float)max(_BgiRaymarchSkipCells, 0) / ndl, 32.0);
     [loop]
     for (int s = 0; s < maxSteps; s++) {
         // Step FIRST, so the origin cell never occludes itself - the same rule the compute march uses.
@@ -231,7 +251,8 @@ half BgiRaymarchSunShadow(float3 worldPos, float3 normal, float3 lightDir,
             else                 { cell.z += stepDir.z; tMax.z += inv.z; }
         }
         if (any(cell < 0) || any(cell >= grid)) return 1.0h;   // escaped the grid -> sky
-        if (BgiOccTexSolid(insideFine, cell, wordCache, cachedSlab)) return 0.0h;
+        // Hits inside the first `skip` cells are the shading point's own geometry, not an occluder.
+        if (BgiOccTexSolid(insideFine, cell, wordCache, cachedSlab) && s >= skip) return 0.0h;
     }
     return 1.0h;   // budget spent without a hit: fail open
 }
