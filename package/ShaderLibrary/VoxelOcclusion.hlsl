@@ -12,7 +12,7 @@
 
 
 // Baked directional occlusion shadow sources, read by the buffer-GI per-field shadow modes
-// (BgiSampleFaceAoShadow):
+// (BgiSampleSunShadow):
 //   GetBitmaskShadow   -> per-voxel directional bitmask (one point fetch, hard voxel edges)
 //   GetOccFieldShadow  -> per-direction occlusion field (hardware trilinear, soft/sharp edges)
 // Both are baked alternatives to the runtime SDF shadow march.

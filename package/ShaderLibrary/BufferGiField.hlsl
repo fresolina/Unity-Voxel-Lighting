@@ -45,6 +45,80 @@ float3 _BgiVoxelSize;  // per-axis voxel size (= _BgiGridSize / BGI_GRID)
 // fields share one buffer; field f occupies [f*BGI_COUNT, (f+1)*BGI_COUNT). Set per dispatch.
 uint _FieldOffset;
 
+// --- HI-RES OCCUPANCY GRID -------------------------------------------------------------------
+// A SECOND, finer grid carrying nothing but solidity, decoupled from _BgiGrid (which still sizes
+// every lighting field). Geometry accuracy is the one axis that costs neither rays nor convergence
+// time - 0.125 bits per voxel against Cube irradiance's 48 BYTES, a 384:1 ratio - so it is the one
+// axis worth raising. Same world box as the field it belongs to; only the subdivision differs.
+// Published by BufferGiUpdater alongside the field constants, and ALWAYS a power of two >= _BgiGrid.
+uint _BgiOccGrid;      // cubic hi-res occupancy resolution (power of two, >= _BgiGrid)
+uint _BgiOccGridLog2;  // log2(_BgiOccGrid)
+#define BGI_OCC_GRID _BgiOccGrid
+#define BGI_OCC_GRID_LOG2 _BgiOccGridLog2
+
+// STORAGE: 4x4x4 BLOCKS of 64 bits = two contiguous uints. Chosen now rather than later because
+// changing the layout invalidates every measurement taken on it, and because it is what a two-level
+// DDA wants: one coarse cell at a 4:1 ratio is exactly one block, i.e. ONE 8-byte load that then
+// marches in registers. (At 8:1 a coarse cell is 64 bytes = exactly one cache line; at 2:1 it is one
+// byte. All closed-form - only the load width changes.)
+//
+// Two plain uints rather than a uint2 element so the raster can InterlockedOr a word directly, which
+// is the one operation the layout has to support on every backend. They are adjacent, so a reader
+// still gets the block in one burst.
+#define BGI_OCC_BLOCK_LOG2 2u
+#define BGI_OCC_BLOCK 4u
+// Blocks per axis, and the shift for the block index. _BgiOccGrid >= 4 by construction.
+uint BgiOccBlockGridLog2() { return BGI_OCC_GRID_LOG2 - BGI_OCC_BLOCK_LOG2; }
+
+// Blocks in ONE field. Blocks-per-axis cubed; >= 1 since the grid is at least 4.
+uint BgiOccBlocksPerField() {
+    uint s = BgiOccBlockGridLog2();
+    return 1u << (s * 3u);
+}
+
+// Word (not block) offset of the current field's hi-res slice. Set per dispatch by C#, exactly like
+// _FieldOffset - kept separate because the two grids have different counts.
+uint _OccFieldWordOffset;
+
+bool BgiOccInBounds(int3 c) {
+    return all(c >= 0) && all(c < (int)BGI_OCC_GRID);
+}
+
+// --- SHADOW GRID ------------------------------------------------------------------------------
+// A THIRD resolution over the same world box: the baked sun-visibility texture's. Its own setting
+// because sun visibility and geometry have different budgets - the shadow texture costs 2 bytes a
+// texel against occupancy's 0.125 bits, so 256^3 is 67 MB of shadow against 4 MB of occupancy.
+// C# clamps it to <= _BgiOccGrid: detail beyond the geometry it is evaluated against is fabricated.
+uint _BgiShadowGrid;
+uint _BgiShadowGridLog2;
+#define BGI_SHADOW_GRID _BgiShadowGrid
+#define BGI_SHADOW_GRID_LOG2 _BgiShadowGridLog2
+
+// Continuous hi-res grid coordinates of a world position, for an explicit field's box. The hi-res
+// grid spans the SAME world box as the field, so its voxel size is gridSize / _BgiOccGrid.
+float3 BgiWorldToOccGridAt(float3 worldPos, float3 origin, float3 gridSize) {
+    return (worldPos - origin) / max(gridSize, 1e-6) * (float)BGI_OCC_GRID;
+}
+float3 BgiWorldToOccGrid(float3 worldPos) {
+    return BgiWorldToOccGridAt(worldPos, _BgiGridOrigin, _BgiGridSize);
+}
+
+// The WORD holding cell c's bit, and the bit's position in it. The block index is X-fastest like
+// BgiIndex; within a block the bit is x | y<<2 | z<<4, so a whole 4-wide X run is 4 adjacent bits.
+uint BgiOccWord(uint3 c) {
+    uint s = BgiOccBlockGridLog2();
+    uint block = (c.x >> BGI_OCC_BLOCK_LOG2)
+               | ((c.y >> BGI_OCC_BLOCK_LOG2) << s)
+               | ((c.z >> BGI_OCC_BLOCK_LOG2) << (s * 2u));
+    uint bit = (c.x & 3u) | ((c.y & 3u) << 2u) | ((c.z & 3u) << 4u); // 0..63
+    return _OccFieldWordOffset + block * 2u + (bit >> 5u);
+}
+
+uint BgiOccBitMask(uint3 c) {
+    uint bit = (c.x & 3u) | ((c.y & 3u) << 2u) | ((c.z & 3u) << 4u);
+    return 1u << (bit & 31u);
+}
+
 uint BgiIndex(uint3 c) {
     return c.x | (c.y << BGI_GRID_LOG2) | (c.z << (BGI_GRID_LOG2 * 2u));
 }
@@ -127,11 +201,13 @@ void BgiUnpackRgbH(uint2 p, out half3 c, out half w) {
 
 // --- Per-voxel SURFACE word (32 bits/voxel), baked at voxelize/build time, read once per hit ---
 // bits  0-15 : octahedral surface normal, 8 bits/axis (~1-2 deg - plenty for a voxel GI normal)
-// bits 16-23 : SOLID -> openness / static AO;  AIR -> distance to the nearest solid (voxels, capped)
-// bits 24-31 : flags - bit 24 EMISSIVE, bit 25 TWO-SIDED (see below); 26-31 still reserved
-// The two bit-16..23 meanings never collide - a voxel is either solid or air - so readers pick by the
-// occupancy bit. Split from occupancy (the hot 1-bit/voxel bitfield) so this cold 4 B word is touched
-// only per ray-hit / per voxel, never in the DDA loop.
+// bits 16-23 : SOLID -> FREE;  AIR -> distance to the nearest solid (voxels, capped)
+// bits 24-31 : flags - bit 24 EMISSIVE, bit 25 TWO-SIDED, 26-30 sun-ray origin; 31 free
+// Bits 16-23 held the static openness / AO scalar on solid voxels until AO was removed (a 32^3 field
+// is too coarse to carry contact occlusion - see the buffer-GI architecture doc). They are now written
+// only for AIR voxels, so nothing reads them where the occupancy bit is set. Split from occupancy (the
+// hot 1-bit/voxel bitfield) so this cold 4 B word is touched only per ray-hit / per voxel, never in
+// the DDA loop.
 
 // City-block distance (voxels) from an AIR voxel to the nearest solid, saturating at this cap. Baked
 // by CSBuildAirDistance and used to skip gathering air that no surface ever reads (far-air gather
@@ -162,19 +238,9 @@ float3 BgiSurfaceNormal(uint word) {
     return normalize(n);
 }
 
-// Static openness / ambient occlusion in bits 16-23 (solid voxels): 1 = open (flat/convex surface),
-// < 1 = the front hemisphere is partly blocked by nearby geometry (concave corner, contact gap).
-// Baked by CSBuildSurface; keep it OUT of the normal's low 16 bits when composing the word.
-uint BgiPackOpenness(float openness) {
-    return (uint)(saturate(openness) * 255.0 + 0.5) << 16;
-}
-
-half BgiSurfaceOpenness(uint word) {
-    return (half)(((word >> 16) & 0xffu) * (1.0 / 255.0));
-}
-
 // Air-distance in bits 16-23 (AIR voxels): integer city-block distance to the nearest solid, capped
-// at BGI_MAX_AIR_DIST. Shares the bits with openness - valid only where the occupancy bit is 0.
+// at BGI_MAX_AIR_DIST. Valid only where the occupancy bit is 0; on a SOLID voxel these bits are free
+// (they carried the openness / static AO scalar before AO was removed).
 uint BgiPackAirDist(uint dist) {
     return (min(dist, BGI_MAX_AIR_DIST) & 0xffu) << 16;
 }

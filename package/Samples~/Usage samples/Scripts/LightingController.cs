@@ -86,7 +86,6 @@ namespace Lotec.Lighting.Samples {
         ShadowUiMode _lastShadowMode;
         int _lastSamplesPerFrame;
         float _lastConfidenceCurve;
-        float _lastAoStrength;
         BufferGiUpdater.RadianceDirections _lastRadianceDirections;
         AutoExposure.TonemapMode _lastTonemap;
         bool _lastAutoExposure;
@@ -314,12 +313,11 @@ namespace Lotec.Lighting.Samples {
             EnumField shadowModeField = root.Q<EnumField>("shadow-mode-enum");
             SliderInt samplesPerFrameSlider = root.Q<SliderInt>("samples-per-frame-slider");
             Slider confidenceCurveSlider = root.Q<Slider>("confidence-curve-slider");
-            Slider aoStrengthSlider = root.Q<Slider>("ao-strength-slider");
             EnumField radianceDirectionsField = root.Q<EnumField>("radiance-directions-enum");
             EnumField tonemapField = root.Q<EnumField>("tonemap-enum");
             Toggle autoExposureToggle = root.Q<Toggle>("auto-exposure-toggle");
 
-            if (giField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || aoStrengthSlider == null || radianceDirectionsField == null || tonemapField == null || autoExposureToggle == null || !TryCacheFrameTimeLabels(root)) {
+            if (giField == null || shadowModeField == null || samplesPerFrameSlider == null || confidenceCurveSlider == null || radianceDirectionsField == null || tonemapField == null || autoExposureToggle == null || !TryCacheFrameTimeLabels(root)) {
                 UnbindUi();
                 return;
             }
@@ -368,7 +366,6 @@ namespace Lotec.Lighting.Samples {
                 _boundRoot.Q<EnumField>("shadow-mode-enum")?.ClearBindings();
                 _boundRoot.Q<SliderInt>("samples-per-frame-slider")?.ClearBindings();
                 _boundRoot.Q<Slider>("confidence-curve-slider")?.ClearBindings();
-                _boundRoot.Q<Slider>("ao-strength-slider")?.ClearBindings();
                 _boundRoot.Q<EnumField>("radiance-directions-enum")?.ClearBindings();
                 _boundRoot.Q<EnumField>("tonemap-enum")?.ClearBindings();
                 _boundRoot.Q<Toggle>("auto-exposure-toggle")?.ClearBindings();
@@ -468,23 +465,6 @@ namespace Lotec.Lighting.Samples {
                 }
 
                 gi.ConfidenceCurve = value;
-                RefreshUi(true);
-            }
-        }
-
-        [CreateProperty]
-        float AoStrength {
-            get {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                return gi != null ? gi.AoStrength : 0f;
-            }
-            set {
-                BufferGiUpdater gi = BufferGiUpdater.Instance;
-                if (gi == null) {
-                    return;
-                }
-
-                gi.AoStrength = value;
                 RefreshUi(true);
             }
         }
@@ -656,7 +636,6 @@ namespace Lotec.Lighting.Samples {
             ShadowUiMode shadowMode = ShadowMode;
             int samplesPerFrame = SamplesPerFrame;
             float confidenceCurve = ConfidenceCurve;
-            float aoStrength = AoStrength;
             BufferGiUpdater.RadianceDirections radianceDirections = RadianceDirections;
             AutoExposure.TonemapMode tonemap = Tonemap;
             bool autoExposure = AutoExposureEnabled;
@@ -666,7 +645,6 @@ namespace Lotec.Lighting.Samples {
                 _lastShadowMode = shadowMode;
                 _lastSamplesPerFrame = samplesPerFrame;
                 _lastConfidenceCurve = confidenceCurve;
-                _lastAoStrength = aoStrength;
                 _lastRadianceDirections = radianceDirections;
                 _lastTonemap = tonemap;
                 _lastAutoExposure = autoExposure;
@@ -678,7 +656,6 @@ namespace Lotec.Lighting.Samples {
             UpdateEnumSnapshot(ref _lastShadowMode, shadowMode, notifyChanges, nameof(ShadowMode));
             UpdateIntSnapshot(ref _lastSamplesPerFrame, samplesPerFrame, notifyChanges, nameof(SamplesPerFrame));
             UpdateFloatSnapshot(ref _lastConfidenceCurve, confidenceCurve, notifyChanges, nameof(ConfidenceCurve));
-            UpdateFloatSnapshot(ref _lastAoStrength, aoStrength, notifyChanges, nameof(AoStrength));
             UpdateEnumSnapshot(ref _lastRadianceDirections, radianceDirections, notifyChanges, nameof(RadianceDirections));
             UpdateEnumSnapshot(ref _lastTonemap, tonemap, notifyChanges, nameof(Tonemap));
             UpdateBoolSnapshot(ref _lastAutoExposure, autoExposure, notifyChanges, nameof(AutoExposureEnabled));

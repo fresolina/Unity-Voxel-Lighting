@@ -24,11 +24,6 @@
                         <ui:DataBinding property="value" data-source-path="ConfidenceCurve" binding-mode="TwoWay"/>
                     </Bindings>
                 </ui:Slider>
-                <ui:Slider name="ao-strength-slider" label="AO Strength" low-value="0" high-value="1" show-input-field="true" tooltip="Strength of the baked static ambient occlusion (0 = off). Darkens GI in concave corners and near-contact gaps." class="setting-field">
-                    <Bindings>
-                        <ui:DataBinding property="value" data-source-path="AoStrength" binding-mode="TwoWay"/>
-                    </Bindings>
-                </ui:Slider>
                 <ui:EnumField label="Radiance Directions" value="Single" type="Lotec.Lighting.BufferGiUpdater+RadianceDirections, Lotec.Lighting" name="radiance-directions-enum" tooltip="Directions of radiance stored per voxel. Single: one value; a wall thinner than a voxel gets one side right and the other dark. Cube: the six world axes - fixes thin walls and perpendicular faces sharing a cell, and makes the baked sun shadow resolve per side, at 6x the irradiance storage and 3 texture taps instead of 1. Changing this restarts the accumulation." class="setting-field">
                     <Bindings>
                         <ui:DataBinding property="value" data-source-path="RadianceDirections" binding-mode="TwoWay"/>

@@ -63,8 +63,8 @@ inline half VoxelDirectGain() {
 }
 
 // Resolve the shadow term for a surface point: always the SDF raymarch. (The baked bitmask /
-// occlusion-field sources are buffer-GI-only now - selected per field by BgiSampleFaceAoShadow, not
-// here.) Under the buffer GI the main-light sun-shadow is resolved entirely by BgiSampleFaceAoShadow
+// occlusion-field sources are buffer-GI-only now - selected per field by BgiSampleSunShadow, not
+// here.) Under the buffer GI the main-light sun-shadow is resolved entirely by BgiSampleSunShadow
 // (Off = none, Baked, Sdf, OcclusionField, Bitmask) and fed to GetMainDirectLightingShadow, so the main
 // light NEVER routes through here; this serves the non-buffer GI modes' main light plus all local lights.
 // `lightDir` must be unit length (it always is at every call site), so no normalize here.
@@ -141,7 +141,7 @@ inline half3 GetMainDirectLighting(half3 lightDir, half3 lightColor, float3 worl
 
 // Main directional light with an externally-resolved shadow term - used by the buffer-GI path, which
 // computes the baked sun visibility together with the baked AO in a single face read
-// (BgiSampleFaceAoShadow) and passes it in here, so the shadow is not resolved again via GetShadow.
+// (BgiSampleSunShadow) and passes it in here, so the shadow is not resolved again via GetShadow.
 inline half3 GetMainDirectLightingShadow(half3 lightDir, half3 lightColor, float3 worldPos, half3 normal, half3 geoNormal, half3 albedo, half shadow) {
     half ndotl = saturate(dot(normal, lightDir)); // callers hand back a unit direction
     if (ndotl <= 0.0h)

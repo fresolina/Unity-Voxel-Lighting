@@ -82,6 +82,16 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // register pressure. _fragment: the tap is fragment-only, so the vertex variants don't double.
             #pragma multi_compile_fragment __ BGI_TAP_AXIS_SNAPPED
 
+            // Contaminated-axis snap (BufferGiUpdater.InPlaneSnap). Composes with the filter above and
+            // with Cube, so it is its own keyword rather than a third state of it. Off by default: the
+            // gate costs a neighbour-mask Load on every shaded pixel.
+            #pragma multi_compile_fragment __ BGI_TAP_SNAP_INPLANE
+
+            // ANALYSIS views (BufferGiUpdater.DebugView). Fragment-only and OFF by default, so a
+            // shipping build never compiles the solid-weight walk or its occupancy reads in - see
+            // LightingKeywords.BgiDebug for why this is a keyword and not a branch on the uniform.
+            #pragma multi_compile_fragment __ BGI_DEBUG_VIEWS
+
             // Colours and factors are declared `half` (matching URP's own UnityPerMaterial layout in
             // LitInput.hlsl) so the constants arrive in fp16 registers and the shading chain never
             // gets promoted back to fp32 by a stray float operand.
@@ -190,15 +200,14 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
 
                 half3 albedo = _BaseColor.rgb * baseTex.rgb;
 
-                // Main light. Under the buffer GI, BgiSampleFaceAoShadow is the SOLE authority for the
-                // main-light sun shadow (Off = no shadow, Baked = baked value, Sdf = SDF raymarch) and
-                // also resolves the baked AO from the same face read - so the shadow feeds straight into
-                // the main light and never falls through to GetShadow (SDF/bitmask/occlusion). Other GI
-                // modes resolve the main-light shadow inside GetShadow as before.
+                // Main light. Under the buffer GI, BgiSampleSunShadow is the SOLE authority for the
+                // main-light sun shadow (Off = no shadow, Baked = baked value, Sdf = SDF raymarch), so
+                // the shadow feeds straight into the main light and never falls through to GetShadow
+                // (SDF/bitmask/occlusion). Other GI modes resolve the main-light shadow inside
+                // GetShadow as before.
                 #if defined(GI_VOXEL_BUFFER)
-                    half bgiAo, bgiShadow;
                     // Geometric normal, not N: this is a voxel-grid lookup, not a shading term.
-                    BgiSampleFaceAoShadow(IN.positionWS, geoN, light.direction, bgiAo, bgiShadow);
+                    half bgiShadow = BgiSampleSunShadow(IN.positionWS, geoN, light.direction);
                     half3 lit = GetMainDirectLightingShadow(light.direction, light.color, IN.positionWS, N, geoN, albedo, bgiShadow);
                 #else
                     half3 lit = GetMainDirectLighting(light.direction, light.color, IN.positionWS, N, geoN, albedo);
@@ -213,14 +222,37 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 lit *= VoxelDirectGain();
 
                 #if defined(GI_VOXEL_BUFFER)
-                    // Indirect lit (buffer GI) modulated by the buffer's OWN baked AO (bgiAo, resolved
-                    // above together with the sun shadow). No SDF AO here - the buffer GI carries its
-                    // own openness, so this path no longer samples the SDF texture at all.
-                    // Geometric normal, not N, for the same reason as the face read above: it only picks
+                    // Indirect lit (buffer GI). No AO factor of any kind here: the baked openness
+                    // scalar was removed (wrong spatial scale at 32^3, and it double-counted the
+                    // occlusion the gather already integrates), and there is no SDF AO on this path.
+                    // Geometric normal, not N, for the same reason as the shadow read above: it only picks
                     // the voxel layer to read, and the grid knows nothing about normal maps. Feeding it
                     // the per-texel N made the sampled layer jump within a single flat face, which
                     // pushed the tap back into the dark solid cell in blotches.
-                    lit += albedo * BgiGatherIndirect(IN.positionWS, geoN) * bgiAo;
+                    half3 bgiDirect   = lit; // the summed, muted DIRECT term - kept for the analysis views
+                    half3 bgiIndirect = albedo * BgiGatherIndirect(IN.positionWS, geoN);
+                    lit += bgiIndirect;
+
+                    // ANALYSIS views (BufferGiUpdater.DebugView). Isolating a term here rather than in
+                    // the voxel-cube viewer is the point: this is the value AFTER the fragment's own
+                    // tap, so comparing it against the cubes (which show the same quantity per VOXEL)
+                    // tells you whether an artifact came out of the bake or out of the read.
+                    #if defined(BGI_DEBUG_VIEWS)
+                    uint bgiDbg = (uint)_BgiDebugView;
+                    if (bgiDbg != 0u) {
+                        // Contamination map: how much of THIS pixel's GI footprint sat on solid cells.
+                        // Raw, like the other scalars - it is a weight, not a radiance.
+                        if (bgiDbg == 5u) return half4(((half)BgiTapSolidWeight(IN.positionWS, geoN)).xxx, 1.0h);
+                        // Scalars are returned RAW - no exposure, no tonemap - so they read as literal
+                        // 0..1 greyscale and can be eyedropped against the cube colours directly.
+                        // Tonemapping them would remap the very numbers being compared.
+                        if (bgiDbg == 2u) return half4(bgiShadow.xxx, 1.0h); // sun visibility
+                        // The HDR terms keep the display transform below, so they read like the normal
+                        // image with the other term removed rather than like a different scene.
+                        if (bgiDbg == 1u) lit = bgiIndirect; // GI only
+                        if (bgiDbg == 4u) lit = bgiDirect;   // direct only
+                    }
+                    #endif // BGI_DEBUG_VIEWS
                 #elif defined(GI_UNITY)
                     // (SampleSH is fp32 in URP; narrowed once so the add stays in fp16.)
                     // A/B baseline: Unity's built-in indirect diffuse (ambient / light probes via

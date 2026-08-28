@@ -15,7 +15,7 @@ MonoBehaviour:
   m_DefaultGroup: 3f497580613e46c41a932f4710fb7a9b
   m_currentHash:
     serializedVersion: 2
-    Hash: 0cb3d762492cbbcba1602fa6e6ac04aa
+    Hash: 00000000000000000000000000000000
   m_ExtractTypeTreeData: 0
   m_DisableWriteTypeTree: 0
   m_OptimizeCatalogSize: 0
@@ -62,7 +62,7 @@ MonoBehaviour:
   m_CustomContentStateBuildPath: 
   m_ContentStateBuildPath: 
   m_BuildAddressablesWithPlayerBuild: 0
-  m_overridePlayerVersion: 1.6
+  m_overridePlayerVersion: 1.7
   m_GroupAssets:
   - {fileID: 11400000, guid: 0cddc0d7550096042bf8931d4086b6ab, type: 2}
   - {fileID: 11400000, guid: c557939c37761ae48abe58c35a6cc951, type: 2}

@@ -64,6 +64,26 @@ namespace Lotec.Lighting {
         public static readonly ShaderKeywordGroup BgiTap = new ShaderKeywordGroup(null, "BGI_TAP_AXIS_SNAPPED");
         public const string BgiTapAxisSnapped = "BGI_TAP_AXIS_SNAPPED";
 
+        /// <summary>Contaminated-axis snap in the irradiance tap (VoxelLit: multi_compile_fragment __
+        /// BGI_TAP_SNAP_INPLANE), driven by <see cref="BufferGiUpdater.InPlaneSnap"/>. Where the
+        /// trilinear kernel spans a one-voxel wall IN THE SURFACE PLANE, the tap is snapped to a cell
+        /// centre on that axis alone. Its own group rather than a third state of <see cref="BgiTap"/>
+        /// because it composes with both filters and with Cube - it clears the layer BESIDE the
+        /// surface, where the axis-snapped filter clears the one BEHIND it. A keyword because the gate
+        /// costs a texture Load on every shaded pixel, which is exactly the per-pixel cost the Fast tap
+        /// exists to avoid carrying.</summary>
+        public static readonly ShaderKeywordGroup BgiSnap = new ShaderKeywordGroup(null, "BGI_TAP_SNAP_INPLANE");
+        public const string BgiTapSnapInPlane = "BGI_TAP_SNAP_INPLANE";
+
+        /// <summary>ANALYSIS views in the lit shader (VoxelLit: multi_compile_fragment __
+        /// BGI_DEBUG_VIEWS), driven by <see cref="BufferGiUpdater.DebugView"/>. A keyword rather than
+        /// a plain branch on the uniform because the solid-weight view costs up to eight occupancy
+        /// reads and a 2x2x2 walk: as a dynamic branch that code stays resident and eats registers on
+        /// EVERY shaded pixel, which is exactly the occupancy hit the Fast tap exists to avoid. Off by
+        /// default, so a shipping build never compiles it in.</summary>
+        public static readonly ShaderKeywordGroup BgiDebug = new ShaderKeywordGroup(null, "BGI_DEBUG_VIEWS");
+        public const string BgiDebugViews = "BGI_DEBUG_VIEWS";
+
         static object s_giOwner;
         static string s_giKeyword = GiOff;
 
