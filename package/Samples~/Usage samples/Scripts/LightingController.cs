@@ -49,7 +49,7 @@ namespace Lotec.Lighting.Samples {
         /// <summary>The single "Shadow Mode" dropdown, combining the BufferGI baked voxel sun-shadow
         /// (first / default entry) with the volume shadow-source options. Selecting Baked turns on the
         /// fine field's baked shadow; any other entry turns it off and selects that shadow source.</summary>
-        // Mirrors BufferGiUpdater.ShadowMode (the buffer-GI fine field is the sole shadow authority now).
+        // Mirrors VoxelSunShadow.ShadowMode (the buffer-GI fine field is the sole shadow authority now).
         // Bitmask has a single read path under buffer GI (a point fetch), so the old Point/8-tap split
         // is collapsed to one entry.
         public enum ShadowUiMode { Off, Baked, SDF, OcclusionField, Bitmask }
@@ -424,11 +424,11 @@ namespace Lotec.Lighting.Samples {
                     return ShadowUiMode.Off;
                 }
 
-                return gi.FineShadow switch {
-                    BufferGiUpdater.ShadowMode.Baked => ShadowUiMode.Baked,
-                    BufferGiUpdater.ShadowMode.Sdf => ShadowUiMode.SDF,
-                    BufferGiUpdater.ShadowMode.OcclusionField => ShadowUiMode.OcclusionField,
-                    BufferGiUpdater.ShadowMode.Bitmask => ShadowUiMode.Bitmask,
+                return gi.Shadow.FineShadow switch {
+                    VoxelSunShadow.ShadowMode.Baked => ShadowUiMode.Baked,
+                    VoxelSunShadow.ShadowMode.Sdf => ShadowUiMode.SDF,
+                    VoxelSunShadow.ShadowMode.OcclusionField => ShadowUiMode.OcclusionField,
+                    VoxelSunShadow.ShadowMode.Bitmask => ShadowUiMode.Bitmask,
                     _ => ShadowUiMode.Off,
                 };
             }
@@ -440,12 +440,12 @@ namespace Lotec.Lighting.Samples {
 
                 // The buffer-GI fine field resolves every shadow source now, so the UI drives FineShadow
                 // directly (no separate keyword-based shadow selector).
-                gi.FineShadow = value switch {
-                    ShadowUiMode.Baked => BufferGiUpdater.ShadowMode.Baked,
-                    ShadowUiMode.SDF => BufferGiUpdater.ShadowMode.Sdf,
-                    ShadowUiMode.OcclusionField => BufferGiUpdater.ShadowMode.OcclusionField,
-                    ShadowUiMode.Bitmask => BufferGiUpdater.ShadowMode.Bitmask,
-                    _ => BufferGiUpdater.ShadowMode.Off,
+                gi.Shadow.FineShadow = value switch {
+                    ShadowUiMode.Baked => VoxelSunShadow.ShadowMode.Baked,
+                    ShadowUiMode.SDF => VoxelSunShadow.ShadowMode.Sdf,
+                    ShadowUiMode.OcclusionField => VoxelSunShadow.ShadowMode.OcclusionField,
+                    ShadowUiMode.Bitmask => VoxelSunShadow.ShadowMode.Bitmask,
+                    _ => VoxelSunShadow.ShadowMode.Off,
                 };
 
                 RefreshUi(true);

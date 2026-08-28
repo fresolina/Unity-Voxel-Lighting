@@ -8,7 +8,7 @@
 | [S0 Baseline](#s0--baseline-and-harness) | **done** — folded into S1's verification (the before-capture is HEAD, re-taken through the identical cycle) |
 | [S1 Shader seam](#s1--move-the-shader-seam) | **done 2026-08-28** — byte-identical render, and a positive control proves the moved code is what runs |
 | [S2 Kernel](#s2--move-the-kernel) | **done 2026-08-28** — sun-vis volumes bit-identical at 1/4/16 samples, render unchanged; found a serialized-field aliasing hazard that S3 must plan around |
-| [S3 Driver](#s3--move-the-driver) | not started |
+| [S3 Driver](#s3--move-the-driver) | **done 2026-08-28** — `VoxelSunShadow` component; volumes and render still bit-identical; settings migrate |
 | [S4 Provider + Unity shadowmap](#s4--provider-interface--unity-shadowmap) | not started |
 | [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | not started |
 
@@ -353,6 +353,54 @@ count does nothing"); it will regress the moment the settings move if it is not 
 **Acceptance:** null, same as S2, plus: toggling every one of the five settings in the inspector still
 re-marches the volume (the regression above), and a scene saved before S3 loads after it with
 identical settings.
+
+### Done [2026-08-28] — the component exists, and the null still holds
+
+`VoxelSunShadow` is a real, inspectable component, auto-added to the updater's GameObject, owning the
+five settings, the two R16 volumes and their lifecycle, the sweep state machine, its own compute
+reference and kernel, every shadow global, and the baked-occlusion publish. `IVoxelOccupancySource` is
+the whole contract between them — and **every member of it was already public on the updater before
+the split**, which is the clearest evidence available that the coupling really was file layout rather
+than data flow.
+
+**Acceptance, all four parts:**
+
+| | result |
+|---|---|
+| sun-vis volumes at 1/4/16 samples | bit-identical to the S1 baseline (`9EBE4F7E…` / `2B566E42…` / `19A74531…`) |
+| render | `CCED4C32…`, mean luminance 163.816623 — unchanged since S1 |
+| all five settings re-march when edited in the inspector | **yes**, verified by driving `OnValidate` for each field individually |
+| pre-S3 scene keeps its settings | **yes** — legacy `1,1,4,2,1` arrived as `Baked, Baked, 4, 2, 1` |
+
+The verification run drove the *new* API throughout — the component's property setter, `Invalidate()`,
+its `Tick`, its own grid binding, its own textures — so the identical hashes are a statement about the
+new path, not a leftover of the old one.
+
+#### Three decisions worth stating, because they deviate from the plan above
+
+**The shadow RESOLUTION stayed on the updater.** The plan listed `_shadowGrid` as moving. It should
+not: it is clamped against the occupancy resolution (detail beyond the geometry it is evaluated
+against is fabricated), so the two are chosen together, and `BindGridConstants` publishes it to all
+three compute assets. It is a field resolution that the shadow reads, not a shadow setting. It is on
+`IVoxelOccupancySource` for exactly that reason.
+
+**`_sunShadow` is not serialized.** A serialized reference to a sibling component buys one
+`GetComponent` on a cold start and costs one more object reference in the very field list whose
+ordering caused [the S2 aliasing incident](#the-serialized-field-aliasing-hazard--read-this-before-s3).
+The migration itself is explicit rather than trusting Unity to re-key by name, for the same reason —
+a settings migration that silently half-works is far harder to spot than one that never ran.
+
+**One behaviour genuinely changed, and it is the only one.** `SunShadowSamples`'s setter used to also
+reset `_collectedSamples`, restarting the GI solve. The component cannot reach that, and it should not:
+since the 2026-08-28 split the shadow's sample count does not feed the solve at all, so the restart
+re-spent a 500-ray budget to arrive at the identical field. Dropping it is a saving, not a regression —
+but it IS a change, and the acceptance above only proves the converged state matches, which is the
+state that restart was reaching anyway.
+
+**Also updated:** the `LightingController` sample now talks to `VoxelSunShadow.ShadowMode` and
+`gi.Shadow.FineShadow`. The enum moved with its owner rather than staying behind as a forwarder — a
+compatibility shim on the updater would have been a back-reference from the GI to the shadow, which is
+the one direction this whole plan exists to prevent.
 
 ---
 
