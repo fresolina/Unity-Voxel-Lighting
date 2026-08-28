@@ -10,7 +10,7 @@
 | [S2 Kernel](#s2--move-the-kernel) | **done 2026-08-28** — sun-vis volumes bit-identical at 1/4/16 samples, render unchanged; found a serialized-field aliasing hazard that S3 must plan around |
 | [S3 Driver](#s3--move-the-driver) | **done 2026-08-28** — `VoxelSunShadow` component; volumes and render still bit-identical; settings migrate |
 | [S4 Provider + Unity shadowmap](#s4--provider-interface--unity-shadowmap) | **done 2026-08-28** — mode 5 ships and agrees with `Baked` to 1.7/255; needed a `ShadowCaster` pass the package never had. Provider interface **deferred, deliberately** |
-| [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | not started |
+| [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | **built, NOT accepted 2026-08-28** — the resource problem is solved and the mirror is bit-exact, but the march **under-shadows against two independent references**. Mode ships available and unselected; the discrepancy is the open item |
 
 **Goal.** Make the main-light sun shadow a **self-contained subsystem with a swappable backend**, so
 that a Unity shadowmap, the current baked voxel-visibility volume, and a future **per-pixel raymarch**
@@ -546,6 +546,73 @@ Prerequisites, in order:
   cost off the frame and onto the sun move; the raymarch moves it back on.
 - **No re-march on a sun move** — the whole amortization machinery becomes unnecessary for this mode,
   and that is a real simplification to claim.
+
+### Built, and NOT accepted [2026-08-28] — it under-shadows, and I do not yet know why
+
+The plumbing all works. The acceptance criteria above do not pass, and the mode is therefore available
+but not recommended. **Do not switch a project to it on the strength of it existing.**
+
+**The resource problem is solved.** `CSBuildOccupancyMirror` repacks `_OccupancyHi` into a flat
+`Texture3D<uint>` — `(occGrid/32) x occGrid x occGrid`, R32_UInt, one bit per cell, 32 cells per texel
+along X — derived at bake beside the traversal mip and the neighbour mask. **256 KB per field at 128**,
+exactly the plan's estimate. Flat rather than the 4x4x4 block packing on purpose: the block layout
+answers "is there anything nearby" in two loads, a DDA wants `[x/32, y, z]` so stepping along X reuses
+one fetched word. Two layouts of the same bits is fine; two rasters would not be.
+
+**The repack is provably lossless.** Popcount of the mirror against popcount of the buffer slice it
+came from: fine **232,701 = 232,701**, coarse **0 = 0**. So whatever is wrong is not the data.
+
+**The march responds correctly to both of its knobs.** Frame mean by step budget at occupancy 128:
+
+| maxSteps | 32 | 64 | 128 | 256 | 384 | 512 |
+|---|---|---|---|---|---|---|
+| mean luminance | 185.49 | 182.95 | 179.35 | **176.35** | 176.35 | 176.35 |
+
+Converged at 256 — so the default is 2x the occupancy resolution, not the 3x the compute march bounds
+itself at, and the original 128 was silently truncating. Normal offset 1.0 is optimal (1.5 → 176.84,
+2.0 → 177.18: larger offsets leak light under occluders, as expected).
+
+**And then it disagrees with everything else.** At the Bootstrap pose, converged:
+
+| mode | mean luminance | vs `Off` (194.67) |
+|---|---|---|
+| `Baked` | 163.82 | −30.86 |
+| `Sdf` | 163.92 | −30.76 |
+| **`Raymarch`** | **176.35** | **−18.32** |
+
+| pair | mean abs diff | pixels >15/255 |
+|---|---|---|
+| `Sdf` vs `Baked` | 3.82 | 6.52% |
+| `Raymarch` vs `Baked` | 15.64 | 13.97% |
+| `Raymarch` vs `Sdf` | 16.54 | 16.01% |
+
+**`Baked` and `Sdf` agree to 0.1/255.** They share no data structure: one taps an R16 volume marched
+per texel against occupancy, the other is a per-pixel march of `_SdfHires`. Two unrelated
+implementations landing on the same answer is the strongest evidence available in this project, and
+it puts `Raymarch` on the wrong side of it — missing roughly 40% of the shadow the other two find.
+
+Note what this rules out. **It is not the trilinear spread of the baked tap**: `Sdf` is per-pixel and
+has no spreading, and it still agrees with `Baked`. **It is not supersampling**: the sun-vis volume's
+mean moves by 0.0005 between 1 and 16 samples. **It is not the mirror**: bit-exact. **It is not the
+step budget or the start offset**: both swept to convergence above.
+
+Ruled out by inspection, for whoever picks this up: the DDA is the same Amanatides-Woo walk as
+`MarchOccupancyHiFrom`, with the same `d = lightDir / hiVox`, the same `tMax`/`tDelta` construction,
+and the same step-before-test rule that stops a cell self-occluding. The bit indexing matches the
+kernel's packing (and the popcount agreement proves it). What has NOT been tested is the one thing
+that would settle it: **run the same rays through `MarchOccupancyHiFrom` in a compute pass and diff
+the hit sets per ray.** That is the next step, and it is a measurement rather than another guess.
+
+**Not measured at all: the frame cost.** There was no point timing a mode that does not yet produce
+the right image, and a first-run timing after a keyword change is worthless anyway (three separate
+occasions on this branch). So the plan's "state the frame cost at both poses" is still open, and the
+inline-vs-pass question it feeds is still undecided.
+
+**What is safe to rely on from this phase:** the occupancy mirror, the bake kernel that fills it, and
+the fact that a fragment can now march hi-res occupancy at all without putting a `StructuredBuffer`
+back into a shipping variant. That was the stated gate on S5, and it is cleared. The shipped
+configuration is untouched — `Baked` is still `CCED4C32…` and the sun-vis volumes are still
+bit-identical at 1/4/16 samples, through all five phases.
 
 ## The resource problem, and why S5 needs its own phase
 

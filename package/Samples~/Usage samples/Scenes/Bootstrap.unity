@@ -642,6 +642,7 @@ GameObject:
   - component: {fileID: 1437948843}
   - component: {fileID: 1437948845}
   - component: {fileID: 1437948854}
+  - component: {fileID: 1437948855}
   m_Layer: 0
   m_Name: Lighting manager
   m_TagString: Untagged
@@ -698,12 +699,7 @@ MonoBehaviour:
   _ambientFloor: {r: 0, g: 0, b: 0, a: 1}
   _reachBoost: 1
   _thickenWalls: 0
-  _fineShadow: 1
-  _coarseShadow: 1
-  _sunShadowSamples: 4
   _injectSunSamples: 4
-  _bakedShadowSharpness: 1.5
-  _shadowNormalOffset: 1
   _radianceDirections: 1
   _singleTapFilter: 0
   _inPlaneSnap: 0
@@ -727,6 +723,12 @@ MonoBehaviour:
   _solveShader: {fileID: 7200000, guid: 8f5f1ae87781df54c808d4093ee3a8f7, type: 3}
   _bakeShader: {fileID: 7200000, guid: 0dffdcf5447441444a9650246af88950, type: 3}
   _voxelizeShader: {fileID: 4800000, guid: fb19bf6e7b7d7e24bb740879f668a9bd, type: 3}
+  _legacyFineShadow: 1
+  _legacyCoarseShadow: 1
+  _legacySunShadowSamples: 4
+  _legacyBakedShadowSharpness: 2
+  _legacyShadowNormalOffset: 1
+  _shadowSettingsMigrated: 1
 --- !u!114 &1437948854
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -744,6 +746,24 @@ MonoBehaviour:
     <Softness>k__BackingField: 13
     <StartOffset>k__BackingField: 0.5
     <MinStep>k__BackingField: 0.1
+--- !u!114 &1437948855
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1437948840}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 11fa121d2509e1440a196034895afdec, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelSunShadow
+  _fineShadow: 1
+  _coarseShadow: 1
+  _sunShadowSamples: 4
+  _bakedShadowSharpness: 2
+  _shadowNormalOffset: 1
+  _sunShadowShader: {fileID: 7200000, guid: 19cb94eeae045928b39e32e4d5eec619, type: 3}
 --- !u!1 &1500960146
 GameObject:
   m_ObjectHideFlags: 0

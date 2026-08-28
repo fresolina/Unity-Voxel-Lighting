@@ -139,6 +139,90 @@ half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
 // and the surface is LIT. Every "no information" case in this path reads as lit, so a mistake shows
 // up as a missing shadow rather than as black geometry.
 #define BGI_SHADOW_MODE_ENGINE 5
+
+// --- MODE 6: PER-PIXEL RAYMARCH ------------------------------------------------------------------
+// A shadow ray per PIXEL against the hi-res occupancy, instead of a tap of a volume that was marched
+// per TEXEL. At 128 the occupancy grid holds ~2.1M cells against ~2.1M pixels at 1920x1080, so this
+// is not obviously the more expensive of the two - and it needs no reconstruction at all.
+//
+// Everything the architecture doc records about _BgiShadowSharpness - the +-half-texel clamp on the
+// stored coverage, the lattice faceting a sharpened edge exposes, the rounded convex corners a
+// distance field adds - is an artifact of rebuilding an edge from a lattice. None of it applies here:
+// there is no lattice to reconstruct against, only a ray that hits or does not.
+//
+// The occupancy arrives as a Texture3D rather than the StructuredBuffer the compute passes march,
+// because the shipping fragment declares no StructuredBuffer (WebGPU fails pipeline creation on a
+// declared-but-unbound global). One uint per 32 cells along X - see CSBuildOccupancyMirror.
+Texture3D<uint> _BgiOccupancyTex;         // fine field
+Texture3D<uint> _BgiOccupancyTexCoarse;   // coarse field
+
+// Hard cap on DDA steps. The compute march bounds itself at 3*BGI_OCC_GRID - 384 at 128, 768 at 256 -
+// which is a compute budget, not a fragment one. A truncated ray returns LIT, matching every other
+// "no information" case in this path: a mistake shows up as a missing shadow rather than as black
+// geometry. Unbound it reads 0 and the mode produces no shadow at all, which is the same safe end.
+int _BgiRaymarchMaxSteps;
+
+// Solidity of one hi-res cell in the flat mirror. `wordCache`/`cachedSlab` let a caller that steps
+// along X reuse a fetched word - which is the whole reason the mirror is packed 32:1 on that axis.
+bool BgiOccTexSolid(bool insideFine, int3 c, inout uint wordCache, inout int cachedSlab)
+{
+    int slab = c.x >> 5;
+    if (slab != cachedSlab) {
+        cachedSlab = slab;
+        wordCache = insideFine
+            ? _BgiOccupancyTex.Load(int4(slab, c.y, c.z, 0)).x
+            : _BgiOccupancyTexCoarse.Load(int4(slab, c.y, c.z, 0)).x;
+    }
+    return ((wordCache >> ((uint)c.x & 31u)) & 1u) != 0u;
+}
+
+// Amanatides-Woo over the hi-res grid, in grid units, with world-space anisotropy taken from the
+// field's own box. Same walk as MarchOccupancyHiFrom in BufferGiVoxelData.hlsl - deliberately not
+// shared with it, because that one reads a StructuredBuffer this stage may not declare, and merging
+// them behind a macro would hide exactly the constraint that keeps them apart.
+//
+// Returns 1 (lit) on escape, on running out of steps, and when the ray never enters the grid.
+half BgiRaymarchSunShadow(float3 worldPos, float3 normal, float3 lightDir,
+                          bool insideFine, float3 origin, float3 gridSize)
+{
+    int grid = (int)BGI_OCC_GRID;
+    // Start off the surface along the GEOMETRIC normal, in cells, scaled so the offset means the same
+    // thing whatever the orientation - the same max-component construction the baked tap uses, and
+    // for the same reason: an unscaled normal moves less than a cell on every axis at 45 degrees, and
+    // the ray then starts inside its own wall.
+    float3 aN = abs(normal);
+    float3 biasDir = normal / max(max(aN.x, aN.y), max(aN.z, 1e-4));
+    float3 p = (worldPos - origin) / max(gridSize, 1e-6) * (float)grid
+             + biasDir * max(_BgiShadowNormalOffset, 1.0);
+    if (any(p < 0.0) || any(p >= (float)grid)) return 1.0h;   // outside the field -> no information -> lit
+
+    int3 cell = (int3)floor(p);
+    float3 inCell = p - (float3)cell;
+    float3 hiVox = gridSize / (float)grid;
+    float3 d = lightDir / max(hiVox, 1e-6);
+    int3 stepDir = int3(d.x >= 0 ? 1 : -1, d.y >= 0 ? 1 : -1, d.z >= 0 ? 1 : -1);
+    float3 inv = 1.0 / max(abs(d), 1e-6);
+    float3 tMax = inv * float3(d.x >= 0 ? 1.0 - inCell.x : inCell.x,
+                               d.y >= 0 ? 1.0 - inCell.y : inCell.y,
+                               d.z >= 0 ? 1.0 - inCell.z : inCell.z);
+
+    uint wordCache = 0u; int cachedSlab = -1;
+    int maxSteps = max(_BgiRaymarchMaxSteps, 0);
+    [loop]
+    for (int s = 0; s < maxSteps; s++) {
+        // Step FIRST, so the origin cell never occludes itself - the same rule the compute march uses.
+        if (tMax.x < tMax.y) {
+            if (tMax.x < tMax.z) { cell.x += stepDir.x; tMax.x += inv.x; }
+            else                 { cell.z += stepDir.z; tMax.z += inv.z; }
+        } else {
+            if (tMax.y < tMax.z) { cell.y += stepDir.y; tMax.y += inv.y; }
+            else                 { cell.z += stepDir.z; tMax.z += inv.z; }
+        }
+        if (any(cell < 0) || any(cell >= grid)) return 1.0h;   // escaped the grid -> sky
+        if (BgiOccTexSolid(insideFine, cell, wordCache, cachedSlab)) return 0.0h;
+    }
+    return 1.0h;   // budget spent without a hit: fail open
+}
 // The buffer-GI main-light sun visibility for a shading point, from whichever per-field ShadowMode is
 // selected. This function is the SOLE authority for the buffer-GI main-light shadow: Off (0) returns
 // 1.0 = genuinely no sun shadow (full direct light), NOT a fall-through to any other shadow source;
@@ -172,6 +256,9 @@ half BgiSampleSunShadow(float3 worldPos, float3 normal, float3 lightDir, out boo
     //   Sdf (2)            : crisp per-pixel raymarch of the hi-res SDF (needs a baked SDF on the volume).
     //   OcclusionField (3) : the volume's baked per-direction occlusion field (needs its occlusion binder).
     //   Bitmask (4)        : the volume's baked directional occlusion bitmask (needs its occlusion binder).
+    //   UnityShadowmap (5) : URP's own cascaded map - DECLARED here, resolved by the .shader entry point.
+    //   Raymarch (6)       : a shadow ray per pixel against the hi-res occupancy mirror. No lattice to
+    //                        reconstruct from, so none of the baked mode's sharpening applies.
     // The occlusion modes read the same _OccFieldTex / _BitmaskTex the material's GetShadow source uses,
     // so the matching occlusion binder must be active for their textures to be bound (like Sdf/SDF).
     // saturate() on the occlusion sources: keeps them in [0,1] and, crucially, maps a NaN (e.g. an
@@ -182,6 +269,10 @@ half BgiSampleSunShadow(float3 worldPos, float3 normal, float3 lightDir, out boo
     else if (mode == 3) shadow = saturate(GetOccFieldShadow(worldPos, normal));
     else if (mode == 4) shadow = saturate(GetBitmaskShadow(worldPos, normal));
     else if (mode == BGI_SHADOW_MODE_ENGINE) wantsEngineShadow = true; // resolved by the caller; stays 1.0 here
+    else if (mode == 6) {
+        float3 gridSize = insideFine ? _BgiGridSize : _BgiCoarseVoxelSize * (float)BGI_GRID;
+        shadow = BgiRaymarchSunShadow(worldPos, normal, lightDir, insideFine, origin, gridSize);
+    }
     return shadow;
 }
 

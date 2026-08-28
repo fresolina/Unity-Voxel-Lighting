@@ -472,6 +472,13 @@ namespace Lotec.Lighting {
         // not be rebuilt when the sun moves. Point-loaded, never filtered.
         RenderTexture _neighbourMaskTex;       // fine field
         RenderTexture _neighbourMaskTexCoarse; // coarse field
+        // FLAT, fragment-readable mirror of the hi-res occupancy: 1 bit per cell, 32 cells per R32_UInt
+        // texel along X. Built once per bake by CSBuildOccupancyMirror and read only by the Raymarch
+        // shadow mode. 256 KB per field at occupancy 128 - the price of the fragment not being allowed
+        // to declare a StructuredBuffer. See the mirror declaration in BufferGiBake.compute.
+        RenderTexture _occupancyTex;           // fine field
+        RenderTexture _occupancyTexCoarse;     // coarse field
+        int _buildOccupancyMirrorKernel = -1;
         // Radiance slots per voxel the CURRENT _radianceBuffer was allocated with. Compared against
         // RadianceSlots each frame (SyncRadianceDirections) to catch an inspector/script mode change.
         int _allocatedRadianceSlots;
@@ -657,6 +664,9 @@ namespace Lotec.Lighting {
         static readonly int s_bgiSunVisTex = Shader.PropertyToID("_BgiSunVisTex");
         static readonly int s_bgiSunVisTexCoarse = Shader.PropertyToID("_BgiSunVisTexCoarse");
         static readonly int s_bgiNeighbourMaskWrite = Shader.PropertyToID("_BgiNeighbourMaskWrite");
+        static readonly int s_bgiOccupancyTex = Shader.PropertyToID("_BgiOccupancyTex");
+        static readonly int s_bgiOccupancyTexCoarse = Shader.PropertyToID("_BgiOccupancyTexCoarse");
+        static readonly int s_bgiOccupancyTexWrite = Shader.PropertyToID("_BgiOccupancyTexWrite");
         static readonly int s_bgiNeighbourMask = Shader.PropertyToID("_BgiNeighbourMask");
         static readonly int s_bgiNeighbourMaskCoarse = Shader.PropertyToID("_BgiNeighbourMaskCoarse");
         static readonly int s_voxAlbedo = Shader.PropertyToID("_VoxAlbedo");
@@ -1291,6 +1301,8 @@ namespace Lotec.Lighting {
             if (_sunShadow == null || !_sunShadow.VolumesReady) { missing = "_BgiSunVisTex / _BgiSunVisTexCoarse (VoxelSunShadow)"; return false; }
             if (_neighbourMaskTex == null || !_neighbourMaskTex.IsCreated()) { missing = "_BgiNeighbourMask"; return false; }
             if (_neighbourMaskTexCoarse == null || !_neighbourMaskTexCoarse.IsCreated()) { missing = "_BgiNeighbourMaskCoarse"; return false; }
+            if (_occupancyTex == null || !_occupancyTex.IsCreated()) { missing = "_BgiOccupancyTex"; return false; }
+            if (_occupancyTexCoarse == null || !_occupancyTexCoarse.IsCreated()) { missing = "_BgiOccupancyTexCoarse"; return false; }
             missing = null;
             return true;
         }
@@ -1387,6 +1399,11 @@ namespace Lotec.Lighting {
             // (a keyword-dependent global set fails WebGPU pipeline creation for the other variant).
             Shader.SetGlobalTexture(s_bgiNeighbourMask, _neighbourMaskTex);
             Shader.SetGlobalTexture(s_bgiNeighbourMaskCoarse, _neighbourMaskTexCoarse);
+            // The Raymarch shadow mode's occupancy. Bound unconditionally like the rest: declared in
+            // every GI_VOXEL_BUFFER variant, and a declared-but-unbound global fails WebGPU pipeline
+            // creation whatever mode is selected.
+            Shader.SetGlobalTexture(s_bgiOccupancyTex, _occupancyTex);
+            Shader.SetGlobalTexture(s_bgiOccupancyTexCoarse, _occupancyTexCoarse);
             // The display transform (_ExposureLinear + the TONEMAP_* keyword) is published by _exposureControl.Apply
             // in Update - explicitly, so a stale value can't darken it.
         }
@@ -1444,6 +1461,7 @@ namespace Lotec.Lighting {
             _buildOccupancyKernel = RequireKernel(_bakeShader, "CSBuildOccupancy");
             _buildTraversalMipKernel = RequireKernel(_bakeShader, "CSBuildTraversalMip");
             _buildNeighbourMaskKernel = RequireKernel(_bakeShader, "CSBuildNeighbourMask");
+            _buildOccupancyMirrorKernel = RequireKernel(_bakeShader, "CSBuildOccupancyMirror");
             _buildNormalOccupancyKernel = RequireKernel(_bakeShader, "CSBuildNormalOccupancy");
             _buildSurfaceKernel = RequireKernel(_bakeShader, "CSBuildSurface");
             _buildAirDistanceKernel = RequireKernel(_bakeShader, "CSBuildAirDistance");
@@ -1478,6 +1496,8 @@ namespace Lotec.Lighting {
             _irradianceTexCoarse = CreateIrradianceTexture("BgiIrradianceTexCoarse");
             _neighbourMaskTex = CreateNeighbourMaskTexture("BgiNeighbourMaskTex");
             _neighbourMaskTexCoarse = CreateNeighbourMaskTexture("BgiNeighbourMaskTexCoarse");
+            _occupancyTex = CreateOccupancyMirrorTexture("BgiOccupancyTex");
+            _occupancyTexCoarse = CreateOccupancyMirrorTexture("BgiOccupancyTexCoarse");
             _materialBaked = false;
             // A freshly allocated ComputeBuffer holds undefined data: request the whole-field clear.
             // Update runs it once the grid constants are bound (CSClear's bounds test needs them).
@@ -2074,6 +2094,9 @@ namespace Lotec.Lighting {
             // path: a read-side gate that moved when the light moved would be a different feature.
             BuildNeighbourMask(CoarseField, _neighbourMaskTexCoarse);
             BuildNeighbourMask(FineField, _neighbourMaskTex);
+            // Same story, and the same place: pure geometry, derived from the finished hi-res bitfield.
+            BuildOccupancyMirror(CoarseField, _occupancyTexCoarse);
+            BuildOccupancyMirror(FineField, _occupancyTex);
             // Snapshot the inputs this voxelization used, so SyncBakeInputs can tell when they change.
             _thickenWallsBaked = _thickenWalls;
             _bakedFineOrigin = GridOrigin; _bakedFineSize = GridSize;
@@ -2150,6 +2173,21 @@ namespace Lotec.Lighting {
             _bakeShader.SetBuffer(_buildNeighbourMaskKernel, s_occupancy, _occupancyBuffer);
             _bakeShader.SetTexture(_buildNeighbourMaskKernel, s_bgiNeighbourMaskWrite, tex);
             _bakeShader.Dispatch(_buildNeighbourMaskKernel, Groups, 1, 1);
+        }
+
+        // One field's flat occupancy mirror, for the Raymarch shadow mode's fragment DDA. Reads the
+        // finished hi-res bitfield, so it must run after BuildOccupancy; nothing depends on it, so it
+        // can sit anywhere after that. Writes every texel, so the volume needs no clear.
+        //
+        // Dispatched over TEXELS, not voxels: one thread packs 32 cells along X, so the group count is
+        // Groups/32 of the hi-res grid rather than the lighting grid's Groups the other bake passes use.
+        void BuildOccupancyMirror(int field, RenderTexture tex) {
+            if (_buildOccupancyMirrorKernel < 0 || tex == null || _occupancyHiBuffer == null) return;
+            _bakeShader.SetInt(s_occFieldWordOffset, field * OccWordsPerField);
+            _bakeShader.SetBuffer(_buildOccupancyMirrorKernel, s_occupancyHi, _occupancyHiBuffer);
+            _bakeShader.SetTexture(_buildOccupancyMirrorKernel, s_bgiOccupancyTexWrite, tex);
+            long texels = (long)(_occGrid / 32) * _occGrid * _occGrid;
+            _bakeShader.Dispatch(_buildOccupancyMirrorKernel, Mathf.CeilToInt(texels / 64f), 1, 1);
         }
 
         // Fill one field's _OccupancyThick: real solids + the cell behind each surfaced voxel, along
@@ -2462,6 +2500,29 @@ namespace Lotec.Lighting {
             return rt;
         }
 
+        // The occupancy mirror: 1 bit per hi-res cell, 32 cells per R32_UInt texel along X, so the
+        // volume is (occGrid/32) x occGrid x occGrid. 256 KB per field at 128, 2 MB at 256.
+        //
+        // POINT filtered and integer-formatted for the same reason as the neighbour mask: it is
+        // Load()ed, and an interpolated bitfield is nonsense. Integer format also means the shared
+        // CreateFieldVolume's GL.Clear does not apply - CSBuildOccupancyMirror writes every texel on
+        // the first bake, and the field is not read before that bake completes.
+        RenderTexture CreateOccupancyMirrorTexture(string name) {
+            var desc = new RenderTextureDescriptor(Mathf.Max(1, _occGrid / 32), _occGrid, GraphicsFormat.R32_UInt, 0) {
+                dimension = TextureDimension.Tex3D,
+                volumeDepth = _occGrid,
+                enableRandomWrite = true,
+                msaaSamples = 1
+            };
+            var rt = new RenderTexture(desc) {
+                filterMode = FilterMode.Point,
+                wrapMode = TextureWrapMode.Clamp,
+                name = name
+            };
+            rt.Create();
+            return rt;
+        }
+
         internal static RenderTexture CreateFieldVolume(string name, RenderTextureFormat format, int size, int depth) {
             var desc = new RenderTextureDescriptor(size, size, format, 0) {
                 dimension = TextureDimension.Tex3D,
@@ -2513,6 +2574,8 @@ namespace Lotec.Lighting {
             if (_irradianceTexCoarse != null) { _irradianceTexCoarse.Release(); _irradianceTexCoarse = null; }
             if (_neighbourMaskTex != null) { _neighbourMaskTex.Release(); _neighbourMaskTex = null; }
             if (_neighbourMaskTexCoarse != null) { _neighbourMaskTexCoarse.Release(); _neighbourMaskTexCoarse = null; }
+            if (_occupancyTex != null) { _occupancyTex.Release(); _occupancyTex = null; }
+            if (_occupancyTexCoarse != null) { _occupancyTexCoarse.Release(); _occupancyTexCoarse = null; }
             _materialBaked = false;
             _resetFineField = false;
             _allocatedRadianceSlots = 0; // no buffer -> no stride; forces EnsureInitialized to size it

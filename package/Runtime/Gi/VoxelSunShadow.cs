@@ -36,11 +36,14 @@ namespace Lotec.Lighting {
         //   Bitmask (4)        : the volume's baked directional occlusion bitmask.
         //   UnityShadowmap (5) : URP's own cascaded main-light shadow map, resolved in VoxelLit.shader
         //                        (the library is engine-agnostic and cannot call into URP).
+        //   Raymarch (6)       : a shadow ray per PIXEL against the hi-res occupancy mirror. No volume,
+        //                        no lattice, nothing to re-march when the sun moves - it just costs
+        //                        the frame instead of the sun move.
         // Values match _BgiShadowMode* in ShaderLibrary/VoxelSunShadow.hlsl and must not be renumbered.
         //
         // Sdf/OcclusionField/Bitmask each need their matching source present on the volume so the
         // textures they read are bound; they also have no effect where their source does not reach.
-        public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2, OcclusionField = 3, Bitmask = 4, UnityShadowmap = 5 }
+        public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2, OcclusionField = 3, Bitmask = 4, UnityShadowmap = 5, Raymarch = 6 }
 
         [Tooltip("Sun-shadow for the FINE volume. None fall through - each is explicit.\n " +
                  "Off: no sun shadow at all - full direct light.\n " +
@@ -90,6 +93,17 @@ namespace Lotec.Lighting {
                  "Raise toward 2 if surfaces still self-shadow; the cost is shadows detaching from " +
                  "their casters, which at this resolution is centimetres rather than most of a metre.")]
         [Range(1f, 3f)][SerializeField] float _shadowNormalOffset = 1f;
+        [Tooltip("Raymarch mode ONLY: hard cap on DDA steps per pixel. The compute march bounds itself " +
+                 "at 3x the occupancy resolution - 384 at 128 - which is a compute budget, not a " +
+                 "fragment one.\n " +
+                 "A ray that runs out of steps returns LIT, so raising this closes distant shadows and " +
+                 "lowering it opens them. That direction is deliberate: every 'no information' case on " +
+                 "this path reads as lit, so a budget set too low shows up as a missing shadow rather " +
+                 "than as black geometry.\n " +
+                 "Measured on Bootstrap at occupancy 128: the frame stops changing at 256 (32/64/128 " +
+                 "all under-shadow, 256/384/512 are identical), so the default is 2x the occupancy " +
+                 "resolution rather than the 3x the compute march bounds itself at.")]
+        [Range(1, 512)][SerializeField] int _raymarchMaxSteps = 256;
         [Tooltip("VoxelSunShadow.compute - the sun-visibility march that fills the Baked volume. " +
                  "Auto-resolved by name when empty.")]
         [SerializeField] ComputeShader _sunShadowShader;
@@ -99,6 +113,7 @@ namespace Lotec.Lighting {
         static readonly int s_shadowModeCoarse = Shader.PropertyToID("_BgiShadowModeCoarse");
         static readonly int s_shadowSharpness = Shader.PropertyToID("_BgiShadowSharpness");
         static readonly int s_shadowNormalOffset = Shader.PropertyToID("_BgiShadowNormalOffset");
+        static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_BgiRaymarchMaxSteps");
         static readonly int s_bgiSunVisTex = Shader.PropertyToID("_BgiSunVisTex");
         static readonly int s_bgiSunVisTexCoarse = Shader.PropertyToID("_BgiSunVisTexCoarse");
         static readonly int s_bgiSunVisTexWrite = Shader.PropertyToID("_BgiSunVisTexWrite");
@@ -324,6 +339,7 @@ namespace Lotec.Lighting {
             Shader.SetGlobalInt(s_shadowModeCoarse, (int)_coarseShadow);
             Shader.SetGlobalFloat(s_shadowSharpness, Mathf.Max(1f, _bakedShadowSharpness));
             Shader.SetGlobalFloat(s_shadowNormalOffset, Mathf.Clamp(_shadowNormalOffset, 1f, 3f));
+            Shader.SetGlobalInt(s_raymarchMaxSteps, Mathf.Clamp(_raymarchMaxSteps, 1, 512));
             // Both volumes, always. ShaderLibrary/VoxelSunShadow.hlsl declares them unconditionally in
             // the GI_VOXEL_BUFFER variant, and on WebGPU a declared-but-unbound global fails pipeline
             // creation outright - so "bind only the one this mode reads" is not an option.
@@ -417,6 +433,7 @@ namespace Lotec.Lighting {
             _sunShadowSamples = Mathf.Clamp(_sunShadowSamples, 1, 16);
             _bakedShadowSharpness = Mathf.Clamp(_bakedShadowSharpness, 1f, 16f);
             _shadowNormalOffset = Mathf.Clamp(_shadowNormalOffset, 1f, 3f);
+            _raymarchMaxSteps = Mathf.Clamp(_raymarchMaxSteps, 1, 512);
             // The inspector writes the backing FIELD and never goes through the property setters, so
             // this is the only place that catches a sample-count change made by hand. Without it the
             // volume keeps its old contents until the sun happens to move, which is exactly the bug
