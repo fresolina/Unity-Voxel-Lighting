@@ -11,7 +11,7 @@
 | [S2 Kernel](#s2--move-the-kernel) | **done 2026-08-28** — sun-vis volumes bit-identical at 1/4/16 samples, render unchanged; found a serialized-field aliasing hazard that S3 must plan around |
 | [S3 Driver](#s3--move-the-driver) | **done 2026-08-28** — `VoxelSunShadow` component; volumes and render still bit-identical; settings migrate |
 | [S4 Provider + Unity shadowmap](#s4--provider-interface--unity-shadowmap) | **done 2026-08-28** — mode 5 ships and agrees with `Baked` to 1.7/255; needed a `ShadowCaster` pass the package never had. Provider interface **deferred, deliberately** |
-| [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | **built, NOT accepted 2026-08-28** — origin bias replaced by slope-scaled skip-cells (courtyard now matches `Baked` to 0.07); found and fixed a real latent bug (`_BgiOccGrid` never published to the fragment). Still leaks light through thin geometry: **one ray per pixel needs supersampling**, as CORRECTION 2 said |
+| [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | **built, NOT accepted 2026-08-28** — the dominant error is rays LEAVING THE VOLUME being counted as sunlight (68% of pixels at an arcade pose; forcing them shadowed matches `Baked` exactly). Needs a source for what lies beyond the box - the coarse field. Architectural, not tuning |
 
 **Goal.** Make the main-light sun shadow a **self-contained subsystem with a swappable backend**, so
 that a Unity shadowmap, the current baked voxel-visibility volume, and a future **per-pixel raymarch**
@@ -597,6 +597,54 @@ Note what this rules out. **It is not the trilinear spread of the baked tap**: `
 has no spreading, and it still agrees with `Baked`. **It is not supersampling**: the sun-vis volume's
 mean moves by 0.0005 between 1 and 16 samples. **It is not the mirror**: bit-exact. **It is not the
 step budget or the start offset**: both swept to convergence above.
+
+#### CORRECTION 3 [2026-08-28]: the dominant error is rays LEAVING THE VOLUME, not anything about bias
+
+fs asked the question that cracked it: *"How can that make the wall inside lit? It should easily be
+dark."* A leak between voxel cells cannot light a deeply occluded wall, and it didn't.
+
+**68% of shaded pixels at an arcade pose escape the volume's bounding box, and the code calls that
+sunlight.** Forcing the escape branch to return `0.0h` instead drops the frame to **0.0000 mean
+visibility — exactly matching `Baked`**. That is the whole discrepancy, in one branch.
+
+The geometry says why. The fine field's box is 21.6 x 14.9 x 34.1 m; the sun sits at **22 deg
+elevation pointing down the atrium's long axis**. A ray leaving an interior surface at y = -4.6 must
+rise ~11 m to clear the roof, which needs ~30 m of travel — but it exits the box's far face after
+~11 m, having risen 4 m. It never gets the chance to be blocked.
+
+How this was established, in order, each step ruling out the previous suspect:
+
+| test | result |
+|---|---|
+| mirror popcount | matches — but only proves the COUNT |
+| mirror **positions**, 200,000 random cells | 0 mismatches |
+| DDA vs reference march, identical origins | **35,507 / 35,507 agree** |
+| step budget 256 / 384 / 512 | identical — not truncation |
+| fragment probe: "is my own cell solid in the mirror" | 0.0143, i.e. 98.6% solid — texture read, field select and mapping all correct |
+| encode out-of-steps as 0.5 | mean unchanged ⇒ **0% run out of steps** |
+| force escape ⇒ blocked | **0.0000, matches `Baked`** |
+
+**`Baked` is not right here either — it is dark by accident.** It reads `0.0000` visibility across the
+*entire* frame, including geometry that should catch sun. `CSSunVisibility` marches the same box with
+the same escape rule, so its texels down the corridor escape too; the fragment's tap then reads
+sealed-interior solid texels (which store 0) through its trilinear footprint and comes back black. Two
+modes, both wrong, and only one of them looks plausible.
+
+**There is no correct constant for the escape branch.** "Lit" is wrong indoors. "Shadowed" is wrong for
+an exterior wall whose ray genuinely leaves into open sky. The query needs a source covering what lies
+beyond the box — the coarse field, which this scene does not have (`HasCoarse` is false). That is the
+real prerequisite, and it is architectural rather than a tuning problem:
+
+- **Continue the march in the coarse field** when the ray leaves the fine box. Correct, and the reason
+  the two-field cascade exists. Needs a coarse occupancy mirror and a scene that has a coarse field.
+- **Fall back to the baked volume's value** at the exit point. Cheap, and degrades to today's `Baked`
+  behaviour exactly where the raymarch runs out of information.
+- **Size the volume to contain the building.** Works, costs memory, and is a scene-authoring rule
+  rather than a fix.
+
+Everything below this line was measured correctly but chased the wrong cause. The bias work still
+stands on its own — the origin-bias formulation really was unusable, and the slope-correct exclusion
+that replaced it is right — but it was never the reason the arcade was lit.
 
 #### CORRECTION 2 [2026-08-28]: this phase's founding premise was wrong
 
