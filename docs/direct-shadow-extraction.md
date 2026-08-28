@@ -1,6 +1,7 @@
 # Extracting the direct sun shadow — implementation plan
 
-**Status: S1 done and verified 2026-08-28. Written 2026-08-28 against `try-fix-light-bleed` (P0–P7 of
+**Status: S1–S4 done and verified; S5 built and NOT accepted. Worked 2026-08-28 on branch
+`extract-direct-shadow`, off `main` at "Try fix light bleed (#112)" (P0–P7 of
 [decoupling-field-resolutions.md](decoupling-field-resolutions.md) landed).**
 
 | phase | status |
