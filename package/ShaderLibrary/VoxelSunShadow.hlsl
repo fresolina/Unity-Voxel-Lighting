@@ -193,16 +193,19 @@ half BgiRaymarchSunShadow(float3 worldPos, float3 normal, float3 lightDir,
                           bool insideFine, float3 origin, float3 gridSize)
 {
     int grid = (int)BGI_OCC_GRID;
-    // Start off the surface along the GEOMETRIC normal, by a fraction of a cell.
+    // Start off the surface along the GEOMETRIC normal, scaled so the offset clears a whole cell on
+    // the DOMINANT axis whatever the orientation - the same max-component construction
+    // BgiSampleShadowTexture uses, and for the same underlying reason: a ray that starts inside the
+    // wall's own voxel layer reports it, and that is self-shadowing.
     //
-    // A UNIT normal, deliberately NOT the max-component-normalised one BgiSampleShadowTexture uses.
-    // That construction exists so the offset clears a whole texel on the DOMINANT axis, because a
-    // trilinear footprint reaches a full texel back into the solid layer. A ray has no footprint, and
-    // max-normalising overshoots it: 1.41x the nominal at 45 degrees, 1.73x at 54.7. Borrowing that
-    // construction AND that offset's floor of 1.0 is what made this mode skip near-surface occluders.
-    float3 biasDir = normalize(normal);
+    // 1.0 is the floor, and it is not conservatism. Below it this mode shows regular voxel-scale
+    // STRIPING across every sunlit wall - classic acne, periodic because whether the offset clears the
+    // cell depends on where the shading point happens to sit inside it. 0.5 looked right by frame mean
+    // and was visibly wrong on screen; see the S5 notes in docs/direct-shadow-extraction.md.
+    float3 aN = abs(normal);
+    float3 biasDir = normal / max(max(aN.x, aN.y), max(aN.z, 1e-4));
     float3 p = (worldPos - origin) / max(gridSize, 1e-6) * (float)grid
-             + biasDir * max(_BgiRaymarchStartOffset, 0.0);
+             + biasDir * max(_BgiRaymarchStartOffset, 1.0);
     if (any(p < 0.0) || any(p >= (float)grid)) return 1.0h;   // outside the field -> no information -> lit
 
     int3 cell = (int3)floor(p);

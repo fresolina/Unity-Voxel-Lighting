@@ -758,11 +758,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 11fa121d2509e1440a196034895afdec, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelSunShadow
-  _fineShadow: 1
+  _fineShadow: 6
   _coarseShadow: 1
   _sunShadowSamples: 4
   _bakedShadowSharpness: 2
   _shadowNormalOffset: 1
+  _raymarchMaxSteps: 128
+  _raymarchStartOffset: 0.5
   _sunShadowShader: {fileID: 7200000, guid: 19cb94eeae045928b39e32e4d5eec619, type: 3}
 --- !u!1 &1500960146
 GameObject:

@@ -11,7 +11,7 @@
 | [S2 Kernel](#s2--move-the-kernel) | **done 2026-08-28** — sun-vis volumes bit-identical at 1/4/16 samples, render unchanged; found a serialized-field aliasing hazard that S3 must plan around |
 | [S3 Driver](#s3--move-the-driver) | **done 2026-08-28** — `VoxelSunShadow` component; volumes and render still bit-identical; settings migrate |
 | [S4 Provider + Unity shadowmap](#s4--provider-interface--unity-shadowmap) | **done 2026-08-28** — mode 5 ships and agrees with `Baked` to 1.7/255; needed a `ShadowCaster` pass the package never had. Provider interface **deferred, deliberately** |
-| [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | **built, NOT accepted 2026-08-28** — the resource problem is solved and the mirror is bit-exact, but the march **under-shadows against two independent references**. Mode ships available and unselected; the discrepancy is the open item |
+| [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | **built, NOT accepted 2026-08-28** — resource problem solved, mirror bit-exact, and the image looks right at the default. It does NOT match `Baked`'s frame mean, but the images say much of that is `Baked` spreading shadow. Ships available and unselected; **do not tune it by mean** |
 
 **Goal.** Make the main-light sun shadow a **self-contained subsystem with a swappable backend**, so
 that a Unity shadowmap, the current baked voxel-visibility volume, and a future **per-pixel raymarch**
@@ -598,7 +598,40 @@ has no spreading, and it still agrees with `Baked`. **It is not supersampling**:
 mean moves by 0.0005 between 1 and 16 samples. **It is not the mirror**: bit-exact. **It is not the
 step budget or the start offset**: both swept to convergence above.
 
-#### Most of it was the start offset, and the sweep that "proved" the offset optimal was wrong
+#### CORRECTION [2026-08-28, later]: the "fix" below was a regression, caught by looking at the screen
+
+Everything in the next subsection is a correct description of a *measurement* and the wrong conclusion
+drawn from it. Lowering the start offset to 0.5 moved the frame mean toward `Baked` **and put visible
+voxel-scale STRIPING across every sunlit wall** — textbook shadow acne, periodic because whether a
+fixed bias clears the cell depends on where the shading point sits inside it. fs found it immediately
+by turning the mode on and looking. The default is back to **1.0 with max-component normalisation**,
+which is acne-free, and the shader now floors it there.
+
+**The reasoning that produced the regression is the part worth keeping.** I argued that a ray needs
+less bias than the baked tap because it has no trilinear footprint to clear. Half right, and the wrong
+half mattered: the ray still has to leave *its own wall's voxel layer*, which needs a full cell on the
+dominant axis regardless of footprint. That is the real reason `BgiSampleShadowTexture` max-normalises
+and floors at 1.0, and it applies here for a different reason than I assumed.
+
+An "escape the surface" rule was also tried — march through solid cells without reporting until the
+first air cell, then report any solid after that — to remove the bias tradeoff entirely. **It measured
+worse** (frame mean 183.3 against 171.0): it suppresses legitimate shadow wherever the occluder is part
+of the same connected structure as the receiver, which in an arcade is most of it.
+
+**And the 15-unit gap is not evidence of missing shadow.** Side by side at the same pose, `Baked` is
+soft and blobby — the cornice shadow is a smooth gradient, the far wall one large diffuse patch —
+because it is a trilinear tap of a 128³ volume. `Raymarch` at offset 1.0 is crisp, stair-steps at the
+voxel scale as a hard march against voxelised geometry must, and resolves structure the baked mode
+loses entirely (individual window recesses casting). Much of the mean difference is **`Baked`
+spreading shadow**, not `Raymarch` missing it.
+
+So the honest state is *less* certain than either previous entry claimed: the two do not agree, the
+image suggests the raymarch is the sharper and possibly the more correct of the two, and frame mean
+cannot settle which. **Do not tune this mode by mean luminance.** That is the trap this project has
+documented before and I walked into it: optimising a self-invented metric against a reference that was
+never ground truth, and shipping a visibly worse image because the number improved.
+
+#### The measurement itself (conclusion superseded above)
 
 `_BgiShadowNormalOffset` is floored at 1.0 and measured in shadow texels, **because a trilinear
 footprint has to clear a whole texel of the solid layer behind the surface**. The raymarch borrowed
@@ -623,10 +656,8 @@ normal — max-normalising displaces 1.41× the nominal at 45° and 1.73× at 54
 want. That is the more defensible construction but it was **not** the main factor: it moved the 0.25
 reading by 0.14.
 
-**The default is 0.5**, the principled value — the centre of the first air cell, the same convention
-the SDF march uses — and **not** the ~0.3 that would make the frame mean match `Baked`. Tuning a
-parameter until one metric matches one reference on one scene is how this project has fooled itself
-before; 0.5 is chosen because it is the smallest offset that reliably clears the surface cell.
+**The default is 1.0** - see the correction above. 0.5 was chosen here as "the smallest offset that
+reliably clears the surface cell", which was simply wrong: it does not clear it, and the acne says so.
 
 **What is still unexplained: ~7/255.** At the principled 0.5 the raymarch reads 171.03 against 163.8/
 163.9. That residual is real and this phase does not account for it. The candidates are the remaining
