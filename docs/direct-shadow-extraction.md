@@ -578,7 +578,8 @@ itself at, and the original 128 was silently truncating. Normal offset 1.0 is op
 |---|---|---|
 | `Baked` | 163.82 | −30.86 |
 | `Sdf` | 163.92 | −30.76 |
-| **`Raymarch`** | **176.35** | **−18.32** |
+| **`Raymarch`** (as first built) | **176.35** | **−18.32** |
+| `Raymarch` (start offset fixed, 0.5) | 171.03 | −23.64 |
 
 | pair | mean abs diff | pixels >15/255 |
 |---|---|---|
@@ -596,12 +597,54 @@ has no spreading, and it still agrees with `Baked`. **It is not supersampling**:
 mean moves by 0.0005 between 1 and 16 samples. **It is not the mirror**: bit-exact. **It is not the
 step budget or the start offset**: both swept to convergence above.
 
-Ruled out by inspection, for whoever picks this up: the DDA is the same Amanatides-Woo walk as
-`MarchOccupancyHiFrom`, with the same `d = lightDir / hiVox`, the same `tMax`/`tDelta` construction,
-and the same step-before-test rule that stops a cell self-occluding. The bit indexing matches the
-kernel's packing (and the popcount agreement proves it). What has NOT been tested is the one thing
-that would settle it: **run the same rays through `MarchOccupancyHiFrom` in a compute pass and diff
-the hit sets per ray.** That is the next step, and it is a measurement rather than another guess.
+#### Most of it was the start offset, and the sweep that "proved" the offset optimal was wrong
+
+`_BgiShadowNormalOffset` is floored at 1.0 and measured in shadow texels, **because a trilinear
+footprint has to clear a whole texel of the solid layer behind the surface**. The raymarch borrowed
+both the value and the floor. A ray has no footprint — it only has to leave its own cell — so the
+march was starting up to two cells out (one from the offset, one from the step-before-test rule) and
+skipping near-surface occluders. Contact shadows go first, and they are a large share of a room scene.
+
+The original sweep swept the offset **1.0 → 3.0**, saw it get monotonically worse, and concluded the
+parameter was already optimal. It was sitting at the far end of its useful range and the sweep only
+looked outward. Frame mean against the offset, now that it is its own setting in occupancy cells:
+
+| startOffset (cells) | 0 | 0.1 | 0.25 | 0.5 | 1.0 | 2.0 |
+|---|---|---|---|---|---|---|
+| mean luminance | 151.59 | 153.31 | **161.20** | 171.03 | 179.14 | 180.14 |
+
+against `Baked` 163.82 and `Sdf` 163.92. Below ~0.25 the surface shadows itself (the ray starts inside
+its own wall — walls are several cells thick at 128³, so the first stepped cell is still solid); at 1.0
+near-surface occluders are skipped outright. **15 of the original 12.5-unit error was this.**
+
+The bias vector was changed too, from the baked tap's max-component normalisation to a plain unit
+normal — max-normalising displaces 1.41× the nominal at 45° and 1.73× at 54.7°, which a ray does not
+want. That is the more defensible construction but it was **not** the main factor: it moved the 0.25
+reading by 0.14.
+
+**The default is 0.5**, the principled value — the centre of the first air cell, the same convention
+the SDF march uses — and **not** the ~0.3 that would make the frame mean match `Baked`. Tuning a
+parameter until one metric matches one reference on one scene is how this project has fooled itself
+before; 0.5 is chosen because it is the smallest offset that reliably clears the surface cell.
+
+**What is still unexplained: ~7/255.** At the principled 0.5 the raymarch reads 171.03 against 163.8/
+163.9. That residual is real and this phase does not account for it. The candidates are the remaining
+near-surface skip from step-before-test, a genuine over-darkening in both references, or something
+else entirely.
+
+**The reference question is open, and the user was right to raise it.** `Sdf` is a soft sphere-trace —
+`lit = min(lit, saturate(softness * d / t))` — so it can return partial occlusion for a ray that never
+hits anything, which would darken it systematically. The obvious test (sweep `_RaymarchSoftness`)
+returned identical values to four decimals at 13 / 64 / 256, which is not plausible: `SdfShadow.Update`
+publishes that global and the harness only drives `BufferGiUpdater.Update` by reflection, so the value
+never reached the shader. **That test was invalid and proves nothing either way.** What IS solid is
+that `Baked` barely moves under its own knobs — sharpen 2→1 costs 0.16, samples 4→1 costs 0.19, offset
+1→3 costs 1.42, a ~1.8 total swing — so its number is not an artifact of supersampling, sharpening or
+solid-texel contamination, the three mechanisms that would have explained it away.
+
+The test that would settle the residual without needing any reference at all: **run the same rays
+through `MarchOccupancyHiFrom` in a compute pass and diff the hit sets per ray.** Same algorithm, same
+data, no third party. That is the next step, and it is a measurement rather than another guess.
 
 **Not measured at all: the frame cost.** There was no point timing a mode that does not yet produce
 the right image, and a first-run timing after a keyword change is worthless anyway (three separate

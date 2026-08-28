@@ -104,6 +104,18 @@ namespace Lotec.Lighting {
                  "all under-shadow, 256/384/512 are identical), so the default is 2x the occupancy " +
                  "resolution rather than the 3x the compute march bounds itself at.")]
         [Range(1, 512)][SerializeField] int _raymarchMaxSteps = 256;
+        [Tooltip("Raymarch mode ONLY: how far off the surface the ray starts, in OCCUPANCY cells. Its " +
+                 "own setting rather than the baked tap's offset, which is in shadow texels and floored " +
+                 "at 1 because a trilinear footprint must clear a whole texel of the solid layer behind " +
+                 "the surface. A ray has no footprint - it only has to leave its own cell - so " +
+                 "borrowing that floor starts the march up to two cells out and skips near-surface " +
+                 "occluders (contact shadows go first).\n " +
+                 "0.5 is the principled value - the centre of the first air cell, the same convention " +
+                 "the SDF march uses - and it is what this defaults to. Measured on Bootstrap at " +
+                 "occupancy 128, the frame mean runs 151.6 / 161.2 / 171.0 / 179.1 at 0 / 0.25 / 0.5 " +
+                 "/ 1.0, against 163.8 for Baked and 163.9 for Sdf: below ~0.25 the surface starts " +
+                 "shadowing itself, and at 1.0 near-surface occluders are skipped outright.")]
+        [Range(0f, 3f)][SerializeField] float _raymarchStartOffset = 0.5f;
         [Tooltip("VoxelSunShadow.compute - the sun-visibility march that fills the Baked volume. " +
                  "Auto-resolved by name when empty.")]
         [SerializeField] ComputeShader _sunShadowShader;
@@ -114,6 +126,7 @@ namespace Lotec.Lighting {
         static readonly int s_shadowSharpness = Shader.PropertyToID("_BgiShadowSharpness");
         static readonly int s_shadowNormalOffset = Shader.PropertyToID("_BgiShadowNormalOffset");
         static readonly int s_raymarchMaxSteps = Shader.PropertyToID("_BgiRaymarchMaxSteps");
+        static readonly int s_raymarchStartOffset = Shader.PropertyToID("_BgiRaymarchStartOffset");
         static readonly int s_bgiSunVisTex = Shader.PropertyToID("_BgiSunVisTex");
         static readonly int s_bgiSunVisTexCoarse = Shader.PropertyToID("_BgiSunVisTexCoarse");
         static readonly int s_bgiSunVisTexWrite = Shader.PropertyToID("_BgiSunVisTexWrite");
@@ -340,6 +353,7 @@ namespace Lotec.Lighting {
             Shader.SetGlobalFloat(s_shadowSharpness, Mathf.Max(1f, _bakedShadowSharpness));
             Shader.SetGlobalFloat(s_shadowNormalOffset, Mathf.Clamp(_shadowNormalOffset, 1f, 3f));
             Shader.SetGlobalInt(s_raymarchMaxSteps, Mathf.Clamp(_raymarchMaxSteps, 1, 512));
+            Shader.SetGlobalFloat(s_raymarchStartOffset, Mathf.Clamp(_raymarchStartOffset, 0f, 3f));
             // Both volumes, always. ShaderLibrary/VoxelSunShadow.hlsl declares them unconditionally in
             // the GI_VOXEL_BUFFER variant, and on WebGPU a declared-but-unbound global fails pipeline
             // creation outright - so "bind only the one this mode reads" is not an option.
@@ -434,6 +448,7 @@ namespace Lotec.Lighting {
             _bakedShadowSharpness = Mathf.Clamp(_bakedShadowSharpness, 1f, 16f);
             _shadowNormalOffset = Mathf.Clamp(_shadowNormalOffset, 1f, 3f);
             _raymarchMaxSteps = Mathf.Clamp(_raymarchMaxSteps, 1, 512);
+            _raymarchStartOffset = Mathf.Clamp(_raymarchStartOffset, 0f, 3f);
             // The inspector writes the backing FIELD and never goes through the property setters, so
             // this is the only place that catches a sample-count change made by hand. Without it the
             // volume keeps its old contents until the sun happens to move, which is exactly the bug

@@ -162,6 +162,13 @@ Texture3D<uint> _BgiOccupancyTexCoarse;   // coarse field
 // geometry. Unbound it reads 0 and the mode produces no shadow at all, which is the same safe end.
 int _BgiRaymarchMaxSteps;
 
+// How far off the surface the raymarch STARTS, in hi-res occupancy CELLS. Deliberately its own
+// uniform and not _BgiShadowNormalOffset: that one is in SHADOW texels and is floored at 1.0 because
+// a TRILINEAR footprint has to clear a whole texel of the solid layer behind the surface. A ray has
+// no footprint - it needs only to leave its own cell - so borrowing that floor started the march up
+// to two cells out and skipped near-surface occluders.
+float _BgiRaymarchStartOffset;
+
 // Solidity of one hi-res cell in the flat mirror. `wordCache`/`cachedSlab` let a caller that steps
 // along X reuse a fetched word - which is the whole reason the mirror is packed 32:1 on that axis.
 bool BgiOccTexSolid(bool insideFine, int3 c, inout uint wordCache, inout int cachedSlab)
@@ -186,14 +193,16 @@ half BgiRaymarchSunShadow(float3 worldPos, float3 normal, float3 lightDir,
                           bool insideFine, float3 origin, float3 gridSize)
 {
     int grid = (int)BGI_OCC_GRID;
-    // Start off the surface along the GEOMETRIC normal, in cells, scaled so the offset means the same
-    // thing whatever the orientation - the same max-component construction the baked tap uses, and
-    // for the same reason: an unscaled normal moves less than a cell on every axis at 45 degrees, and
-    // the ray then starts inside its own wall.
-    float3 aN = abs(normal);
-    float3 biasDir = normal / max(max(aN.x, aN.y), max(aN.z, 1e-4));
+    // Start off the surface along the GEOMETRIC normal, by a fraction of a cell.
+    //
+    // A UNIT normal, deliberately NOT the max-component-normalised one BgiSampleShadowTexture uses.
+    // That construction exists so the offset clears a whole texel on the DOMINANT axis, because a
+    // trilinear footprint reaches a full texel back into the solid layer. A ray has no footprint, and
+    // max-normalising overshoots it: 1.41x the nominal at 45 degrees, 1.73x at 54.7. Borrowing that
+    // construction AND that offset's floor of 1.0 is what made this mode skip near-surface occluders.
+    float3 biasDir = normalize(normal);
     float3 p = (worldPos - origin) / max(gridSize, 1e-6) * (float)grid
-             + biasDir * max(_BgiShadowNormalOffset, 1.0);
+             + biasDir * max(_BgiRaymarchStartOffset, 0.0);
     if (any(p < 0.0) || any(p >= (float)grid)) return 1.0h;   // outside the field -> no information -> lit
 
     int3 cell = (int3)floor(p);
