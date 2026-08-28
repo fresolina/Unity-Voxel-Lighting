@@ -562,6 +562,57 @@ stores a real coverage fraction.
 The over-reach that made a floor beside a tall occluder read shadowed scales with the texel, so at the
 shadow resolution the same offset is centimetres rather than most of a metre.
 
+### What `_BgiShadowSharpness` is actually approximating [measured 2026-08-28]
+
+**Coverage IS a signed distance to the shadow boundary — clamped to ±½ texel.** Near a locally planar
+boundary `c - 0.5` is exactly where the edge falls inside the texel, which is why supersampling helps
+at all and why the sharpen works. But it saturates the moment the boundary leaves the texel: outside
+that half-texel the field is 0 or 1 and carries no direction. **That clamp is what pins the
+reconstructed edge to the texel lattice** — trilinear over a saturated field can only ramp between
+adjacent centres, so the edge is smooth but its position snaps to the grid.
+
+`_BgiShadowSharpness` is a hand-tuned constant standing in for `fwidth(d)`, the screen-space rate of
+change the GPU can compute exactly. That is why one value cannot be right everywhere: a constant
+slope over-sharpens close up and under-sharpens far away. Measured against the per-pixel `Sdf`
+reference at a Sponza pose, pixels off by >15/255:
+
+| | sharpness 1.0 | sharpness 1.5 |
+|---|---|---|
+| 1 sample | 7.15% | 7.88% |
+| 4 samples | **5.76%** | 6.42% |
+
+So the shipped 1.5 measurably moves *away* from the reference. It buys a crisper-looking edge at the
+cost of accuracy - a legitimate aesthetic choice, but a trade rather than free.
+
+**What supersampling buys, separately.** It only ever touches texels ON a boundary. At the 128³ shadow
+grid on Sponza, the fraction of texels holding a value strictly between 0 and 1: **1 sample 0.000%,
+4 samples 1.91%, 16 samples 2.92%** - and the field mean is unchanged to four decimals (0.1881 /
+0.1884 / 0.1883). Cost is linear and paid only when the sun moves: 330 / 621 / 1497 ms to re-march
+the volume. At 1 sample the field is strictly binary, so `_BgiShadowSharpness` has nothing to sharpen
+and degenerates to a threshold on a staircase.
+
+**Un-clamping it was built, measured and removed (2026-08-28).** A narrow-band distance relaxation
+(seed the boundary from coverage, everything else at the cap, then N passes of a 6-neighbour min -
+the same shape as `CSBuildAirDistance`) extends the band past ±½ texel, after which `fwidth` has a
+linear gradient to measure. It worked and it was cheap: **~11 ms** on top of a ~1078 ms march, and
+**+0.4%** fragment cost (+0.07 ms at 2560x1440, two paired rounds agreeing to 4 µs). Cost was never
+the objection. It was removed because it showed **no demonstrated visual benefit**, and because
+sharpening is what EXPOSES reconstruction error - trilinear over texel centres is piecewise-linear,
+so an edge sharpened to one pixel shows the lattice as facets, and a distance field rounds convex
+corners on top of that.
+
+Two traps worth carrying if it is ever revisited:
+
+- **Seed only the boundary band.** Seeding every texel with `c - 0.5` is inert: a min-relaxation can
+  only pull values down, so if the whole volume already holds |d| <= 0.5 the band never grows and the
+  field comes back as the raw seed. Near-boundary texels get the true value, everything else the cap.
+- **`fwidth` under a non-uniform branch is undefined.** `BgiSampleSunShadow` picks the mode per pixel
+  via `insideFine`, so at the fine-box boundary a quad can straddle two paths. The tap has to be
+  hoisted out of the branch.
+
+None of this applies to a per-pixel raymarch, which has no lattice to reconstruct against - see
+`ShadowMode.Sdf`, already a per-pixel path, and the sixth-mode seam in `BgiSampleSunShadow`.
+
 **`BgiSampleSunShadow`** — the sole authority for the main-light shadow, fully resolved with no
 fall-through: `Off` = genuinely no sun shadow; `Baked` = the sun-vis tap; `Sdf` / `OcclusionField` /
 `Bitmask` delegate to their baked sources, `saturate`d so a NaN from a mis-bound source reads as
