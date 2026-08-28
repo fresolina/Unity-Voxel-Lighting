@@ -495,8 +495,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1200926430}
   serializedVersion: 2
-  m_LocalRotation: {x: -0.15598103, y: 0.2178724, z: -0.0308563, w: -0.96293795}
-  m_LocalPosition: {x: 0.962627, y: 4.6561537, z: 0.31518018}
+  m_LocalRotation: {x: -0.03741114, y: 0.34360743, z: -0.00868237, w: -0.9383278}
+  m_LocalPosition: {x: -0.6723308, y: 4.7139196, z: 7.1155243}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -763,8 +763,8 @@ MonoBehaviour:
   _sunShadowSamples: 4
   _bakedShadowSharpness: 2
   _shadowNormalOffset: 1
-  _raymarchMaxSteps: 128
-  _raymarchStartOffset: 0.5
+  _raymarchMaxSteps: 256
+  _raymarchStartOffset: 1
   _sunShadowShader: {fileID: 7200000, guid: 19cb94eeae045928b39e32e4d5eec619, type: 3}
 --- !u!1 &1500960146
 GameObject:

@@ -11,7 +11,7 @@
 | [S2 Kernel](#s2--move-the-kernel) | **done 2026-08-28** — sun-vis volumes bit-identical at 1/4/16 samples, render unchanged; found a serialized-field aliasing hazard that S3 must plan around |
 | [S3 Driver](#s3--move-the-driver) | **done 2026-08-28** — `VoxelSunShadow` component; volumes and render still bit-identical; settings migrate |
 | [S4 Provider + Unity shadowmap](#s4--provider-interface--unity-shadowmap) | **done 2026-08-28** — mode 5 ships and agrees with `Baked` to 1.7/255; needed a `ShadowCaster` pass the package never had. Provider interface **deferred, deliberately** |
-| [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | **built, NOT accepted 2026-08-28** — resource problem solved, mirror bit-exact, and the image looks right at the default. It does NOT match `Baked`'s frame mean, but the images say much of that is `Baked` spreading shadow. Ships available and unselected; **do not tune it by mean** |
+| [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | **built, NOT accepted 2026-08-28** — resource problem solved and the mirror is bit-exact, but the phase's founding premise was wrong: the OCCLUDER geometry is still a lattice, so the shadow boundary is quantised to it and corners show a hard sawtooth. `Baked` looks better today. Needs per-pixel supersampling |
 
 **Goal.** Make the main-light sun shadow a **self-contained subsystem with a swappable backend**, so
 that a Unity shadowmap, the current baked voxel-visibility volume, and a future **per-pixel raymarch**
@@ -598,7 +598,49 @@ has no spreading, and it still agrees with `Baked`. **It is not supersampling**:
 mean moves by 0.0005 between 1 and 16 samples. **It is not the mirror**: bit-exact. **It is not the
 step budget or the start offset**: both swept to convergence above.
 
-#### CORRECTION [2026-08-28, later]: the "fix" below was a regression, caught by looking at the screen
+#### CORRECTION 2 [2026-08-28]: this phase's founding premise was wrong
+
+The plan says, of the raymarch:
+
+> None of it applies here: there is no lattice to reconstruct against, only a ray that hits or does not.
+// SUPERSEDED - see "CORRECTION 2" below: there is no lattice in the FIELD, but the occluder
+// geometry is still one, and the shadow boundary is quantised to it.
+
+**That is false, and it is the reason the mode still looks wrong in a concave corner.** There is no
+lattice in the shadow *field* — but the *occluder geometry* is still a lattice. A hard binary
+visibility test against voxelised geometry can only produce a shadow boundary that follows voxel
+faces, so the boundary is quantised to the occupancy grid however the visibility is stored. Removing
+the field's lattice does not remove the geometry's.
+
+fs moved the camera into a corner and it shows plainly: the raymarch puts a hard 1–2 cell **sawtooth**
+down the corner where the shadow terminates, while `Baked` at the same pose gives a smooth gradient.
+
+`Baked` is not smoother by luck. It hides the geometry lattice twice over:
+
+1. `CSSunVisibility` fires 4 jittered rays per texel, so it stores a **coverage fraction**, not a bit.
+2. The fragment tap is **trilinear**, so it interpolates between texels.
+
+The raymarch has neither — one ray, one bit, per pixel. That is the whole difference, and it also
+re-frames what this mode's advantage actually is. It is **not** "no reconstruction needed". It is that
+supersampling could happen at *pixel* rate instead of *texel* rate, which is strictly better
+information for the same idea. The medicine is the one the baked path already takes, moved to where
+the pixels are.
+
+Options, none of them tried yet, in the order I would try them:
+
+- **Jitter the ray direction by the sun's angular radius, N rays, average.** Physically motivated (real
+  penumbra), dithers the staircase, and costs N×. The sun is not a point source; nothing in this path
+  currently models that.
+- **Jitter the ray origin within the surface cell, N rays, average.** Directly mirrors
+  `CSSunVisibility`'s estimator at pixel rate. Cheaper to reason about, but it blurs by roughly a cell
+  — which is most of what `Baked` already does, so the gain over `Baked` would be small.
+- **Raise the occupancy resolution.** Attacks the lattice itself rather than hiding it. Free at draw
+  time, costs memory and bake time, and 256³ is already supported.
+
+Until one of those lands, **`Baked` is the better-looking mode** at these poses and the raymarch's
+crispness is bought at the price of a visibly quantised boundary.
+
+#### CORRECTION 1 [2026-08-28, earlier]: the "fix" below was a regression, caught by looking at the screen
 
 Everything in the next subsection is a correct description of a *measurement* and the wrong conclusion
 drawn from it. Lowering the start offset to 0.5 moved the frame mean toward `Baked` **and put visible
