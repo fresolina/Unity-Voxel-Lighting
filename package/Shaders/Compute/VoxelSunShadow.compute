@@ -1,0 +1,130 @@
+// THE SUN SHADOW'S OWN PASS. One kernel, and it shares nothing with the solve.
+//
+// Split out of BufferGiSolve.compute by S2 of docs/direct-shadow-extraction.md. The kernel text is
+// unchanged - what moved is the file it lives in, and with it the claim that the displayed sun
+// shadow is a subsystem rather than a stage of the GI.
+//
+// It was worth checking before doing: this kernel reads _OccupancyHi, the field's grid uniforms, the
+// sun direction and two ints, and writes one R16 volume. No _Radiance, no _Irradiance, no _Material,
+// no _Surface. The only thing tying it to the solve file was MarchOccupancyHiFrom being declared
+// there, and that is pure occupancy traversal - it now lives in BufferGiVoxelData.hlsl.
+//
+// LIFECYCLE, which is the real reason for the split: the solve runs every frame until its ray budget
+// is spent; this runs when the SUN MOVES (or geometry is re-baked) and idles otherwise. Two different
+// clocks, and fusing them would recompute a sun-dependent value on a per-frame schedule.
+#pragma kernel CSSunVisibility
+
+#include "../../ShaderLibrary/BufferGiField.hlsl"
+#include "../../ShaderLibrary/Math.hlsl"
+#include "../../ShaderLibrary/BufferGiVoxelData.hlsl"
+
+// This field's baked SUN VISIBILITY: an R16 scalar volume at _BgiShadowGrid.
+//
+// Why it is its own texture, and not the irradiance mirror's alpha: it is a scalar with a different
+// lifecycle (deterministic, so never confidence-eased) AND a different resolution (the geometry's,
+// not the lighting's). It costs the fragment nothing - the GI tap and the shadow tap were already
+// separate SampleLevel calls at different positions. Read by BgiSampleShadowTexture in
+// ShaderLibrary/VoxelSunShadow.hlsl, which is this pass's only consumer.
+RWTexture3D<float>  _BgiSunVisTexWrite;
+// First Z slice of the shadow volume this dispatch covers. See the kernel for why the pass is
+// chunked rather than dispatched whole.
+uint _BgiShadowSliceBase;
+// Direction TOWARD the sun. Declared here as well as in the solve - they are separate compilation
+// units with separate uniform state, and C# sets it on each. The value this pass uses is the LATCHED
+// one (BufferGiUpdater._sunVisDir), not the live sun, so a sweep spread over several frames marches
+// every slice against the same direction.
+float3 _DirectLightDir;
+// Stratified sun rays per texel. Supersampling is what turns a per-texel bit into the coverage
+// fraction _BgiShadowSharpness reconstructs an edge from. Measured on Sponza at the 128^3 shadow
+// grid: 1 sample leaves 0.000% of texels fractional, 4 leaves 1.91%, 16 leaves 2.92% - so this only
+// ever touches the ~2% of texels on a shadow boundary, and the field mean is unchanged to four
+// decimals. Cost is linear: 330 / 621 / 1497 ms to re-march the volume when the sun moves.
+int _BgiShadowTexSamples;
+
+// ----------------------------------------------------------
+// SUN VISIBILITY (not per frame - dispatched when the SUN moves, or after a re-bake).
+//
+// One shadow ray per SHADOW texel, marched against the HI-RES occupancy. This is a
+// RE-EVALUATION, not an upsample of the 32^3 solve: sun visibility depends only on occupancy and
+// sun direction, both of which are known at full resolution, so a finer grid carries real new
+// information rather than a smoother version of the old.
+//
+// It replaces the mirror-alpha value CSBlur used to write, and with it the reason Cube needed per-
+// slab alpha. That existed because ONE 32^3 texel had to serve both sides of a sub-voxel wall and a
+// scalar could not say which side. At the occupancy resolution the two sides are DIFFERENT TEXELS,
+// so the ambiguity is gone rather than encoded around - the bet this phase makes.
+//
+// Deliberate deviation from optimization-guideline 5.3 (fuse a texture write into the pass that
+// computes it): its lifecycle is the sun, not the solve frame. Fusing it into CSBlur would recompute
+// it every solve frame for a value that changes only when the sun does.
+//
+// Every texel gets a ray, solid or air. A solid shell texel's ray steps off its own cell first, so it
+// answers "is MY face lit" - which is exactly what the fragment's trilinear footprint needs from the
+// texels behind the surface, and the reason a constant 1.0 there used to wash shadows toward lit.
+// Only texels sealed on all six sides are skipped: nothing can ever sample them.
+// CHUNKED over Z slices. The whole grid in one dispatch is an over-long submission at the higher
+// resolutions and the driver kills it: 256^3 is 16.7M texels x _BgiShadowTexSamples rays x up to
+// 3*256 DDA steps, per field. That TDR'd the editor once, which is why the C# side hands this a slice
+// window instead of the whole volume and spends it over several frames. A sun move then sweeps in
+// over a few frames rather than hitching - and a few frames of sweep is the right trade against a
+// device reset.
+[numthreads(64, 1, 1)]
+void CSSunVisibility(uint3 id : SV_DispatchThreadID)
+{
+    uint sliceTexels = BGI_SHADOW_GRID * BGI_SHADOW_GRID;
+    uint slice = id.x / sliceTexels;
+    uint z = _BgiShadowSliceBase + slice;
+    if (z >= BGI_SHADOW_GRID) return;   // past the end of the volume (last chunk is partial)
+    uint r = id.x - slice * sliceTexels;
+    uint3 t = uint3(r & (BGI_SHADOW_GRID - 1u), r >> BGI_SHADOW_GRID_LOG2, z);
+
+    // Shadow texels are never FINER than occupancy cells (C# clamps it), so this scale is >= 1 and
+    // the texel's footprint covers `scale^3` occupancy cells. At the default they are the same grid.
+    float scale = (float)BGI_OCC_GRID / (float)BGI_SHADOW_GRID;
+
+    // NEAR-GEOMETRY GATE. Only texels next to a surface are ever sampled: the fragment taps a
+    // fraction of a texel off the shading point and its trilinear footprint reaches one texel
+    // further, so nothing beyond a couple of cells from geometry can be read. Marching the whole
+    // volume anyway is where almost all of the cost was - the shell plus two layers is a small
+    // fraction of a 128^3 grid, and open air is exactly where rays are longest.
+    //
+    // Skipped AIR texels are written 1.0 (lit), not 0. They are unreachable either way, so the value
+    // only matters if this reasoning is wrong somewhere - and "no information" reads as lit
+    // everywhere else in this path (outside the field, outside the grid), so a mistake shows up as a
+    // missing shadow rather than as black blotches.
+    // Skipped SOLID texels are written 0: a cell sealed inside geometry genuinely sees no sun, and
+    // that is the value its face would want if the footprint ever did reach it.
+    // SEALED-INTERIOR skip: this texel's whole 4x4x4 block is solid, so no ray leaves it and no
+    // fragment footprint can reach it. Two word loads, and it is the only gate that pays for itself.
+    //
+    // A wider "is there geometry near me" gate was tried twice - the read can only sample texels
+    // within a couple of cells of a surface, so in principle most of the volume is skippable. It
+    // measured SLOWER both times: per-cell (radius 2, 125 taps) took the 64^3 sweep from 81 ms to
+    // 135 ms, and at block granularity it was still 110 ms. In an interior almost every texel IS
+    // within a few cells of a wall, so the gate rejects little and costs everything it touches. The
+    // cost here is inherent - a million rays through a 128^3 grid - and chunking, not gating, is what
+    // makes it safe.
+    int3 centre = (int3)(((float3)t + 0.5) * scale);
+    {
+        bool anySolid, anyAir;
+        BgiHiBlockContents(centre >> 2, anySolid, anyAir);
+        if (anySolid && !anyAir) { _BgiSunVisTexWrite[t] = 0.0; return; }
+    }
+
+    // Supersampled area fraction, always - a single centre ray can only answer 0 or 1, and no filter
+    // downstream can recover where inside the texel the shadow edge fell. The fraction is what
+    // _BgiShadowSharpness reconstructs an edge from, and it is why this texture is R16 and not R8:
+    // sharpening amplifies quantisation along with the signal.
+    // Offsets are deterministic per texel, so the result is stable and needs no temporal accumulation
+    // - this stays instant when the sun moves, which is the whole point of a sun-triggered pass.
+    int n = max(_BgiShadowTexSamples, 1);
+    float3 jitterBase = BgiVoxelJitterBase((int3)t);
+    float lit = 0.0;
+    [loop]
+    for (int s = 0; s < n; s++) {
+        float3 offset = (n <= 1) ? 0.5.xxx : frac(jitterBase + BGI_R2_3D * (float)s);
+        float3 hiPos = ((float3)t + offset) * scale;
+        lit += MarchOccupancyHiFrom(hiPos, _DirectLightDir, BGI_MAX_RAY_DIST) ? 0.0 : 1.0;
+    }
+    _BgiSunVisTexWrite[t] = lit / (float)n;
+}

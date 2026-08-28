@@ -41,6 +41,12 @@ float3 _BgiGridOrigin; // world-space min corner of the cascade grid
 float3 _BgiGridSize;   // world-space extent of the cascade grid
 float3 _BgiVoxelSize;  // per-axis voxel size (= _BgiGridSize / BGI_GRID)
 
+// Worst-case ray reach: the volume's world-space diagonal. Here rather than in the solve because two
+// unrelated passes now bound rays by it - the solve's gather and the sun-shadow march, which live in
+// different compute files since S2 of docs/direct-shadow-extraction.md - and it is derived from
+// nothing but _BgiGridSize.
+#define BGI_MAX_RAY_DIST (length(_BgiGridSize))
+
 // The COARSE field's bounds, and unlike the three above these are NOT the current dispatch's - they
 // are the other field's, published once as loose globals so a fragment can pick between the two.
 // Only the compute/voxelize side has a "current field"; the fragment shades a point that may fall in

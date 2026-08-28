@@ -11,7 +11,6 @@
 // bake time; this file only reads them (see BufferGiVoxelData.hlsl). All solidity tests (visibility
 // DDA, gates) read the 1-bit occupancy bitfield; _Material is inject-only. No SDF, no textures.
 #pragma kernel CSClear
-#pragma kernel CSSunVisibility
 #pragma kernel CSInject
 #pragma kernel CSGather
 #pragma kernel CSBlur
@@ -38,17 +37,6 @@ RWStructuredBuffer<uint2> _IrradianceBlur; // spatially blurred irradiance; the 
 // RGB only: the alpha carried the baked sun visibility until that moved to its own texture below, and
 // is now written as a constant 0. Nothing reads it (see BgiSampleShadowTexture).
 RWTexture3D<float4> _BgiIrradianceTexWrite;
-// The same field's baked SUN VISIBILITY: an R16 scalar volume at _BgiShadowGrid, written by
-// CSSunVisibility when the SUN MOVES rather than by CSBlur every solve frame.
-//
-// Why it is its own texture, and not the mirror's alpha: it is a scalar with a different lifecycle
-// (deterministic, so never confidence-eased) AND a different resolution (the geometry's, not the
-// lighting's). It costs the fragment nothing - the GI tap and the shadow tap were already separate
-// SampleLevel calls at different positions.
-RWTexture3D<float>  _BgiSunVisTexWrite;
-// First Z slice of the shadow volume this CSSunVisibility dispatch covers. See the kernel for why the
-// pass is chunked rather than dispatched whole.
-uint _BgiShadowSliceBase;
 // Sun visibility written into the mirror's alpha when nothing reads it there. A named constant so the
 // dead channel is obviously dead rather than looking like a value someone chose.
 #define BGI_MIRROR_ALPHA_UNUSED 0.0
@@ -140,13 +128,6 @@ float _ReachBoost;
 float _GiFireflyClamp;
 float3 _DirectLightDir;   // toward the light
 float4 _DirectLightColor;
-// Stratified sun rays per texel in CSSunVisibility - the pass that produces the DISPLAYED baked
-// shadow. Supersampling is what turns a per-texel bit into the coverage fraction _BgiShadowSharpness
-// reconstructs an edge from. Measured on Sponza at the 128^3 shadow grid: 1 sample leaves 0.000% of
-// texels fractional, 4 leaves 1.91%, 16 leaves 2.92% - so this only ever touches the ~2% of texels on
-// a shadow boundary, and the field mean is unchanged to four decimals. Cost is linear: 330 / 621 /
-// 1497 ms to re-mark the volume when the sun moves.
-int _BgiShadowTexSamples;
 // Stratified sun rays in CSInject, for the direct term a SOLID voxel then BOUNCES. Separate from the
 // above because it is a different pass at a different resolution: this one runs on the LIGHTING grid,
 // where a voxel is metres across and none of the shadow grid's resolution argument applies. Dropping
@@ -174,8 +155,6 @@ float4 _SpotLightPositionRange[MAX_SPOT_LIGHTS];
 float4 _SpotLightDirectionAngleScale[MAX_SPOT_LIGHTS];
 float4 _SpotLightColorAngleOffset[MAX_SPOT_LIGHTS];
 
-// Worst-case ray reach: the volume's world-space diagonal.
-#define BGI_MAX_RAY_DIST (length(_BgiGridSize))
 // Worst-case DDA step count: a ray crosses at most BGI_GRID cells per axis, so 3*BGI_GRID steps cover
 // the whole grid corner-to-corner. This depends only on the resolution (not voxel size/aspect), so it
 // is a compile-time constant rather than a uniform.
@@ -257,52 +236,6 @@ int MarchOccupancyFrom(float3 gridPos, float3 worldDir, float maxDist, out int3 
 int MarchOccupancy(int3 start, float3 worldDir, float maxDist, out int3 hitCell)
 {
     return MarchOccupancyFrom((float3)start + 0.5, worldDir, maxDist, hitCell);
-}
-
-// Worst-case step count on the OCCUPANCY grid. Keys off _BgiOccGrid, not _BgiGrid: once the two
-// differ, a bound derived from the lighting grid truncates the ray long before it has crossed the
-// volume, and a truncated shadow ray reads as LIT - a silently missing shadow, not an obvious one.
-#define BGI_MAX_OCC_RAY_STEPS (BGI_OCC_GRID * 3u)
-
-// The same Amanatides-Woo walk over the HI-RES occupancy. `hiGridPos` is in OCCUPANCY-grid units
-// (cell index + fraction) and the direction is world-space, so the returned t is in world units like
-// the coarse march. Steps off the origin cell first, so a cell never self-occludes - which is what
-// lets a SOLID shell texel answer "is my own face lit" rather than always answering 0.
-//
-// No hitCell out-param: the only caller wants a visibility bit, and a hi-res hit index has no
-// consumer yet.
-int MarchOccupancyHiFrom(float3 hiGridPos, float3 worldDir, float maxDist)
-{
-    int3 cell = (int3)floor(hiGridPos);
-    float3 inCell = hiGridPos - (float3)cell;
-    // Per-axis hi-res voxel size: the occupancy grid spans the SAME world box as the field, so this
-    // is the field extent over the occupancy resolution. Stepping in grid units without it would be
-    // anisotropic on a non-cubic volume, exactly as it would be on the coarse march.
-    float3 hiVox = _BgiGridSize / (float)BGI_OCC_GRID;
-    float3 d = worldDir / max(hiVox, 1e-6);
-    int3 step = int3(d.x >= 0 ? 1 : -1, d.y >= 0 ? 1 : -1, d.z >= 0 ? 1 : -1);
-    float3 inv = 1.0 / max(abs(d), 1e-6);
-    float3 toBoundary = float3(d.x >= 0 ? 1.0 - inCell.x : inCell.x,
-                               d.y >= 0 ? 1.0 - inCell.y : inCell.y,
-                               d.z >= 0 ? 1.0 - inCell.z : inCell.z);
-    float3 tMax = inv * toBoundary;
-    float3 tDelta = inv;
-
-    [loop]
-    for (uint s = 0u; s < BGI_MAX_OCC_RAY_STEPS; s++) {
-        float tCross;
-        if (tMax.x < tMax.y) {
-            if (tMax.x < tMax.z) { tCross = tMax.x; cell.x += step.x; tMax.x += tDelta.x; }
-            else                 { tCross = tMax.z; cell.z += step.z; tMax.z += tDelta.z; }
-        } else {
-            if (tMax.y < tMax.z) { tCross = tMax.y; cell.y += step.y; tMax.y += tDelta.y; }
-            else                 { tCross = tMax.z; cell.z += step.z; tMax.z += tDelta.z; }
-        }
-        if (tCross > maxDist) return 0;
-        if (!BgiOccInBounds(cell)) return 0;   // escaped the grid -> sky
-        if (BgiHiSolidBit((uint3)cell)) return 1;
-    }
-    return 0;
 }
 
 // ----------------------------------------------------------
@@ -512,18 +445,6 @@ int MarchSolidFrom(float3 gridPos, float3 worldDir, float maxDist, out int3 hitC
 int MarchSolid(int3 start, float3 worldDir, float maxDist, out int3 hitCell)
 {
     return MarchSolidFrom((float3)start + 0.5, worldDir, maxDist, hitCell);
-}
-
-// 3D R2 (generalised golden ratio) increments - the low-discrepancy analogue of the 2D pair used by
-// GiSampleNoise. Successive multiples spread evenly through the unit cube, so a handful of samples
-// covers a voxel without the clumping plain hashing gives.
-static const float3 BGI_R2_3D = float3(0.8191725134, 0.6710436067, 0.5497004779);
-
-// Per-voxel random base offset, hashed on the cell only (never the frame) so it is stable in time.
-float3 BgiVoxelJitterBase(int3 cell)
-{
-    uint seed = ((uint)cell.x * 73856093u) ^ ((uint)cell.y * 19349663u) ^ ((uint)cell.z * 83492791u);
-    return float3(HashTo01(seed), HashTo01(seed ^ 0x9e3779b9u), HashTo01(seed ^ 0x85ebca6bu));
 }
 
 inline half BgiSunRay(int3 cell, float3 offset)
@@ -778,94 +699,6 @@ half3 GatherRayRadiance(int3 fromCell, float3 dir, half reachBoost)
         result = EvalEnvSH(dir); // escaped -> sky (area light, averaged like any other sample)
     }
     return result;
-}
-
-// ----------------------------------------------------------
-// SUN VISIBILITY (not per frame - dispatched when the SUN moves, or after a re-bake).
-//
-// One shadow ray per SHADOW texel, marched against the HI-RES occupancy. This is a
-// RE-EVALUATION, not an upsample of the 32^3 solve: sun visibility depends only on occupancy and
-// sun direction, both of which are known at full resolution, so a finer grid carries real new
-// information rather than a smoother version of the old.
-//
-// It replaces the mirror-alpha value CSBlur used to write, and with it the reason Cube needed per-
-// slab alpha. That existed because ONE 32^3 texel had to serve both sides of a sub-voxel wall and a
-// scalar could not say which side. At the occupancy resolution the two sides are DIFFERENT TEXELS,
-// so the ambiguity is gone rather than encoded around - the bet this phase makes.
-//
-// Deliberate deviation from optimization-guideline 5.3 (fuse a texture write into the pass that
-// computes it): its lifecycle is the sun, not the solve frame. Fusing it into CSBlur would recompute
-// it every solve frame for a value that changes only when the sun does.
-//
-// Every texel gets a ray, solid or air. A solid shell texel's ray steps off its own cell first, so it
-// answers "is MY face lit" - which is exactly what the fragment's trilinear footprint needs from the
-// texels behind the surface, and the reason a constant 1.0 there used to wash shadows toward lit.
-// Only texels sealed on all six sides are skipped: nothing can ever sample them.
-// CHUNKED over Z slices. The whole grid in one dispatch is an over-long submission at the higher
-// resolutions and the driver kills it: 256^3 is 16.7M texels x _BgiShadowTexSamples rays x up to
-// 3*256 DDA steps, per field. That TDR'd the editor once, which is why the C# side hands this a slice
-// window instead of the whole volume and spends it over several frames. A sun move then sweeps in
-// over a few frames rather than hitching - and a few frames of sweep is the right trade against a
-// device reset.
-[numthreads(64, 1, 1)]
-void CSSunVisibility(uint3 id : SV_DispatchThreadID)
-{
-    uint sliceTexels = BGI_SHADOW_GRID * BGI_SHADOW_GRID;
-    uint slice = id.x / sliceTexels;
-    uint z = _BgiShadowSliceBase + slice;
-    if (z >= BGI_SHADOW_GRID) return;   // past the end of the volume (last chunk is partial)
-    uint r = id.x - slice * sliceTexels;
-    uint3 t = uint3(r & (BGI_SHADOW_GRID - 1u), r >> BGI_SHADOW_GRID_LOG2, z);
-
-    // Shadow texels are never FINER than occupancy cells (C# clamps it), so this scale is >= 1 and
-    // the texel's footprint covers `scale^3` occupancy cells. At the default they are the same grid.
-    float scale = (float)BGI_OCC_GRID / (float)BGI_SHADOW_GRID;
-
-    // NEAR-GEOMETRY GATE. Only texels next to a surface are ever sampled: the fragment taps a
-    // fraction of a texel off the shading point and its trilinear footprint reaches one texel
-    // further, so nothing beyond a couple of cells from geometry can be read. Marching the whole
-    // volume anyway is where almost all of the cost was - the shell plus two layers is a small
-    // fraction of a 128^3 grid, and open air is exactly where rays are longest.
-    //
-    // Skipped AIR texels are written 1.0 (lit), not 0. They are unreachable either way, so the value
-    // only matters if this reasoning is wrong somewhere - and "no information" reads as lit
-    // everywhere else in this path (outside the field, outside the grid), so a mistake shows up as a
-    // missing shadow rather than as black blotches.
-    // Skipped SOLID texels are written 0: a cell sealed inside geometry genuinely sees no sun, and
-    // that is the value its face would want if the footprint ever did reach it.
-    // SEALED-INTERIOR skip: this texel's whole 4x4x4 block is solid, so no ray leaves it and no
-    // fragment footprint can reach it. Two word loads, and it is the only gate that pays for itself.
-    //
-    // A wider "is there geometry near me" gate was tried twice - the read can only sample texels
-    // within a couple of cells of a surface, so in principle most of the volume is skippable. It
-    // measured SLOWER both times: per-cell (radius 2, 125 taps) took the 64^3 sweep from 81 ms to
-    // 135 ms, and at block granularity it was still 110 ms. In an interior almost every texel IS
-    // within a few cells of a wall, so the gate rejects little and costs everything it touches. The
-    // cost here is inherent - a million rays through a 128^3 grid - and chunking, not gating, is what
-    // makes it safe.
-    int3 centre = (int3)(((float3)t + 0.5) * scale);
-    {
-        bool anySolid, anyAir;
-        BgiHiBlockContents(centre >> 2, anySolid, anyAir);
-        if (anySolid && !anyAir) { _BgiSunVisTexWrite[t] = 0.0; return; }
-    }
-
-    // Supersampled area fraction, always - a single centre ray can only answer 0 or 1, and no filter
-    // downstream can recover where inside the texel the shadow edge fell. The fraction is what
-    // _BgiShadowSharpness reconstructs an edge from, and it is why this texture is R16 and not R8:
-    // sharpening amplifies quantisation along with the signal.
-    // Offsets are deterministic per texel, so the result is stable and needs no temporal accumulation
-    // - this stays instant when the sun moves, which is the whole point of a sun-triggered pass.
-    int n = max(_BgiShadowTexSamples, 1);
-    float3 jitterBase = BgiVoxelJitterBase((int3)t);
-    float lit = 0.0;
-    [loop]
-    for (int s = 0; s < n; s++) {
-        float3 offset = (n <= 1) ? 0.5.xxx : frac(jitterBase + BGI_R2_3D * (float)s);
-        float3 hiPos = ((float3)t + offset) * scale;
-        lit += MarchOccupancyHiFrom(hiPos, _DirectLightDir, BGI_MAX_RAY_DIST) ? 0.0 : 1.0;
-    }
-    _BgiSunVisTexWrite[t] = lit / (float)n;
 }
 
 [numthreads(64, 1, 1)]

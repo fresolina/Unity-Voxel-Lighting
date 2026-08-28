@@ -10,6 +10,12 @@
 // Guarded by Shaders/Compute/BufferGiCommonCanary.compute, which includes every header here and fails
 // moment one acquires an engine dependency - do not "fix" that by adding an include to the canary.
 
+// Made an explicit include rather than an assumption about include order. Every symbol below reaches
+// into it (BgiOccWord, BgiOccBitMask, _OccFieldWordOffset, _BgiGridSize), and since S2 of
+// docs/direct-shadow-extraction.md this header is included by a compute file that has no reason to
+// know it must include BufferGiField.hlsl first. The guard makes it a no-op everywhere else.
+#include "BufferGiField.hlsl"
+
 
 // LAYER 1 (Resources): the STATIC voxel fields, shared by both compute stages.
 // Depends only on BufferGiField.hlsl - no URP headers, no vertex/fragment semantics.
@@ -140,5 +146,60 @@ bool BgiHiSolidInBlock(uint w0, uint w1, int3 c)
     return ((w >> (bit & 31u)) & 1u) != 0u;
 }
 
+
+// --- HI-RES TRAVERSAL ------------------------------------------------------------------------
+// Moved here from BufferGiSolve.compute by S2 of docs/direct-shadow-extraction.md. It is pure
+// occupancy traversal - no solve buffer, no lighting concept - and it now has two callers in two
+// different compute files: the solve's own occlusion queries, and CSSunVisibility over in
+// VoxelSunShadow.compute. It was the ONLY thing keeping the sun-visibility kernel inside the solve.
+//
+// A fragment-stage caller is the point of putting it in a header at all (S5's per-pixel raymarch),
+// but it cannot become one yet: _OccupancyHi is a StructuredBuffer, and the shipping fragment
+// deliberately declares none. See the resource problem in that document.
+// Worst-case step count on the OCCUPANCY grid. Keys off _BgiOccGrid, not _BgiGrid: once the two
+// differ, a bound derived from the lighting grid truncates the ray long before it has crossed the
+// volume, and a truncated shadow ray reads as LIT - a silently missing shadow, not an obvious one.
+#define BGI_MAX_OCC_RAY_STEPS (BGI_OCC_GRID * 3u)
+
+// The same Amanatides-Woo walk over the HI-RES occupancy. `hiGridPos` is in OCCUPANCY-grid units
+// (cell index + fraction) and the direction is world-space, so the returned t is in world units like
+// the coarse march. Steps off the origin cell first, so a cell never self-occludes - which is what
+// lets a SOLID shell texel answer "is my own face lit" rather than always answering 0.
+//
+// No hitCell out-param: the only caller wants a visibility bit, and a hi-res hit index has no
+// consumer yet.
+int MarchOccupancyHiFrom(float3 hiGridPos, float3 worldDir, float maxDist)
+{
+    int3 cell = (int3)floor(hiGridPos);
+    float3 inCell = hiGridPos - (float3)cell;
+    // Per-axis hi-res voxel size: the occupancy grid spans the SAME world box as the field, so this
+    // is the field extent over the occupancy resolution. Stepping in grid units without it would be
+    // anisotropic on a non-cubic volume, exactly as it would be on the coarse march.
+    float3 hiVox = _BgiGridSize / (float)BGI_OCC_GRID;
+    float3 d = worldDir / max(hiVox, 1e-6);
+    int3 step = int3(d.x >= 0 ? 1 : -1, d.y >= 0 ? 1 : -1, d.z >= 0 ? 1 : -1);
+    float3 inv = 1.0 / max(abs(d), 1e-6);
+    float3 toBoundary = float3(d.x >= 0 ? 1.0 - inCell.x : inCell.x,
+                               d.y >= 0 ? 1.0 - inCell.y : inCell.y,
+                               d.z >= 0 ? 1.0 - inCell.z : inCell.z);
+    float3 tMax = inv * toBoundary;
+    float3 tDelta = inv;
+
+    [loop]
+    for (uint s = 0u; s < BGI_MAX_OCC_RAY_STEPS; s++) {
+        float tCross;
+        if (tMax.x < tMax.y) {
+            if (tMax.x < tMax.z) { tCross = tMax.x; cell.x += step.x; tMax.x += tDelta.x; }
+            else                 { tCross = tMax.z; cell.z += step.z; tMax.z += tDelta.z; }
+        } else {
+            if (tMax.y < tMax.z) { tCross = tMax.y; cell.y += step.y; tMax.y += tDelta.y; }
+            else                 { tCross = tMax.z; cell.z += step.z; tMax.z += tDelta.z; }
+        }
+        if (tCross > maxDist) return 0;
+        if (!BgiOccInBounds(cell)) return 0;   // escaped the grid -> sky
+        if (BgiHiSolidBit((uint3)cell)) return 1;
+    }
+    return 0;
+}
 
 #endif // LOTEC_BUFFER_GI_VOXEL_DATA_INCLUDED

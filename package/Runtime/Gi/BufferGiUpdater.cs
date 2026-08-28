@@ -367,6 +367,11 @@ namespace Lotec.Lighting {
                  "distance, baked lights). Kept separate from the solve shader so that what runs PER " +
                  "FRAME is a property of the file, not of a comment. Auto-resolved by name when empty.")]
         [SerializeField] ComputeShader _bakeShader;
+        [Tooltip("VoxelSunShadow.compute - the sun-visibility march that produces the Baked shadow " +
+                 "volume. Its own asset because its LIFECYCLE is the sun, not the solve frame: it " +
+                 "runs when the sun moves or geometry is re-baked, and idles otherwise. Auto-resolved " +
+                 "by name when empty.")]
+        [SerializeField] ComputeShader _sunShadowShader;
         [Tooltip("Shader 'Hidden/Lotec/BufferGiVoxelize' - GPU 3-axis rasterizer that voxelizes " +
                  "scene meshes into the occupancy/albedo buffer.")]
         [SerializeField] Shader _voxelizeShader;
@@ -870,6 +875,7 @@ namespace Lotec.Lighting {
                 $"coarse={(_sunVisTexCoarse != null ? _sunVisTexCoarse.name + " created=" + _sunVisTexCoarse.IsCreated() : "NULL")}\n" +
                 $"  solveShader={(_solveShader != null ? _solveShader.name : "NULL")} " +
                 $"bakeShader={(_bakeShader != null ? _bakeShader.name : "NULL")} " +
+                $"sunShadowShader={(_sunShadowShader != null ? _sunShadowShader.name : "NULL")} " +
                 $"voxelizeShader={(_voxelizeShader != null ? _voxelizeShader.name : "NULL")}\n" +
                 $"  kernels solve(inject={_injectKernel} gather={_gatherKernel} blur={_blurKernel}) " +
                 $"bake(occ={_buildOccupancyKernel} surface={_buildSurfaceKernel})   <- -1 means the kernel " +
@@ -1082,13 +1088,15 @@ namespace Lotec.Lighting {
         // occupancy math reads them). They only change when the grid does, but re-setting each frame is
         // cheap and keeps the shader assets in sync regardless of dispatch ordering.
         //
-        // BOTH shaders, always. Uniforms are per-ComputeShader, so a bake kernel that never got these
+        // ALL THREE, always. Uniforms are per-ComputeShader, so a kernel that never got these
         // would read BGI_COUNT as 0 and early-out on every thread - an empty field, silently, with no
-        // error anywhere. That is the one way the solve/bake split can break, so it is handled in one
-        // place and neither caller gets to choose.
+        // error anywhere. That is the one way a shader split can break, so it is handled in one place
+        // and no caller gets to choose. The sun-shadow shader joined when its kernel moved out of the
+        // solve; it reads the same grid, occupancy and shadow-grid constants.
         void BindGridConstantsToCompute() {
             BindGridConstants(_solveShader);
             BindGridConstants(_bakeShader);
+            BindGridConstants(_sunShadowShader);
         }
 
         // The bake shader is a second asset, so an existing prefab/scene has an empty reference for it.
@@ -1105,6 +1113,47 @@ namespace Lotec.Lighting {
                 if (System.IO.Path.GetFileNameWithoutExtension(path) != "BufferGiBake") continue;
                 _bakeShader = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
                 if (_bakeShader != null) UnityEditor.EditorUtility.SetDirty(this);
+                return;
+            }
+#endif
+        }
+
+        // Same story as the bake shader, one asset later: an existing prefab/scene has an empty
+        // reference for VoxelSunShadow.compute, so resolve it by name. A name lookup survives the file
+        // moving; editor-only, and the result is serialized so a build never needs the inspector.
+        //
+        // A null reference here is NOT fatal - it costs the Baked shadow mode and nothing else, and
+        // DispatchSunVisibilityChunk's `_sunVisKernel < 0` guard already handles it - so this stays out
+        // of IsReady. The failure mode is a shadow that never appears, which RequireKernel logs.
+        void ResolveSunShadowShader() {
+#if UNITY_EDITOR
+            if (_sunShadowShader != null) return;
+            foreach (string guid in UnityEditor.AssetDatabase.FindAssets("VoxelSunShadow t:ComputeShader")) {
+                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guid);
+                // FindAssets substring-matches, so filter to the exact file name.
+                if (System.IO.Path.GetFileNameWithoutExtension(path) != "VoxelSunShadow") continue;
+                _sunShadowShader = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                if (_sunShadowShader != null) UnityEditor.EditorUtility.SetDirty(this);
+                return;
+            }
+#endif
+        }
+
+        // The voxelize shader gets the same treatment, and for a reason S2 discovered the hard way:
+        // inserting a new serialized ComputeShader field ABOVE this one made a domain reload slide the
+        // object references by one - _sunShadowShader came back holding the voxelize Shader and this
+        // came back NULL, which fails IsReady with "Voxelize Shader" and stops the whole component.
+        // Nothing in the scene file changed; the aliasing happens in the reload backup. A by-name
+        // resolver makes that self-healing instead of a silent dead component, and every future field
+        // insertion (S3 moves five settings) gets the same protection for free.
+        void ResolveVoxelizeShader() {
+#if UNITY_EDITOR
+            if (_voxelizeShader != null) return;
+            foreach (string guid in UnityEditor.AssetDatabase.FindAssets("BufferGiVoxelize t:Shader")) {
+                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guid);
+                if (System.IO.Path.GetFileNameWithoutExtension(path) != "BufferGiVoxelize") continue;
+                _voxelizeShader = UnityEditor.AssetDatabase.LoadAssetAtPath<Shader>(path);
+                if (_voxelizeShader != null) UnityEditor.EditorUtility.SetDirty(this);
                 return;
             }
 #endif
@@ -1468,6 +1517,11 @@ namespace Lotec.Lighting {
         }
 
         bool IsReady(out string reason) {
+            // Resolve BEFORE the gate, not in the buffer-allocation path further down: that path sits
+            // behind this check, so a null shader reference there is unrecoverable - the component
+            // reports "not ready" forever and never reaches the code that could fix it. S2 hit exactly
+            // that after a field insertion nulled _voxelizeShader across a domain reload.
+            ResolveVoxelizeShader();
             if (_solveShader == null) { reason = "ComputeShader"; return false; }
             if (_voxelizeShader == null) { reason = "Voxelize Shader (Hidden/Lotec/BufferGiVoxelize)"; return false; }
             if (_volume.BakeRoot == null) { reason = "the volume's MeshBounds root (mesh geometry to voxelize)"; return false; }
@@ -1489,14 +1543,18 @@ namespace Lotec.Lighting {
             ReleaseBuffers();
 
             ResolveBakeShader();
+            ResolveSunShadowShader();
+            ResolveVoxelizeShader();
 
             _clearKernel = RequireKernel(_solveShader, "CSClear");
             _injectKernel = RequireKernel(_solveShader, "CSInject");
             _gatherKernel = RequireKernel(_solveShader, "CSGather");
             _blurKernel = RequireKernel(_solveShader, "CSBlur");
-            _sunVisKernel = RequireKernel(_solveShader, "CSSunVisibility");
             _initFineKernel = RequireKernel(_solveShader, "CSInitFineFromCoarse");
             _averageLuminanceKernel = RequireKernel(_solveShader, "CSAverageLuminance");
+            // Its own asset since S2 - see VoxelSunShadow.compute for why the lifecycle, not the
+            // resolution, is what separates this pass from the solve.
+            _sunVisKernel = RequireKernel(_sunShadowShader, "CSSunVisibility");
             _buildOccupancyKernel = RequireKernel(_bakeShader, "CSBuildOccupancy");
             _buildTraversalMipKernel = RequireKernel(_bakeShader, "CSBuildTraversalMip");
             _buildNeighbourMaskKernel = RequireKernel(_bakeShader, "CSBuildNeighbourMask");
@@ -1574,10 +1632,17 @@ namespace Lotec.Lighting {
             }
         }
 
-        void SetGridUniforms(Vector3 origin, Vector3 size, Vector3 voxelSize) {
-            _solveShader.SetVector(s_gridOrigin, origin);
-            _solveShader.SetVector(s_gridSize, size);
-            _solveShader.SetVector(s_voxelSize, voxelSize);
+        void SetGridUniforms(Vector3 origin, Vector3 size, Vector3 voxelSize) =>
+            SetGridUniforms(_solveShader, origin, size, voxelSize);
+
+        // Explicit-shader overload: the sun-shadow pass is dispatched from its own asset since S2, and
+        // uniforms are per-ComputeShader - setting the field box on the solve would leave the shadow
+        // march reading a zero grid and writing an empty volume, with no error anywhere.
+        void SetGridUniforms(ComputeShader cs, Vector3 origin, Vector3 size, Vector3 voxelSize) {
+            if (cs == null) return;
+            cs.SetVector(s_gridOrigin, origin);
+            cs.SetVector(s_gridSize, size);
+            cs.SetVector(s_voxelSize, voxelSize);
         }
 
         // Groups to cover ONE field's voxels (each field is dispatched separately with its offset).
@@ -2429,14 +2494,16 @@ namespace Lotec.Lighting {
         //
         // One bounded chunk per call. The caller keeps calling while SunVisibilityPending.
         void DispatchSunVisibilityChunk() {
-            if (_sunVisKernel < 0 || _occupancyHiBuffer == null || _sunVisTex == null) {
+            if (_sunVisKernel < 0 || _sunShadowShader == null || _occupancyHiBuffer == null || _sunVisTex == null) {
                 _sunVisSliceBase = ShadowGrid; // nothing to march into; don't spin
                 return;
             }
             // The LATCHED direction, not the live sun (see _sunVisDir). This kernel needs nothing else
-            // from SetDirectionalLightUniforms, and DispatchSolve republishes the live values for the
-            // solve later in the same frame.
-            _solveShader.SetVector(s_directLightDir, _sunVisDir);
+            // from SetDirectionalLightUniforms. Since S2 this is a DIFFERENT ComputeShader from the
+            // solve, so there is no longer any question of the two fighting over one uniform: the
+            // solve keeps publishing the live sun to itself, and this asset holds the latched one
+            // across however many frames the sweep takes.
+            _sunShadowShader.SetVector(s_directLightDir, _sunVisDir);
             // Whole Z slices at a time, at least one - a single slice is grid^2 texels, which is
             // 65,536 even at 256, comfortably inside the budget.
             int slicesPerDispatch = Mathf.Max(1, SunVisTexelsPerDispatch / (ShadowGrid * ShadowGrid));
@@ -2445,9 +2512,9 @@ namespace Lotec.Lighting {
             // turn a bit back into the coverage fraction _BgiShadowSharpness reconstructs an edge
             // from. The solve's own Centre/Temporal estimators do not apply here - this pass is not a
             // progressive average, each texel is finished the moment it is written.
-            _solveShader.SetInt(s_shadowTexSamples, Mathf.Clamp(_sunShadowSamples, 1, 16));
-            _solveShader.SetInt(s_bgiShadowSliceBase, _sunVisSliceBase);
-            _solveShader.SetBuffer(_sunVisKernel, s_occupancyHi, _occupancyHiBuffer);
+            _sunShadowShader.SetInt(s_shadowTexSamples, Mathf.Clamp(_sunShadowSamples, 1, 16));
+            _sunShadowShader.SetInt(s_bgiShadowSliceBase, _sunVisSliceBase);
+            _sunShadowShader.SetBuffer(_sunVisKernel, s_occupancyHi, _occupancyHiBuffer);
 
             int groups = Mathf.CeilToInt(slices * ShadowGrid * ShadowGrid / 64f);
             DispatchSunVisibilityField(GridOrigin, GridSize, VoxelSize, FineField, _sunVisTex, groups);
@@ -2460,10 +2527,10 @@ namespace Lotec.Lighting {
 
         void DispatchSunVisibilityField(Vector3 origin, Vector3 size, Vector3 voxelSize, int field,
                                         RenderTexture tex, int groups) {
-            SetGridUniforms(origin, size, voxelSize);
-            _solveShader.SetInt(s_occFieldWordOffset, field * OccWordsPerField);
-            _solveShader.SetTexture(_sunVisKernel, s_bgiSunVisTexWrite, tex);
-            _solveShader.Dispatch(_sunVisKernel, groups, 1, 1);
+            SetGridUniforms(_sunShadowShader, origin, size, voxelSize);
+            _sunShadowShader.SetInt(s_occFieldWordOffset, field * OccWordsPerField);
+            _sunShadowShader.SetTexture(_sunVisKernel, s_bgiSunVisTexWrite, tex);
+            _sunShadowShader.Dispatch(_sunVisKernel, groups, 1, 1);
         }
 
         // Inject -> gather -> blur for one field's slice; blur also mirrors the result into irradianceTex.

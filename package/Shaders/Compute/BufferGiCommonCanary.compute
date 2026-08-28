@@ -53,6 +53,9 @@ void CSCommonCanary(uint3 id : SV_DispatchThreadID)
     // BufferGiRead.hlsl below is guarded by GI_VOXEL_BUFFER and so contributes NO code to this
     // canary - a header reached only through it would be covered in name only.
     half sunVis = BgiSampleSunShadow(float3(0, 0, 0), float3(0, 1, 0), float3(0, 1, 0));
+    // BufferGiVoxelData.hlsl: the hi-res march, which S2 moved here out of the solve so that
+    // VoxelSunShadow.compute could reach it. Called for the same reason as the line above.
+    int hiBlocked = MarchOccupancyHiFrom(float3(0.5, 0.5, 0.5), float3(0, 1, 0), 1.0);
     _CanarySink[0] = packed + (solid ? 1u : 0u) + (uint)lum + (uint)uvw.x
-                   + (uint)bits.x + (uint)occ.x + (uint)sunVis + _Material[0] + _Surface[0];
+                   + (uint)bits.x + (uint)occ.x + (uint)sunVis + (uint)hiBlocked + _Material[0] + _Surface[0];
 }

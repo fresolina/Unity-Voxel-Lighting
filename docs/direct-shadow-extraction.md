@@ -7,7 +7,7 @@
 |---|---|
 | [S0 Baseline](#s0--baseline-and-harness) | **done** — folded into S1's verification (the before-capture is HEAD, re-taken through the identical cycle) |
 | [S1 Shader seam](#s1--move-the-shader-seam) | **done 2026-08-28** — byte-identical render, and a positive control proves the moved code is what runs |
-| [S2 Kernel](#s2--move-the-kernel) | not started |
+| [S2 Kernel](#s2--move-the-kernel) | **done 2026-08-28** — sun-vis volumes bit-identical at 1/4/16 samples, render unchanged; found a serialized-field aliasing hazard that S3 must plan around |
 | [S3 Driver](#s3--move-the-driver) | not started |
 | [S4 Provider + Unity shadowmap](#s4--provider-interface--unity-shadowmap) | not started |
 | [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | not started |
@@ -246,6 +246,74 @@ S0**, both fields, at 1/4/16 samples. Same dispatch chunking, same jitter sequen
 **Trap:** a compute buffer that is declared but not bound **silently drops the dispatch** and leaves
 the previous texture contents in place, which looks byte-identical on screen. This exact failure cost
 a day on P7. Verify by counting nonzero texels in the readback, not by looking at the render.
+
+### Done [2026-08-28] — bit-identical volumes, and a serialization hazard S3 must plan around
+
+`Shaders/Compute/VoxelSunShadow.compute` is a third compute asset holding `CSSunVisibility` verbatim,
+plus the four declarations it needs (`_BgiSunVisTexWrite`, `_BgiShadowSliceBase`, `_DirectLightDir`,
+`_BgiShadowTexSamples`). Three helpers moved down into headers so both files can reach them:
+
+| moved | to | why there |
+|---|---|---|
+| `MarchOccupancyHiFrom`, `BGI_MAX_OCC_RAY_STEPS` | `BufferGiVoxelData.hlsl` | pure occupancy traversal; **this was the only thing keeping the kernel in the solve file** |
+| `BGI_MAX_RAY_DIST` | `BufferGiField.hlsl` | `length(_BgiGridSize)` — field geometry, now with two callers in two files |
+| `BGI_R2_3D`, `BgiVoxelJitterBase` | `Math.hlsl` | low-discrepancy sampling, next to the `HashTo01` it calls |
+
+`BufferGiVoxelData.hlsl` also gained an explicit `#include "BufferGiField.hlsl"` — it had been relying
+on include order, which a new includer has no way to know about. `BufferGiSolve.compute` is 167 lines
+lighter. C# gained `_sunShadowShader` with a by-name resolver, modelled exactly on `_bakeShader`, and
+`SetGridUniforms` gained an explicit-shader overload (uniforms are per-`ComputeShader`; setting the
+field box on the solve would leave the shadow march reading a zero grid and writing an empty volume).
+
+**Acceptance — the strong form, and it passes.** Both sun-visibility volumes read back in full (all
+128 layers, 2,097,152 texels) and hashed, at three sample counts, against the S1 baseline:
+
+| samples | fine volume MD5 | nonzero texels | mean | matches baseline |
+|---|---|---|---|---|
+| 1 | `9EBE4F7E…` | 350,290 | 0.16703129 | **yes** |
+| 4 | `2B566E42…` | 370,288 | 0.16655540 | **yes** |
+| 16 | `19A74531…` | 378,848 | 0.16657370 | **yes** |
+
+Render also unchanged (`CCED4C32…`, mean luminance 163.816623 — the same hash as S1).
+
+**The sample-count sweep is this phase's built-in positive control.** A dispatch that silently failed
+to run would leave the previous contents in place, and all three rows would then be *identical* rather
+than differing in exactly the ~2% of boundary texels the estimator touches. They differ, in the right
+direction and by the right amount, so the kernel in the new file is what produced them.
+
+**The coarse volume reads all-zero in every row, before and after.** Not a regression and not a bug:
+`HasCoarse` is `false` in this scene, so `DispatchSunVisibilityField` is never called for it and the
+texture holds its cleared contents. Worth knowing before anyone reads a zero here as "fully shadowed".
+
+#### The serialized-field aliasing hazard — read this before S3
+
+Inserting `_sunShadowShader` (a `ComputeShader`) into the serialized field list immediately *above*
+`_voxelizeShader` (a `Shader`) made a domain reload **slide the object references by one**:
+`_sunShadowShader` came back holding the voxelize shader, and `_voxelizeShader` came back `null`.
+Nothing in the scene file changed — the aliasing happens in the reload backup.
+
+The symptom is nasty out of proportion to the cause. `IsReady` fails with `"Voxelize Shader"`, the
+whole component stops, every field texture goes null, and the render drops to mean luminance 68
+against 164. Read during that window — which is what happened here — it looks like the phase broke
+the renderer. **It was also nearly mistaken for a stale-assembly artifact and waved away**; the thing
+that settled it was dumping every shader reference rather than the one under suspicion.
+
+Two fixes, both kept:
+
+- `ResolveVoxelizeShader()`, by name, mirroring the other two. A null reference now self-heals.
+- **It is called from inside `IsReady`, before the gate** — not from the buffer-allocation path, which
+  sits *behind* that gate. A resolver placed after the check it is meant to satisfy can never run:
+  the component reports "not ready" forever and never reaches the code that would fix it.
+
+**S3 moves five serialized settings out of this component**, so it is the same hazard at five times
+the surface. Do not rely on the reload backup being name-keyed. Migrate explicitly, keep the old
+fields serialized (hidden) for one release, and verify by loading a pre-S3 scene — the acceptance
+criterion that phase already states, now with a concrete reason behind it.
+
+**Unrelated but confirmed again:** never read reflected state while a script recompile is in flight.
+Two readings in this phase were taken against a stale assembly and had to be discarded. Check the DLL
+timestamp against the source's first; it takes one `eval` and it is the difference between a
+measurement and a guess.
 
 ## S3 — Move the driver
 
