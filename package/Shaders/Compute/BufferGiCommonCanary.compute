@@ -27,6 +27,7 @@
 #include "../../ShaderLibrary/Tonemap.hlsl"
 #include "../../ShaderLibrary/VoxelOcclusion.hlsl"
 #include "../../ShaderLibrary/VoxelSdfShadows.hlsl"
+#include "../../ShaderLibrary/VoxelSunShadow.hlsl"
 #include "../../ShaderLibrary/VoxelDirectLighting.hlsl"
 #include "../../ShaderLibrary/BufferGiRead.hlsl"
 #include "../../ShaderLibrary/TriangleGridTraversal.hlsl"
@@ -48,6 +49,10 @@ void CSCommonCanary(uint3 id : SV_DispatchThreadID)
     // used to need the Core.hlsl macros, and going through a helper would only import its warnings.
     float4 bits = _BitmaskTex.Load(int4(0, 0, 0, 0));
     float4 occ  = _OccFieldTex.SampleLevel(sampler_OccFieldTex, float3(0, 0, 0), 0);
+    // VoxelSunShadow.hlsl: the sun-shadow seam. Called here and not merely included, because
+    // BufferGiRead.hlsl below is guarded by GI_VOXEL_BUFFER and so contributes NO code to this
+    // canary - a header reached only through it would be covered in name only.
+    half sunVis = BgiSampleSunShadow(float3(0, 0, 0), float3(0, 1, 0), float3(0, 1, 0));
     _CanarySink[0] = packed + (solid ? 1u : 0u) + (uint)lum + (uint)uvw.x
-                   + (uint)bits.x + (uint)occ.x + _Material[0] + _Surface[0];
+                   + (uint)bits.x + (uint)occ.x + (uint)sunVis + _Material[0] + _Surface[0];
 }
