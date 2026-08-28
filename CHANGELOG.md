@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.6.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.5.0...v1.6.0) (2026-08-28)
+
+
+### Features
+
+* Add GPU profiling for GI solve ([#86](https://github.com/fresolina/Unity-Voxel-Lighting/issues/86)) ([18fa9f9](https://github.com/fresolina/Unity-Voxel-Lighting/commit/18fa9f9bf05dfb3d5c1da856beb7686df03c59e2))
+* **BufferGI:** Micro-optimize fragment shader GI hot-path ([#80](https://github.com/fresolina/Unity-Voxel-Lighting/issues/80)) ([a932153](https://github.com/fresolina/Unity-Voxel-Lighting/commit/a93215312f277f8cdcab52e77094304391692204))
+* **BufferGi:** Single tap filter + direct-lighting mute for GI A/B ([#105](https://github.com/fresolina/Unity-Voxel-Lighting/issues/105)) ([0b7a24e](https://github.com/fresolina/Unity-Voxel-Lighting/commit/0b7a24e016b6d911d4c29efdefa6f68a1633ed3d))
+* **Cleanup:** Merge voxelgi into buffergi ([#84](https://github.com/fresolina/Unity-Voxel-Lighting/issues/84)) ([d551730](https://github.com/fresolina/Unity-Voxel-Lighting/commit/d5517308287e4ce09d68488a45ce593e9ffa05b4))
+* Cubed directional irradiance buffers ([7ad30f2](https://github.com/fresolina/Unity-Voxel-Lighting/commit/7ad30f278d299a6ea4e1d92b027b26390d001bc2))
+* Cubed directional irradiance buffers ([dd1b16c](https://github.com/fresolina/Unity-Voxel-Lighting/commit/dd1b16c64b659f2dac9b2f3b12f4c4e065b41026))
+* Directional (cubed) irradiance buffers ([#100](https://github.com/fresolina/Unity-Voxel-Lighting/issues/100)) ([a7a923e](https://github.com/fresolina/Unity-Voxel-Lighting/commit/a7a923e0214f9ca5035cf7d82088aa70ca8b4d68))
+* Improve OcclusionField accuracy and blending ([#92](https://github.com/fresolina/Unity-Voxel-Lighting/issues/92)) ([d1ba293](https://github.com/fresolina/Unity-Voxel-Lighting/commit/d1ba293fa8fd65b95871e1ac0237e8b66ca5091e))
+* optimize tonemap and auto exposure ([#89](https://github.com/fresolina/Unity-Voxel-Lighting/issues/89)) ([cad149a](https://github.com/fresolina/Unity-Voxel-Lighting/commit/cad149a1dae8ba50242a12d7d05a6e694caadb1e))
+* refactor shaders ([#108](https://github.com/fresolina/Unity-Voxel-Lighting/issues/108)) ([d5c3a45](https://github.com/fresolina/Unity-Voxel-Lighting/commit/d5c3a4543a49fff4001fbc2f8f9964bca1b35132))
+* separate wall thickening ([#104](https://github.com/fresolina/Unity-Voxel-Lighting/issues/104)) ([c9b3069](https://github.com/fresolina/Unity-Voxel-Lighting/commit/c9b30697f3b084105e98ab1d46e01b196042c3e8))
+* Setup VR demo project ([#82](https://github.com/fresolina/Unity-Voxel-Lighting/issues/82)) ([0b87f12](https://github.com/fresolina/Unity-Voxel-Lighting/commit/0b87f12189c3c04d4ca40c9f814eb166e6a553fc))
+* Support loading dynamic local lights from level scene ([#96](https://github.com/fresolina/Unity-Voxel-Lighting/issues/96)) ([5242fa2](https://github.com/fresolina/Unity-Voxel-Lighting/commit/5242fa2257bfa569a911798dcdec066aa1e17c15))
+* Support runtime togglable baked voxel lights ([#95](https://github.com/fresolina/Unity-Voxel-Lighting/issues/95)) ([91c07c9](https://github.com/fresolina/Unity-Voxel-Lighting/commit/91c07c90e359bdfa776d196f4ef3f27cadbee434))
+* Support supersampling baked shadow field ([#94](https://github.com/fresolina/Unity-Voxel-Lighting/issues/94)) ([aa4cb31](https://github.com/fresolina/Unity-Voxel-Lighting/commit/aa4cb31a28ed8c4c74087ba9f99dcf686670bb19))
+* **VoxelLit:** Support alpha cut materials (foliage) ([#97](https://github.com/fresolina/Unity-Voxel-Lighting/issues/97)) ([f6d7f69](https://github.com/fresolina/Unity-Voxel-Lighting/commit/f6d7f6986f7a08eca85f8c40868780e82601af19))
+* **VR:** Add controls for moving sun, toggle flashlight candle ([#88](https://github.com/fresolina/Unity-Voxel-Lighting/issues/88)) ([cdc2fc9](https://github.com/fresolina/Unity-Voxel-Lighting/commit/cdc2fc940a103a3fed72be52d8a741b6ca971326))
+
+
+### Bug Fixes
+
+* **BufferGi:** correct GI read geometry and baked shadow filtering ([#101](https://github.com/fresolina/Unity-Voxel-Lighting/issues/101)) ([6f02d5f](https://github.com/fresolina/Unity-Voxel-Lighting/commit/6f02d5f64df38551c35e7c66312219a45deb6e27))
+* **BufferGi:** Improve voxel normals baking, and optimize dark corner fix using this ([#106](https://github.com/fresolina/Unity-Voxel-Lighting/issues/106)) ([41ae71b](https://github.com/fresolina/Unity-Voxel-Lighting/commit/41ae71bc49307e6a2b6d7af14e7a333456129e70))
+* deterministic gi convergence independent of samples per frame ([#102](https://github.com/fresolina/Unity-Voxel-Lighting/issues/102)) ([0bd961e](https://github.com/fresolina/Unity-Voxel-Lighting/commit/0bd961e5ea16a745612255efef6e4d664883b79b))
+* Fix shadow faulty edge in shadow field and cleanup fields ([#93](https://github.com/fresolina/Unity-Voxel-Lighting/issues/93)) ([40b3ad3](https://github.com/fresolina/Unity-Voxel-Lighting/commit/40b3ad397de73a8dc5310195c7ca4cb2c6f11321))
+* gate self-shadow behind geometric normal ([#99](https://github.com/fresolina/Unity-Voxel-Lighting/issues/99)) ([ef74f04](https://github.com/fresolina/Unity-Voxel-Lighting/commit/ef74f048626e9e01350768a72c45765e46105a93))
+* Move FlameFlicker script from bundle to core ([#111](https://github.com/fresolina/Unity-Voxel-Lighting/issues/111)) ([52be281](https://github.com/fresolina/Unity-Voxel-Lighting/commit/52be2818c2611063b6c490f526e7764330140fb5))
+
 ## [1.5.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.4.0...v1.5.0) (2026-07-11)
 
 
