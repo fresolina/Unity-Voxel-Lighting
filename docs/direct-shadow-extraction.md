@@ -9,7 +9,7 @@
 | [S1 Shader seam](#s1--move-the-shader-seam) | **done 2026-08-28** — byte-identical render, and a positive control proves the moved code is what runs |
 | [S2 Kernel](#s2--move-the-kernel) | **done 2026-08-28** — sun-vis volumes bit-identical at 1/4/16 samples, render unchanged; found a serialized-field aliasing hazard that S3 must plan around |
 | [S3 Driver](#s3--move-the-driver) | **done 2026-08-28** — `VoxelSunShadow` component; volumes and render still bit-identical; settings migrate |
-| [S4 Provider + Unity shadowmap](#s4--provider-interface--unity-shadowmap) | not started |
+| [S4 Provider + Unity shadowmap](#s4--provider-interface--unity-shadowmap) | **done 2026-08-28** — mode 5 ships and agrees with `Baked` to 1.7/255; needed a `ShadowCaster` pass the package never had. Provider interface **deferred, deliberately** |
 | [S5 Per-pixel raymarch](#s5--per-pixel-raymarch) | not started |
 
 **Goal.** Make the main-light sun shadow a **self-contained subsystem with a swappable backend**, so
@@ -436,6 +436,83 @@ branch in a fragment kernel that is already register-pressured.
 
 **Acceptance:** switching a field between `Baked` and `UnityShadowmap` changes only the shadow term;
 `Baked` remains bit-identical to S3; the variant count is recorded before and after.
+
+### Done [2026-08-28] — the second backend works, and it found what the seam was missing
+
+`ShadowMode.UnityShadowmap = 5`. The library declares the mode (`BGI_SHADOW_MODE_ENGINE`) and refuses
+to resolve it — `BgiSampleSunShadow` gained a `wantsEngineShadow` out-param and a signature-compatible
+3-arg overload for callers that cannot help — and `VoxelLit.shader` supplies the value, because
+`TransformWorldToShadowCoord` / `MainLightRealtimeShadow` are URP calls and `ShaderLibrary/` is
+engine-agnostic by a rule the canary enforces. Exactly the boundary `GetMainLight()` already sits on.
+
+Measured at the Bootstrap pose, with URP main-light shadows temporarily enabled (see below):
+
+| mode | md5 | mean luminance | vs `Off` |
+|---|---|---|---|
+| `Off` | `3FCFF783…` | 194.671882 | — |
+| **`UnityShadowmap`** | `0455456D…` | **165.508319** | **−29.16** |
+| `Baked` | `CCED4C32…` | 163.816623 | −30.86 |
+
+**Two unrelated implementations land within 1.7/255 of each other** on the same scene and pose. That
+agreement is the phase's real result: the seam carries a backend that shares no code, no data
+structure and no resolution with the one it replaces.
+
+`Baked` is still `CCED4C32…` — the same hash as S1, S2 and S3 — and the sun-visibility volumes at
+1/4/16 samples are still bit-identical. Adding a whole new pass to the shader changed nothing in the
+shipped configuration.
+
+#### What actually blocked it: there was no `ShadowCaster` pass
+
+The first measurement had `UnityShadowmap` moving the frame's mean luminance by **0.000008** against
+`Off`. The mode was correct; nothing was casting. `VoxelLit` had exactly one pass, `ForwardLit` —
+reasonable for a package whose shadow modes all read fields it bakes itself, and fatal for one that
+samples the engine's map. **A shadow map nothing renders into is uniformly lit**, and every "no
+information" case in this path reads as lit, so the failure was silent by design.
+
+This is the friction S4 existed to find, and it was in the infrastructure rather than the abstraction.
+The pass is written out rather than pulled from URP's `ShadowCasterPass.hlsl`, which expects the whole
+`LitInput.hlsl` surface (`_BaseMap_ST`, `SampleAlbedoAlpha`, URP's `UnityPerMaterial` layout); this
+one needs a position and, under `_ALPHATEST_ON`, one texture read. It carries the same per-material
+cutout as the forward pass, or a foliage card would cast a solid quad.
+
+#### The provider interface was deferred, and that is a decision not an omission
+
+The plan called for `ISunShadowProvider` with the baked path moved behind it. Building it now would
+produce **one non-trivial implementation and four empty ones**: `Baked` owns resources and a march,
+`UnityShadowmap` needs no C# at all, and `Sdf` / `OcclusionField` / `Bitmask` only need their source
+bound. S5's raymarch provider would be nearly empty too. That is structure without a payer, and this
+plan is explicit that a seam is only proven by being exercised — an interface with one real
+implementation teaches nothing about itself.
+
+What was built instead is the thing the mode list actually made visible: **`VolumeIsRead`**. The march
+is the most expensive thing this component can do — hundreds of milliseconds of GPU work per sun move
+at 128³ — and only `Baked` reads its output. Before S4 it ran regardless, because there was only one
+backend to gate on. Now `Tick` returns early when nothing will read the volume, leaving the dirty flag
+set so switching back to `Baked` still re-marches.
+
+The volumes are still allocated and still bound in every mode. That is not an oversight: the shadow
+globals are declared unconditionally by the `GI_VOXEL_BUFFER` variant, and on WebGPU a
+declared-but-unbound global fails pipeline creation and renders everything black. Skipping the work is
+safe; skipping the binding is not. Reclaiming that 8.4 MB needs a 1×1×1 dummy volume to bind instead,
+which is worth doing and is not this phase.
+
+#### On measuring this at all
+
+**This project ships with URP main-light shadows OFF** (`supportsMainLightShadows = false`,
+`shadowDistance = 0`) — sensible for a package that replaces them. So mode 5 correctly resolves to
+`1.0` here and is indistinguishable from `Off`, which is the fail-open rule working, and is also
+useless as evidence. The measurements above were taken with those four URP settings toggled on
+in-memory inside a single `eval` and restored in a `finally`, with the restore re-read from a fresh
+`SerializedObject` afterwards and the render confirmed back at the baseline hash. Nothing was written
+to disk. **Anyone re-running this must do the same, or they will measure the fail-open path and
+conclude the mode is broken.**
+
+The variant count could not be read: `ShaderUtil.GetVariantCount` did not match the expected signature
+on this Unity version, and it was not worth chasing. `_MAIN_LIGHT_SHADOWS{,_CASCADE,_SCREEN}` ×
+`_SHADOWS_SOFT` is a nominal ×8 on `VoxelLit`, on top of `GI_* × TONEMAP_* × snap × debug`. **Measure
+it before shipping**, and fall back to a separate SubShader rather than a uniform branch if it does not
+pay — URP's shadow sampling is not something to put behind a dynamic branch in a kernel that is
+already register-pressured.
 
 ## S5 — Per-pixel raymarch
 

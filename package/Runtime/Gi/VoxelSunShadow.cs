@@ -34,11 +34,13 @@ namespace Lotec.Lighting {
         //   Sdf (2)            : crisp per-pixel raymarch of the hi-res SDF; needs an SDF baked on the volume.
         //   OcclusionField (3) : the volume's baked per-direction occlusion field.
         //   Bitmask (4)        : the volume's baked directional occlusion bitmask.
+        //   UnityShadowmap (5) : URP's own cascaded main-light shadow map, resolved in VoxelLit.shader
+        //                        (the library is engine-agnostic and cannot call into URP).
         // Values match _BgiShadowMode* in ShaderLibrary/VoxelSunShadow.hlsl and must not be renumbered.
         //
         // Sdf/OcclusionField/Bitmask each need their matching source present on the volume so the
         // textures they read are bound; they also have no effect where their source does not reach.
-        public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2, OcclusionField = 3, Bitmask = 4 }
+        public enum ShadowMode { Off = 0, Baked = 1, Sdf = 2, OcclusionField = 3, Bitmask = 4, UnityShadowmap = 5 }
 
         [Tooltip("Sun-shadow for the FINE volume. None fall through - each is explicit.\n " +
                  "Off: no sun shadow at all - full direct light.\n " +
@@ -224,6 +226,11 @@ namespace Lotec.Lighting {
 
             // Checked BEFORE any solve gate the caller applies, so a moved sun starts reaching the
             // screen in the same frame it moved.
+            // Nothing reads the volume in the other modes, so do not spend the march filling it. The
+            // dirty flag is deliberately LEFT SET: switching back to Baked must re-march, and a flag
+            // cleared while the work was skipped would leave a volume nobody ever filled.
+            if (!VolumeIsRead) return;
+
             if (sunMoved || _sunVisDirty) {
                 _sunVisDirty = false;
                 // NEVER restart a sweep that is already running. A CONTINUOUSLY moving sun (a sun
@@ -241,6 +248,21 @@ namespace Lotec.Lighting {
             }
             if (SunVisibilityPending) DispatchChunk(geometry);
         }
+
+        /// <summary>Does any field actually READ the sun-visibility volume? Only the Baked mode does.
+        /// <para>
+        /// The march is by far the most expensive thing this component can do - hundreds of
+        /// milliseconds of GPU work per sun move at 128 - and every other mode ignores its output
+        /// entirely. Before S4 it ran regardless, because there was only ever one backend worth
+        /// gating on; with a second one in the list the waste became worth naming.
+        /// </para>
+        /// <para>
+        /// The VOLUMES are still allocated and still bound. That is not an oversight: the shadow
+        /// globals are declared unconditionally by the GI_VOXEL_BUFFER variant, and on WebGPU a
+        /// declared-but-unbound global fails pipeline creation and renders everything BLACK. Skipping
+        /// the work is safe; skipping the binding is not.
+        /// </para></summary>
+        public bool VolumeIsRead => _fineShadow == ShadowMode.Baked || _coarseShadow == ShadowMode.Baked;
 
         void StartSweep() {
             _sunVisSliceBase = 0;

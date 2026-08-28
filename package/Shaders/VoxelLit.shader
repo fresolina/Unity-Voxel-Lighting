@@ -67,6 +67,22 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             // Mutually exclusive - the buffer GI updater enables its keyword; GiMethodSelector drives
             // the component-less GI_UNITY / GI_OFF.
             #pragma multi_compile GI_OFF GI_VOXEL_BUFFER GI_UNITY
+            // URP MAIN-LIGHT SHADOW MAP, for VoxelSunShadow's UnityShadowmap mode. The engine's own
+            // cascaded shadow map, resolved HERE and nowhere else: TransformWorldToShadowCoord and
+            // MainLightRealtimeShadow are URP calls, and ShaderLibrary/ is engine-agnostic by a rule
+            // the canary compute enforces. So the library declares the mode and this entry point
+            // supplies the value - the same boundary GetMainLight() already sits on.
+            //
+            // URP sets these keywords itself from the pipeline asset and the light; nothing in this
+            // package enables them. With main-light shadows off they compile to the bare variant, the
+            // mode resolves to 1.0, and the surface is lit - the fail-open rule this whole path uses.
+            //
+            // COST: this multiplies VoxelLit's variant set, on top of GI_* x TONEMAP_* x snap. That is
+            // a known, deliberate charge - measure it and fall back to a separate SubShader rather
+            // than a uniform branch if it does not pay, because URP's shadow sampling is not something
+            // to put behind a dynamic branch in a kernel that is already register-pressured.
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
+            #pragma multi_compile_fragment _ _SHADOWS_SOFT
             // Display transform, COMPILE-TIME (not a uniform branch). A fragment kernel's register
             // allocation covers every path it contains, so keeping all four options in one kernel sized
             // it for AgX's worst case (two 3x3 matrices, a degree-6 polynomial, log2/pow). That capped
@@ -207,7 +223,19 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 // GetShadow as before.
                 #if defined(GI_VOXEL_BUFFER)
                     // Geometric normal, not N: this is a voxel-grid lookup, not a shading term.
-                    half bgiShadow = BgiSampleSunShadow(IN.positionWS, geoN, light.direction);
+                    bool wantsEngineShadow;
+                    half bgiShadow = BgiSampleSunShadow(IN.positionWS, geoN, light.direction, wantsEngineShadow);
+                    // UnityShadowmap mode. The library cannot make this call - see the keyword block
+                    // above - so it hands back "not mine" and the value is supplied here.
+                    //
+                    // A uniform branch, not a keyword: the mode is a scalar the whole draw agrees on,
+                    // and the URP keywords above already carry the register cost of the shadow path
+                    // whenever they are on. Adding a sixth VoxelLit keyword for the selector would
+                    // multiply the variant set again to save a predicted-taken branch.
+                    #if defined(_MAIN_LIGHT_SHADOWS) || defined(_MAIN_LIGHT_SHADOWS_CASCADE) || defined(_MAIN_LIGHT_SHADOWS_SCREEN)
+                        if (wantsEngineShadow)
+                            bgiShadow = (half)MainLightRealtimeShadow(TransformWorldToShadowCoord(IN.positionWS));
+                    #endif
                     half3 lit = GetMainDirectLightingShadow(light.direction, light.color, IN.positionWS, N, geoN, albedo, bgiShadow);
                 #else
                     half3 lit = GetMainDirectLighting(light.direction, light.color, IN.positionWS, N, geoN, albedo);
@@ -300,6 +328,100 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 // _ALPHATEST_ON that value is a live cutoff input the author tunes, and leaking it
                 // into the eye buffer would make a cut adjustment silently change compositing.
                 return half4(lit, 1.0h);
+            }
+            ENDHLSL
+        }
+
+        Pass
+        {
+            // SHADOW CASTER, and the package went without one until S4 because nothing sampled an
+            // engine shadow map: the voxel shadow modes all read fields this package bakes itself.
+            // The UnityShadowmap mode does sample URP's map, and a map nothing renders into is
+            // uniformly lit - which is exactly what the first measurement showed (mode 5 moved the
+            // frame's mean luminance by 0.000008 against Off). The mode was correct; there was simply
+            // nothing casting.
+            //
+            // Written out rather than pulled from URP's ShadowCasterPass.hlsl, which expects the full
+            // LitInput.hlsl surface (_BaseMap_ST, SampleAlbedoAlpha, the UnityPerMaterial layout URP
+            // declares). This pass needs a position and, under _ALPHATEST_ON, one texture read; taking
+            // the dependency to save thirty lines would tie the shader to that layout.
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
+            Cull [_Cull]
+
+            HLSLPROGRAM
+            #pragma target 4.5
+            #pragma vertex shadowVert
+            #pragma fragment shadowFrag
+            // Same per-material cutout as the forward pass: foliage must cut its shadow too, or a
+            // leaf card casts a solid quad.
+            #pragma shader_feature_local_fragment _ALPHATEST_ON
+            // Punctual shadows bias along the light vector rather than a constant direction. URP sets
+            // this when rendering a point/spot shadow slice; vertex-stage only.
+            #pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
+
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
+
+            CBUFFER_START(UnityPerMaterial)
+                TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
+                TEXTURE2D(_BumpMap); SAMPLER(sampler_BumpMap);
+                half4 _BaseColor;
+                half _Roughness;
+                half _Emission;
+                TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
+                half4 _EmissionColor;
+                half _ReceiveLocalShadows;
+                half _Cutoff;
+            CBUFFER_END
+
+            // Set by URP for the slice being rendered: the direction shadow bias is applied along.
+            float3 _LightDirection;
+            float3 _LightPosition;
+
+            struct ShadowIn {
+                float4 positionOS : POSITION;
+                float3 normalOS   : NORMAL;
+                float2 uv         : TEXCOORD0;
+            };
+
+            struct ShadowV2F {
+                float4 positionHCS : SV_POSITION;
+                float2 uv          : TEXCOORD0;
+            };
+
+            ShadowV2F shadowVert(ShadowIn IN) {
+                ShadowV2F OUT;
+                float3 positionWS = TransformObjectToWorld(IN.positionOS.xyz);
+                float3 normalWS = TransformObjectToWorldNormal(IN.normalOS);
+                #if defined(_CASTING_PUNCTUAL_LIGHT_SHADOW)
+                    float3 lightDirectionWS = normalize(_LightPosition - positionWS);
+                #else
+                    float3 lightDirectionWS = _LightDirection;
+                #endif
+                // Normal + depth bias, then a clamp to the near plane. Skipping the clamp lets a
+                // biased vertex cross the near plane and wrap, which shows as shadow acne only at
+                // grazing angles - the kind of bug that survives a casual look.
+                OUT.positionHCS = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, lightDirectionWS));
+                #if UNITY_REVERSED_Z
+                    OUT.positionHCS.z = min(OUT.positionHCS.z, OUT.positionHCS.w * UNITY_NEAR_CLIP_VALUE);
+                #else
+                    OUT.positionHCS.z = max(OUT.positionHCS.z, OUT.positionHCS.w * UNITY_NEAR_CLIP_VALUE);
+                #endif
+                OUT.uv = IN.uv;
+                return OUT;
+            }
+
+            half4 shadowFrag(ShadowV2F IN) : SV_Target {
+                #if defined(_ALPHATEST_ON)
+                    half4 baseTex = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv);
+                    clip(baseTex.a * _BaseColor.a - _Cutoff);
+                #endif
+                return 0;
             }
             ENDHLSL
         }

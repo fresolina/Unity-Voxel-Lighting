@@ -126,6 +126,19 @@ half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
     return saturate((a - 0.5h) * (half)_BgiShadowSharpness + 0.5h);
 }
 
+// Mode 5, ENGINE: the shadow this library cannot resolve.
+//
+// URP's TransformWorldToShadowCoord / MainLightRealtimeShadow are engine calls, and every header in
+// this folder is engine-agnostic (BufferGiCommonCanary.compute fails the build the moment one is not).
+// So this mode is a DECLARATION here and a resolution in VoxelLit.shader: the sampler below returns
+// "not mine" and the .shader entry point, which already includes URP's Lighting.hlsl, supplies the
+// value. That is the same boundary the whole package draws - only the entry points know URP exists.
+//
+// Fails open. If the mode is selected but the entry point does not resolve it (a shader that never
+// compiled the URP shadow keywords, or a pipeline with main-light shadows off), the value stays 1.0
+// and the surface is LIT. Every "no information" case in this path reads as lit, so a mistake shows
+// up as a missing shadow rather than as black geometry.
+#define BGI_SHADOW_MODE_ENGINE 5
 // The buffer-GI main-light sun visibility for a shading point, from whichever per-field ShadowMode is
 // selected. This function is the SOLE authority for the buffer-GI main-light shadow: Off (0) returns
 // 1.0 = genuinely no sun shadow (full direct light), NOT a fall-through to any other shadow source;
@@ -140,9 +153,10 @@ half BgiSampleShadowTexture(float3 worldPos, float3 normal, bool insideFine)
 // `normal` MUST be the geometric (vertex) normal, never a normal-mapped one - it offsets the sample
 // off the surface, and the voxel grid knows nothing about normal maps. Feeding it a per-texel normal
 // makes the sampled point jump within a single flat face.
-half BgiSampleSunShadow(float3 worldPos, float3 normal, float3 lightDir)
+half BgiSampleSunShadow(float3 worldPos, float3 normal, float3 lightDir, out bool wantsEngineShadow)
 {
     half shadow = 1.0h; // Off (mode 0) keeps this: no sun shadow, full direct light.
+    wantsEngineShadow = false;
 
     bool insideFine; float3 origin, voxelSize; uint baseOffset;
     BgiSelectField(worldPos, insideFine, origin, voxelSize, baseOffset);
@@ -167,7 +181,16 @@ half BgiSampleSunShadow(float3 worldPos, float3 normal, float3 lightDir)
     else if (mode == 2) shadow = GetShadowFromSdf(lightDir, worldPos, 1.0e+10f); // lightDir is unit
     else if (mode == 3) shadow = saturate(GetOccFieldShadow(worldPos, normal));
     else if (mode == 4) shadow = saturate(GetBitmaskShadow(worldPos, normal));
+    else if (mode == BGI_SHADOW_MODE_ENGINE) wantsEngineShadow = true; // resolved by the caller; stays 1.0 here
     return shadow;
+}
+
+// Signature-compatible overload for callers that cannot resolve the engine shadow (anything that is
+// not a URP .shader entry point). Mode 5 reads as LIT through this one, by the fail-open rule above.
+half BgiSampleSunShadow(float3 worldPos, float3 normal, float3 lightDir)
+{
+    bool ignored;
+    return BgiSampleSunShadow(worldPos, normal, lightDir, ignored);
 }
 
 #endif // LOTEC_VOXEL_SUN_SHADOW_INCLUDED

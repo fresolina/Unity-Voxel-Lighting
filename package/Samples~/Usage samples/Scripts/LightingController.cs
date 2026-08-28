@@ -52,7 +52,7 @@ namespace Lotec.Lighting.Samples {
         // Mirrors VoxelSunShadow.ShadowMode (the buffer-GI fine field is the sole shadow authority now).
         // Bitmask has a single read path under buffer GI (a point fetch), so the old Point/8-tap split
         // is collapsed to one entry.
-        public enum ShadowUiMode { Off, Baked, SDF, OcclusionField, Bitmask }
+        public enum ShadowUiMode { Off, Baked, SDF, OcclusionField, Bitmask, UnityShadowmap }
 
         static LightingController s_instance;
 
@@ -429,6 +429,7 @@ namespace Lotec.Lighting.Samples {
                     VoxelSunShadow.ShadowMode.Sdf => ShadowUiMode.SDF,
                     VoxelSunShadow.ShadowMode.OcclusionField => ShadowUiMode.OcclusionField,
                     VoxelSunShadow.ShadowMode.Bitmask => ShadowUiMode.Bitmask,
+                    VoxelSunShadow.ShadowMode.UnityShadowmap => ShadowUiMode.UnityShadowmap,
                     _ => ShadowUiMode.Off,
                 };
             }
@@ -445,6 +446,7 @@ namespace Lotec.Lighting.Samples {
                     ShadowUiMode.SDF => VoxelSunShadow.ShadowMode.Sdf,
                     ShadowUiMode.OcclusionField => VoxelSunShadow.ShadowMode.OcclusionField,
                     ShadowUiMode.Bitmask => VoxelSunShadow.ShadowMode.Bitmask,
+                    ShadowUiMode.UnityShadowmap => VoxelSunShadow.ShadowMode.UnityShadowmap,
                     _ => VoxelSunShadow.ShadowMode.Off,
                 };
 
