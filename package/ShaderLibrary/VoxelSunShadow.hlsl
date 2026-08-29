@@ -212,26 +212,74 @@ half BgiRaymarchSunShadow(float3 worldPos, float3 normal, float3 lightDir,
                           bool insideFine, float3 origin, float3 gridSize)
 {
     int grid = (int)BGI_OCC_GRID;
-    // NO ORIGIN BIAS. The ray starts exactly at the shading point.
+    float3 hiVox = gridSize / (float)grid;
+
+    // SELF-SHADOW EXCLUSION. Applied to WHERE THE RAY STARTS, never to WHEN IT CROSSED A BOUNDARY.
     //
-    // Biasing along the normal was tried at every value and cannot work, because the two failures it
-    // has to sit between are not on the same scale:
-    //   - too small: the ray starts inside the shading point's own cell and reports it. Voxel-scale
-    //     acne, visible as regular STRIPING across sunlit walls.
-    //   - too large: the origin leaves the structure that is doing the occluding. At occupancy 128 on
-    //     Sponza a cell is 0.169 x 0.117 x 0.267 m, so a one-cell normal offset lifts a point out from
-    //     under an arcade vault - the entire arcade then reads sunlit.
-    // There is no value between those. Self-shadowing is handled by _BgiRaymarchSkipCells below, which
-    // ignores hits for a bounded number of cells WITHOUT moving where the ray starts.
+    // The region a surface can wrongly shadow itself in is the slab of its own voxelisation, roughly
+    // one cell thick along its normal, so `_BgiRaymarchSkipCells` is still a count of cells measured
+    // PERPENDICULAR to the surface and its serialized meaning is unchanged. What changed is how that
+    // distance is enforced.
     //
-    // The walk itself is not in question: from identical origins it agrees with the reference march
-    // (MarchOccupancyHiFrom, via the sun-visibility volume) on 35,507 of 35,507 air texels.
-    float3 p = (worldPos - origin) / max(gridSize, 1e-6) * (float)grid;
-    if (any(p < 0.0) || any(p >= (float)grid)) return 1.0h;   // outside the field -> no information -> lit
+    // It used to be a per-step predicate, `tCross * ndl >= skipDist`, and that is what made shadow
+    // edges saw-toothed wherever the occluder sat inside the exclusion distance. The reason is a
+    // swap of which side of the comparison is quantised:
+    //
+    //   Silhouette test (no skipDist involved): "which cell is the ray in when it crosses a fixed
+    //   lattice plane". A CONTINUOUS quantity against a FIXED threshold -> the boundary on the
+    //   receiver is exact, and stays a straight line down to the pixel.
+    //
+    //   Old per-step predicate: "is the last boundary crossing that landed in solid geometry farther
+    //   than skipDist". tCross only takes values on the DDA's crossing lattice, so this is a
+    //   LATTICE-QUANTISED quantity against a CONTINUOUS threshold. As the shading point slides along
+    //   the surface the deciding crossing drifts, then jumps to the next one - a ramp, then a
+    //   snap-back. Sawtooth, with a period of exactly one crossing on the dominant axis.
+    //
+    // Measured on Playground, fine field at occupancy 128: on the yellow wall directly beneath the
+    // roof's overhang, the blocking cell walked (96, 96, 88) -> (96, 90, 88) - X and Z pinned, Y
+    // decrementing once per 20 image rows - and the shadow edge sawtoothed at exactly that period.
+    // The other edge in the same frame, cast by a wall 11 cells away and therefore decided by the
+    // silhouette rather than by skipDist, was pixel-perfect straight in the same image, and did not
+    // move at all when _BgiRaymarchSkipCells went 2 -> 4. One knob, two edges, one of them immune:
+    // that is what identified the predicate rather than the lattice as the cause.
+    //
+    // So: advance the ORIGIN along the ray by the distance that clears the slab, and then count
+    // everything. `skipDist / ndl` is the travel needed to gain `skipDist` perpendicular, which is
+    // the same slope-correct quantity the predicate used, evaluated once instead of per step.
+    //
+    // This is NOT the normal-offset bias the header used to warn about, and the old warning does not
+    // apply: that moved the ray SIDEWAYS off its own line, which is what lifted a shading point out
+    // from under an occluder it was genuinely beneath. This slides the origin ALONG the ray, so the
+    // set of occluders on the line is untouched - only the prefix that the exclusion was always meant
+    // to discard is dropped.
+    //
+    // N.L <= 0 means the surface faces away from the sun: self-shadowed by definition, the geometric
+    // gate already kills its direct term, so nothing is excluded there. As N.L -> 0 the advance
+    // diverges and the start leaves the box, which returns LIT - the same end the old predicate
+    // reached (it required tCross >= skipDist / ndl, which no crossing satisfied).
+    float3 nUnit = normalize(normal);
+    float ndl = dot(nUnit, lightDir);
+    float cellAlongN = dot(abs(nUnit), hiVox);          // world size of one cell along the normal
+    float skipDist = (float)max(_BgiRaymarchSkipCells, 0) * cellAlongN;
+    float advance = (ndl > 1e-3) ? skipDist / ndl : 0.0;
+
+    float3 p = (worldPos + lightDir * advance - origin) / max(gridSize, 1e-6) * (float)grid;
+    if (any(p < 0.0) || any(p >= (float)grid)) return 1.0h;  // outside the field -> no information -> lit
 
     int3 cell = (int3)floor(p);
+    uint wordCache = 0u; int3 cachedWord = int3(-1, -1, -1);
+
+    // TEST THE STARTING CELL, before any step. This is the half of the fix that makes the edge sharp.
+    //
+    // The old loop stepped first and never tested its origin cell, which is correct only when the
+    // origin is the shading point itself. Here the origin has already been advanced clear of the
+    // surface, so the cell it lands in is ordinary scene geometry and skipping it would reintroduce
+    // the quantisation by the back door: "is the first STEP into solid" depends on which axis happens
+    // to be crossed first, which flips on the lattice. "Is the cell I am standing in solid" is a pure
+    // function of the continuous start position, and that is what keeps the boundary a straight line.
+    if (BgiOccTexSolid(insideFine, cell, wordCache, cachedWord)) return 0.0h;
+
     float3 inCell = p - (float3)cell;
-    float3 hiVox = gridSize / (float)grid;
     float3 d = lightDir / max(hiVox, 1e-6);
     int3 stepDir = int3(d.x >= 0 ? 1 : -1, d.y >= 0 ? 1 : -1, d.z >= 0 ? 1 : -1);
     float3 inv = 1.0 / max(abs(d), 1e-6);
@@ -239,55 +287,24 @@ half BgiRaymarchSunShadow(float3 worldPos, float3 normal, float3 lightDir,
                                d.y >= 0 ? 1.0 - inCell.y : inCell.y,
                                d.z >= 0 ? 1.0 - inCell.z : inCell.z);
 
-    uint wordCache = 0u; int3 cachedWord = int3(-1, -1, -1);
     int maxSteps = max(_BgiRaymarchMaxSteps, 0);
-    // SELF-SHADOW EXCLUSION, measured as PERPENDICULAR DISTANCE from the surface - not as a step
-    // count, and not as an origin offset.
-    //
-    // The region a surface can wrongly shadow itself in is the slab of its own voxelisation, roughly
-    // one cell thick along its normal. So ignore hits while the ray is still inside that slab, and
-    // count hits everywhere else. Because t is world distance along the ray, the perpendicular
-    // distance travelled is simply t * N.L - which makes this automatically slope-correct at no cost:
-    // a grazing ray needs a long t to clear the same slab, and gets it.
-    //
-    // Capping a STEP COUNT instead was the previous attempt and it was badly wrong. Scaling a count by
-    // 1/N.L explodes as N.L goes to zero, and the clamp that stopped it running away (32 cells) is
-    // 8.6 m along Z at this cell size - so an interior wall ignored every occluder within 8.6 m and
-    // rendered lit inside a covered arcade. The quantity to bound is a DISTANCE, and a small one.
-    //
-    // N.L <= 0 means the surface faces away from the sun: it is self-shadowed by definition and the
-    // geometric gate already kills its direct term, so nothing is excluded there.
-    float3 nUnit = normalize(normal);
-    float ndl = dot(nUnit, lightDir);
-    float cellAlongN = dot(abs(nUnit), hiVox);          // world size of one cell along the normal
-    float skipDist = (ndl > 0.0) ? (float)max(_BgiRaymarchSkipCells, 0) * cellAlongN : 0.0;
     [loop]
     for (int s = 0; s < maxSteps; s++) {
-        // Step FIRST, so the origin cell never occludes itself - the same rule the compute march uses.
-        // tCross is the distance to the boundary just crossed, in WORLD units: d = lightDir / hiVox, so
-        // the parameter of this walk is world distance along the ray.
-        float tCross;
         if (tMax.x < tMax.y) {
-            if (tMax.x < tMax.z) { tCross = tMax.x; cell.x += stepDir.x; tMax.x += inv.x; }
-            else                 { tCross = tMax.z; cell.z += stepDir.z; tMax.z += inv.z; }
+            if (tMax.x < tMax.z) { cell.x += stepDir.x; tMax.x += inv.x; }
+            else                 { cell.z += stepDir.z; tMax.z += inv.z; }
         } else {
-            if (tMax.y < tMax.z) { tCross = tMax.y; cell.y += stepDir.y; tMax.y += inv.y; }
-            else                 { tCross = tMax.z; cell.z += stepDir.z; tMax.z += inv.z; }
+            if (tMax.y < tMax.z) { cell.y += stepDir.y; tMax.y += inv.y; }
+            else                 { cell.z += stepDir.z; tMax.z += inv.z; }
         }
-        // ESCAPED THE VOLUME. Returned as LIT, and at a low sun this is the mode's dominant error:
-        // the box is 21.6 x 14.9 x 34.1 m on Sponza, so a ray leaving an interior surface at 22 deg
-        // elevation exits the far face after ~11 m having risen 4 m, long before it could clear the
-        // roof. Measured at an arcade pose: 68% of shaded pixels reach this line, 0% run out of steps,
-        // and forcing this to 0.0h makes the frame match the Baked mode exactly.
-        //
-        // There is no correct constant here. 'Lit' is wrong indoors; 'shadowed' is wrong for an
-        // exterior wall whose ray genuinely leaves into open sky. The query needs a source that covers
-        // what lies beyond the box - the coarse field, which this scene does not have. See the S5
-        // notes in docs/direct-shadow-extraction.md.
+        // ESCAPED THE VOLUME. Returned as LIT. 'Lit' is wrong for a ray that leaves an interior
+        // sideways; 'shadowed' is wrong for an exterior wall whose ray genuinely leaves into open
+        // sky. Covering the difference needs a source beyond the box - the coarse field. Measured in
+        // Playground: 53.3% of air cells escape, but 85% of those leave through the TOP face where
+        // 'lit' is right, so only 7.8% of rays are in the population this branch can get wrong.
+        // See the S5 notes in docs/direct-shadow-extraction.md.
         if (any(cell < 0) || any(cell >= grid)) return 1.0h;
-        // Still inside the surface's own slab? Then a hit here is its own geometry, not an occluder.
-        if (BgiOccTexSolid(insideFine, cell, wordCache, cachedWord) && tCross * ndl >= skipDist)
-            return 0.0h;
+        if (BgiOccTexSolid(insideFine, cell, wordCache, cachedWord)) return 0.0h;
     }
     return 1.0h;   // budget spent without a hit: fail open (measured to happen for 0% of pixels)
 }

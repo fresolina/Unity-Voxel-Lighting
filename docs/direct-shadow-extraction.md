@@ -588,6 +588,82 @@ cleanest: `Baked` at the 25 deg pose shows a mottled band along the roof lip, bl
 a jagged edge on the yellow wall and a spuriously lit interior floor, none of which `Raymarch` or the
 shadow map has.
 
+#### Sawtooth shadow edges [2026-08-29] — the exclusion predicate, not the lattice
+
+fs: *"Why does the vertical shadow at the middle-top have jagged edges, but the diagonal shadow edge
+further down is perfect?"* Two shadow edges in one frame on the same wall, from box geometry with no
+serration anywhere in the scene, one sawtoothed and one pixel-perfect.
+
+Tracing the blocking cell per pixel separated them completely:
+
+| edge | blocking cell | DDA axis | receiver-occluder gap |
+|---|---|---|---|
+| smooth diagonal | `(94→92, **90**, 101)` — Wall (3)'s top-near corner | Z | ~11 cells |
+| sawtoothed | `(96, **96→90**, 88)` — the Roof's outermost Z column | Y | **0 — they touch** |
+
+**The two edges were decided by different rules, and only one of them involved `_BgiRaymarchSkipCells`.**
+
+- The diagonal is a pure *silhouette* test: which cell is the ray in when it crosses a fixed lattice
+  plane. A CONTINUOUS quantity against a FIXED threshold — exact, straight to the pixel.
+- The sawtoothed edge never reaches a silhouette. The wall's top and the roof's underside share
+  occupancy cell Y=89 (wall top y=2.97, roof underside y=2.97), so the ray starts inside the occluder
+  and the answer is decided entirely by the exclusion predicate `tCross * ndl >= skipDist`. `tCross`
+  only takes values on the DDA's crossing lattice, so that is a LATTICE-QUANTISED quantity against a
+  CONTINUOUS threshold — **the roles are swapped**. As the shading point slides along the wall the
+  deciding crossing drifts (the ramp) and then jumps to the next one (the snap-back).
+
+Grazing incidence set the scale: N·L = 0.28 on that wall, and the predicate is on *perpendicular*
+distance, so clearing 2 cells (10 cm) costs **0.36 m of travel** — 4.4 Z cells and 7.5 Y cells of roof,
+all ignored.
+
+The identifying experiment was a knob that moves one edge and not the other: `_BgiRaymarchSkipCells`
+2 → 4 relocated the sawtoothed edge and left the diagonal **pixel-identical**.
+
+**The fix: advance the ORIGIN along the ray by `skipDist / ndl`, then count every cell including the
+one the ray starts in.** Same slope-correct exclusion distance, evaluated once against a position
+instead of per step against a crossing time. This is *not* the normal-offset bias the header warns
+about — that moved the ray sideways off its own line, which is what used to lift a shading point out
+from under an occluder it was genuinely beneath. Sliding along the ray leaves the occluder set on the
+line untouched. Testing the start cell is the other half: "is the first STEP solid" depends on which
+axis is crossed first and flips on the lattice, while "is the cell I am standing in solid" is a pure
+function of the continuous start position.
+
+Measured on the sawtoothed edge, boundary extracted from the rendered frame and compared against the
+analytic edge of the true triangle geometry (jaggedness = RMS residual about the boundary's own
+best-fit line, which separates it from the slope error):
+
+| | jaggedness | fitted slope (true 0.555) | mean position error |
+|---|---|---|---|
+| before | 0.0093 m (0.115 cells) | 0.000 | −1.28 cells |
+| **after** | **0.0010 m (0.012 cells)** | 0.001 | −1.09 cells |
+| `Baked` | 0.0081 m (0.100 cells) | 0.618 | −0.05 cells |
+| Unity shadow map | 0.0205 m (0.254 cells) | 0.012 | −2.52 cells |
+
+**9x smoother, and now the smoothest edge of the three modes** — 8x smoother than `Baked`, 20x
+smoother than URP's shadow map, which staggers on the same edge for the same underlying reason (a bias
+distance against a discrete sample lattice at grazing incidence). Disagreement against the shadow map
+improved at every pose: 70° 20.6% → **17.3%**, 45° 10.4% → **7.2%**, 25° 5.7% → **2.0%**.
+
+**Still open: the edge is straight but VERTICAL, where the true edge slopes at dz/dy = 0.555.** The
+advance is a constant vector, so wherever it is long enough to jump the receiver past the occluder's
+entry the boundary collapses to a constant threshold in z. `Baked` gets the slope right (0.618) and
+the position right (−0.05 cells); the raymarch does not. `_BgiRaymarchSkipCells = 1` recovers most of
+it — position −0.17 cells, slope 0.395 — at the cost of jaggedness (0.165 cells). The default is left
+at 2 because that trade has only been measured on one edge in one scene.
+
+##### Rejected: excluding by distance from the surface PLANE
+
+The principled-looking alternative — drop the advance, and ignore a hit whose cell centre is not in
+front of the shading point's tangent plane — **won the edge metric and was still wrong**. At
+`skipCells = 0` it scored the best numbers taken here: jaggedness 0.035 cells, slope 0.658, position
+error **+0.05 cells**. It also turned the fully sunlit top of the Roof black, because that surface's
+voxelisation is thicker than a half cell, so the plane rule under-excludes and the surface shadows
+itself. Frame mean 49.55 against 57.28 for the shipped version.
+
+Recorded because the edge metric never saw it: the defect was on a different surface, and only looking
+at the frame caught it. Same shape as the "sealed diagonal" count in `verification-discipline` — a
+proxy metric optimised hard becomes a specification, including its blind spots.
+
 #### Why the sweeps in CORRECTION 1 and 3 could not have found this
 
 Every knob sweep on the record was run against this bug, and the bug is invisible to all of them:
