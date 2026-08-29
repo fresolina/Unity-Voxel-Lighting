@@ -935,6 +935,70 @@ back into a shipping variant. That was the stated gate on S5, and it is cleared.
 configuration is untouched — `Baked` is still `CCED4C32…` and the sun-vis volumes are still
 bit-identical at 1/4/16 samples, through all five phases.
 
+## Baked: ragged shadow edges were the SUPERSAMPLING JITTER [2026-08-29]
+
+fs, on a floor pose in Playground: *"Why is the shadow edge so weird and not straight?"* `Baked`
+reconstructed a straight occluder edge as an irregular mountain range roughly 10 cm tall, while
+`Raymarch` and URP's shadow map both rendered it straight in the same frame.
+
+**Cause: `CSSunVisibility` used a DIFFERENT jitter offset set in every texel**
+(`BgiVoxelJitterBase((int3)t)`). That makes each texel's coverage estimate an *independent* random
+variable. The stored fraction is exactly what the trilinear tap plus `_BgiShadowSharpness`
+reconstructs the 0.5 iso-surface from, so independent per-texel error displaces that iso-surface
+independently along the edge, and `_bakedShadowSharpness = 2` doubles the displacement along with the
+signal.
+
+RMS deviation of the rendered edge from its own best-fit line, in metres:
+
+| samples | 1 | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|
+| per-texel offsets (was) | 0.0007 | **0.0202** | 0.0156 | 0.0096 | 0.0072 |
+| shared, centred offsets (is) | 0.0007 | **0.0006** | 0.0006 | 0.0006 | 0.0006 |
+
+For reference in the same frame: `Raymarch` 0.0007, URP shadow map 0.0025.
+
+**The top row is a trap worth naming.** ONE sample is straight — it takes the texel centre
+(`offset = 0.5` when `n <= 1`), so the field is clean binary with no estimate and therefore no noise.
+TWO samples is the worst setting available. Recovery is 1/√n while `_sunShadowSamples` is clamped to
+16 at `VoxelSunShadow.cs:314`, so the knob cannot be turned far enough to fix it. Raising sharpness
+1 → 2 moved the same figure 0.0087 → 0.0156, which is the amplification visible on its own.
+
+**The fix is to share one centred offset set across all texels.** That makes the estimate BIASED
+rather than NOISY, and a bias that varies smoothly along an edge leaves the edge straight. Centring
+matters: with `jitterBase = 0` the first sample lands on the texel corner and the frame mean drifts
+with n (83.12 / 84.47 / 84.39 at n = 4 / 8 / 16); centred, it converges (80.51 / 80.56 / 80.54).
+
+**It costs nothing in accuracy.** Against URP's shadow map at three sun elevations, over a mask
+defined only by `Off` and the shadow map so the figure is independent of any raymarch setting:
+
+| sun elevation | 70° | 45° | 25° |
+|---|---|---|---|
+| per-texel: disagreement / mean abs dLum | 15.9% / 22.6 | 8.5% / 9.0 | 1.3% / 1.6 |
+| shared centred: disagreement / mean abs dLum | 15.9% / 22.8 | 8.5% / 9.1 | 1.3% / 1.6 |
+
+### Two things this changes and one it does not
+
+- **`Baked` is no longer bit-identical to the pre-S1 baseline.** S1–S4 all used "the shipped `Baked`
+  path is byte-for-byte unchanged" as their null, and that guard is now deliberately spent. The
+  reference hashes in those sections (`9EBE4F7E` / `2B566E42` / `19A74531`, render `CCED4C32`,
+  mean 163.816623) describe the OLD sampling and will not reproduce. They remain valid as a record
+  that the extraction itself changed nothing.
+- **The per-texel version existed for a reason**, and the reason is now the risk: a shared set can
+  miss a sub-texel feature in EVERY texel instead of in a random subset, turning noise into a coherent
+  artifact. Not observed in Playground across three elevations. **Not yet checked on Sponza**, which
+  is where `one-scene-is-not-a-population` says a renderer-level claim has to be re-taken.
+- **It does not fix everything.** In the same final frame the yellow wall at the far left — a much
+  more grazing surface — still has a wobbly edge. Only the floor was measured.
+
+### Harness note: `Invalidate()` alone does not restart the pass
+
+`SunVisibilityPending` is `_sunVisSliceBase < _allocatedShadowGrid`, and `_sunVisSliceBase` is only
+reset inside `Tick` when it consumes `_sunVisDirty`. So `Invalidate(); while (SunVisibilityPending)
+Update();` exits **immediately** on a converged volume and measures the previous settings. Two
+sweeps in this session reported a stale first row that way — it is what made `samples = 1` and
+`samples = 4` look byte-identical, which they are not. Drive at least one `Update()` after
+`Invalidate()` before polling, and print the spin count so a zero is visible.
+
 ## The resource problem, and why S5 needs its own phase
 
 **The shipping fragment declares no `StructuredBuffer` at all.** That is not incidental — it is stated

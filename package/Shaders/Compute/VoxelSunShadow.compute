@@ -115,10 +115,45 @@ void CSSunVisibility(uint3 id : SV_DispatchThreadID)
     // downstream can recover where inside the texel the shadow edge fell. The fraction is what
     // _BgiShadowSharpness reconstructs an edge from, and it is why this texture is R16 and not R8:
     // sharpening amplifies quantisation along with the signal.
-    // Offsets are deterministic per texel, so the result is stable and needs no temporal accumulation
-    // - this stays instant when the sun moves, which is the whole point of a sun-triggered pass.
+    // Offsets are deterministic, so the result is stable and needs no temporal accumulation - this
+    // stays instant when the sun moves, which is the whole point of a sun-triggered pass.
+    //
+    // THE SAME OFFSET SET IN EVERY TEXEL, and centred on the texel. This used to be
+    // BgiVoxelJitterBase(t) - a different set per texel - and that is what made baked shadow edges
+    // RAGGED.
+    //
+    // Per-texel offsets make each texel's coverage estimate an INDEPENDENT random variable. The
+    // fraction stored here is what the trilinear tap plus _BgiShadowSharpness reconstructs the 0.5
+    // iso-surface from, so independent per-texel error displaces that iso-surface independently along
+    // the edge: a straight occluder edge comes back as a random mountain range. Sharpening amplifies
+    // the displacement along with the signal.
+    //
+    // Measured on the Playground floor - RMS deviation of the rendered edge from its own best-fit
+    // line, in metres:
+    //
+    //   samples          1        2        4        8       16
+    //   per-texel    0.0007   0.0202   0.0156   0.0096   0.0072
+    //   shared       0.0007   0.0006   0.0006   0.0006   0.0006
+    //
+    // Note the trap in the top row: ONE sample is straight (a clean binary field - no estimate, so no
+    // noise), TWO is the worst thing available, and it takes a very large n to crawl back, because
+    // the error falls as 1/sqrt(n) while _sunShadowSamples is clamped to 16. Sharpness 1 -> 2 moved
+    // the same figure 0.0087 -> 0.0156, which is the amplification showing up directly.
+    //
+    // Sharing the set makes the estimate BIASED rather than NOISY, and a bias that varies smoothly
+    // along the edge leaves the edge straight. Accuracy is unchanged: against URP's shadow map over
+    // three sun elevations, disagreement 15.9% / 8.5% / 1.3% either way, mean |dLum| 22.6 / 9.0 / 1.6
+    // before and 22.8 / 9.1 / 1.6 after. So this buys straightness for nothing.
+    //
+    // Centred, and that matters: with jitterBase = 0 the first sample lands on the texel CORNER, and
+    // the frame mean then drifts with n (83.12 / 84.47 / 84.39 at n = 4 / 8 / 16). Centring the set
+    // converges it (80.51 / 80.56 / 80.54).
+    //
+    // The cost is the reason the per-texel version existed: a shared set can miss a sub-texel feature
+    // in EVERY texel rather than in a random subset, turning noise into a coherent artifact. Not
+    // observed in Playground at three elevations; NOT yet checked on Sponza.
     int n = max(_BgiShadowTexSamples, 1);
-    float3 jitterBase = BgiVoxelJitterBase((int3)t);
+    float3 jitterBase = 0.5 - 0.5 * BGI_R2_3D * (float)(n - 1);
     float lit = 0.0;
     [loop]
     for (int s = 0; s < n; s++) {

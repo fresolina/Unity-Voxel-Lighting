@@ -495,8 +495,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1200926430}
   serializedVersion: 2
-  m_LocalRotation: {x: -0.008386111, y: 0.7864505, z: 0.0040640235, w: 0.61758304}
-  m_LocalPosition: {x: 2.3372576, y: 2.4939651, z: 2.2726424}
+  m_LocalRotation: {x: 0.0006436706, y: -0.8565752, z: 0.5159674, w: -0.0074966853}
+  m_LocalPosition: {x: 2.6040378, y: 1.4482363, z: 0.70865625}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -758,9 +758,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 11fa121d2509e1440a196034895afdec, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.VoxelSunShadow
-  _fineShadow: 1
+  _fineShadow: 5
   _coarseShadow: 1
-  _sunShadowSamples: 4
+  _sunShadowSamples: 16
   _bakedShadowSharpness: 2
   _shadowNormalOffset: 1
   _raymarchMaxSteps: 256
