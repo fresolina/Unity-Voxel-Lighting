@@ -391,7 +391,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 6741671734845962213, guid: a993298bc4312ff4b8610fdcb80a41b4, type: 3}
       propertyPath: mode
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 6741671734845962213, guid: a993298bc4312ff4b8610fdcb80a41b4, type: 3}
       propertyPath: field
@@ -399,11 +399,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 6741671734845962213, guid: a993298bc4312ff4b8610fdcb80a41b4, type: 3}
       propertyPath: cubeFill
-      value: 0.1
+      value: 0.938
       objectReference: {fileID: 0}
     - target: {fileID: 6741671734845962213, guid: a993298bc4312ff4b8610fdcb80a41b4, type: 3}
       propertyPath: m_Enabled
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -495,8 +495,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1200926430}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.091851085, y: -0.24768332, z: 0.018174814, w: 0.96430606}
-  m_LocalPosition: {x: -4.2996826, y: -4.6203403, z: -7.082139}
+  m_LocalRotation: {x: -0.008386111, y: 0.7864505, z: 0.0040640235, w: 0.61758304}
+  m_LocalPosition: {x: 2.3372576, y: 2.4939651, z: 2.2726424}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -704,7 +704,7 @@ MonoBehaviour:
   _singleTapFilter: 0
   _inPlaneSnap: 0
   _muteDirectLighting: 0
-  _debugView: 0
+  _debugView: 4
   _exposureControl:
     _tonemap: 2
     _exposure: 0.2

@@ -548,7 +548,87 @@ Prerequisites, in order:
 - **No re-march on a sun move** — the whole amortization machinery becomes unnecessary for this mode,
   and that is a real simplification to claim.
 
-### Built, and NOT accepted [2026-08-28] — it under-shadows, and I do not yet know why
+### Fixed and accepted [2026-08-29] — the occupancy word cache was keyed on a third of its coordinate
+
+**Root cause: one line.** `BgiOccTexSolid` cached the fetched occupancy word under the key `c.x >> 5`.
+A word holds 32 cells along X *for one (y, z) row*, so that key does not identify it: step in Y or Z
+and the slab is unchanged while the word is a completely different one.
+
+The Playground sun is `(0, 0.9397, 0.342)` — **no X component at all**. So along any ray `c.x` never
+moved, the slab never changed, and the word fetched at the origin cell was reused for all 256 steps.
+Every step tested the *shading point's own cell*. Pixels landing in a solid cell read shadowed
+immediately; pixels landing in the air cell beside it read lit forever. Every sunlit face came out
+**striped at the occupancy cell period (~5 cm)**.
+
+The fix keys the cache on the whole texel coordinate, `int3(c.x >> 5, c.y, c.z)`. The cache still pays
+for itself on the axis it was built for — a near-horizontal ray stepping along X — and now misses when
+it must.
+
+**Result at fs's Playground pose** (`View = DirectOnly`, fine field, 1280x720):
+
+| mode | mean luminance |
+|---|---|
+| `Off` | 142.88 |
+| `Baked` | 136.93 |
+| `UnityShadowmap` | 138.67 |
+| `Raymarch` **before** the fix | **117.86** |
+| `Raymarch` **after** the fix | **137.37** |
+
+Disagreement against the Unity shadow map, over pixels the shadow term actually moves (>4 LSB off
+`Off`), counting a pixel as disagreeing at >12/255 luminance:
+
+| pose / sun elevation | affected px | `Baked` vs Unity | `Raymarch` vs Unity |
+|---|---|---|---|
+| fs's pose, 70 deg | 6.4% | 34.0% (mean 37.0) | **20.6%** (mean 35.1) |
+| fs's pose, 45 deg | 8.3% | 55.9% (mean 102.1) | **10.4%** (mean 18.9) |
+| fs's pose, 25 deg | 8.4% | 47.8% (mean 80.7) | **5.7%** (mean 9.7) |
+
+**`Raymarch` is now the most accurate of the three voxel modes in this scene**, and by eye it is the
+cleanest: `Baked` at the 25 deg pose shows a mottled band along the roof lip, black blobs on the roof,
+a jagged edge on the yellow wall and a spuriously lit interior floor, none of which `Raymarch` or the
+shadow map has.
+
+#### Why the sweeps in CORRECTION 1 and 3 could not have found this
+
+Every knob sweep on the record was run against this bug, and the bug is invisible to all of them:
+
+- **`_BgiRaymarchSkipCells` 0 / 1 / 2 / 3 / 4 / 6** moved the frame mean by 0.002 — then jumped once at
+  8 and was flat to 24. A hit that is re-reported at *every* distance cannot be removed by an exclusion
+  *distance*, which is exactly what that flat response was saying. Read correctly it was the tell.
+- **Step budget 256 / 384 / 512 identical** — of course: the outcome was decided at step 1 or never.
+- **Mirror popcount, and mirror positions at 200,000 cells** — the mirror was always correct. The bug
+  was in the *reader*, and neither test reads it.
+- **DDA vs reference march, 35,507 / 35,507** — that comparison ran a **CPU replica** of the walk, and
+  the replica looked each cell up directly. It reproduced the traversal and not the caching, so it
+  could only ever exonerate the half that was already fine.
+
+The lesson is the one already in `verification-discipline`: a positive control that does not exercise
+the suspect code proves nothing about it. The replica should have replicated the cache too.
+
+#### CORRECTION 3 is INVALIDATED as a measurement — Sponza needs re-measuring
+
+The "68% of shaded pixels escape the volume" figure below, and the finding that forcing the escape
+branch to `0.0h` reproduces `Baked` exactly, were both measured **through this broken march**. With the
+cache stuck on the origin cell, any ray starting in an air cell can never register a hit and marches to
+the boundary — so a large escape fraction is precisely what the bug manufactures. Sponza's sun points
+down the atrium's long axis, i.e. with little or no X component, so it is likely to have been in the
+same total-failure regime as Playground.
+
+Re-measured in Playground with the corrected reader, over 60,000 random air cells of the fine field:
+
+| outcome | share |
+|---|---|
+| hit an occluder | 46.7% |
+| escaped the box | 53.3% — but **85% of those leave through the TOP face** (open sky, so "lit" is right) |
+| escaped through a **side** face | 7.8% of all rays — the only population where "lit" may be wrong |
+| ran out of steps (256) | 0.0% |
+
+So in this scene the escape branch is mostly benign, and that is consistent with the mode now tracking
+the shadow map. **The escape problem is still real in principle** — "lit" is wrong for a ray that
+leaves an interior sideways — but its magnitude is unknown, and the number below is not it. Sponza has
+not been re-measured since the fix; do not quote CORRECTION 3's figures until it has.
+
+### Built, and NOT accepted [2026-08-28] — SUPERSEDED by the 2026-08-29 fix above
 
 The plumbing all works. The acceptance criteria above do not pass, and the mode is therefore available
 but not recommended. **Do not switch a project to it on the strength of it existing.**
@@ -598,7 +678,7 @@ has no spreading, and it still agrees with `Baked`. **It is not supersampling**:
 mean moves by 0.0005 between 1 and 16 samples. **It is not the mirror**: bit-exact. **It is not the
 step budget or the start offset**: both swept to convergence above.
 
-#### CORRECTION 3 [2026-08-28]: the dominant error is rays LEAVING THE VOLUME, not anything about bias
+#### CORRECTION 3 [2026-08-28]: rays LEAVING THE VOLUME — MEASURED THROUGH THE BROKEN MARCH, see above
 
 fs asked the question that cracked it: *"How can that make the wall inside lit? It should easily be
 dark."* A leak between voxel cells cannot light a deeply occluded wall, and it didn't.

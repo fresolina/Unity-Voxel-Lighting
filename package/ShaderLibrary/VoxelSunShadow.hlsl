@@ -175,17 +175,29 @@ int _BgiRaymarchMaxSteps;
 // belongs to the same connected structure as the receiver.
 int _BgiRaymarchSkipCells;
 
-
-// Solidity of one hi-res cell in the flat mirror. `wordCache`/`cachedSlab` let a caller that steps
+// Solidity of one hi-res cell in the flat mirror. `wordCache`/`cachedWord` let a caller that steps
 // along X reuse a fetched word - which is the whole reason the mirror is packed 32:1 on that axis.
-bool BgiOccTexSolid(bool insideFine, int3 c, inout uint wordCache, inout int cachedSlab)
+//
+// THE CACHE KEY IS THE WHOLE TEXEL COORDINATE, not just the slab. A word holds 32 cells along X for
+// ONE (y, z) row, so `c.x >> 5` alone does not identify it: step in Y or Z and the slab is unchanged
+// while the word is a different one entirely.
+//
+// Keying on the slab alone produced this mode's headline failure. The Playground sun is
+// (0, 0.9397, 0.342) - no X component at all - so along any ray c.x never moved, the slab never
+// changed, and the word fetched at the origin cell was reused for all 256 steps. Every step then
+// tested the SHADING POINT'S OWN CELL: pixels landing in a solid cell read shadowed immediately,
+// pixels landing in the air cell beside it read lit forever, and every sunlit face came out striped
+// at the occupancy cell period (~5 cm). It survived a _BgiRaymarchSkipCells sweep to 24 cells
+// (1.15 m) unchanged, which is what ruled out ordinary self-shadow acne: no exclusion DISTANCE can
+// help when the same hit is re-reported at every distance.
+bool BgiOccTexSolid(bool insideFine, int3 c, inout uint wordCache, inout int3 cachedWord)
 {
-    int slab = c.x >> 5;
-    if (slab != cachedSlab) {
-        cachedSlab = slab;
+    int3 wc = int3(c.x >> 5, c.y, c.z);
+    if (any(wc != cachedWord)) {
+        cachedWord = wc;
         wordCache = insideFine
-            ? _BgiOccupancyTex.Load(int4(slab, c.y, c.z, 0)).x
-            : _BgiOccupancyTexCoarse.Load(int4(slab, c.y, c.z, 0)).x;
+            ? _BgiOccupancyTex.Load(int4(wc, 0)).x
+            : _BgiOccupancyTexCoarse.Load(int4(wc, 0)).x;
     }
     return ((wordCache >> ((uint)c.x & 31u)) & 1u) != 0u;
 }
@@ -227,7 +239,7 @@ half BgiRaymarchSunShadow(float3 worldPos, float3 normal, float3 lightDir,
                                d.y >= 0 ? 1.0 - inCell.y : inCell.y,
                                d.z >= 0 ? 1.0 - inCell.z : inCell.z);
 
-    uint wordCache = 0u; int cachedSlab = -1;
+    uint wordCache = 0u; int3 cachedWord = int3(-1, -1, -1);
     int maxSteps = max(_BgiRaymarchMaxSteps, 0);
     // SELF-SHADOW EXCLUSION, measured as PERPENDICULAR DISTANCE from the surface - not as a step
     // count, and not as an origin offset.
@@ -274,7 +286,7 @@ half BgiRaymarchSunShadow(float3 worldPos, float3 normal, float3 lightDir,
         // notes in docs/direct-shadow-extraction.md.
         if (any(cell < 0) || any(cell >= grid)) return 1.0h;
         // Still inside the surface's own slab? Then a hit here is its own geometry, not an occluder.
-        if (BgiOccTexSolid(insideFine, cell, wordCache, cachedSlab) && tCross * ndl >= skipDist)
+        if (BgiOccTexSolid(insideFine, cell, wordCache, cachedWord) && tCross * ndl >= skipDist)
             return 0.0h;
     }
     return 1.0h;   // budget spent without a hit: fail open (measured to happen for 0% of pixels)
