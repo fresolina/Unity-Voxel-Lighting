@@ -722,7 +722,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1689317578}
-  - component: {fileID: 1689317577}
+  - component: {fileID: 1689317579}
   m_Layer: 0
   m_Name: Light manager
   m_TagString: Untagged
@@ -730,7 +730,7 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &1689317577
+--- !u!114 &1689317579
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -739,10 +739,11 @@ MonoBehaviour:
   m_GameObject: {fileID: 1689317576}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 3f8a21b7c9d04e5fa6b7c8d9e0f10203, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.LocalLightsPublisher
-  _additionalLights:
+  m_Script: {fileID: 11500000, guid: 684ef8550694ac842bc7e8d450d4308e, type: 3}
+  m_Name:
+  m_EditorClassIdentifier: Lotec.Lighting::Lotec.Lighting.LocalLightsProvider
+  _priority: 100
+  _lights:
   - {fileID: 1697248655}
   - {fileID: 333063937}
 --- !u!4 &1689317578

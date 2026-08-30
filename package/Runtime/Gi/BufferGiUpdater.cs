@@ -2050,13 +2050,11 @@ namespace Lotec.Lighting {
         // the two lists to drop it from is not a call this component can make.
         void WarnIfBakedLightAlsoRealtime() {
             if (_warnedBakedLightAlsoRealtime) return;
-            LocalLightsPublisher publisher = LocalLightsPublisher.Instance;
-            if (publisher == null) return;
-            // The EFFECTIVE realtime set, not just the publisher's own list: the same clash is just as
-            // likely from a level's LocalLightsProvider. Gathered on demand rather than read off the
-            // publisher's last frame, because the editor bake path runs outside the Update order.
+            // The EFFECTIVE realtime set across every registered LocalLightsProvider. Gathered on
+            // demand rather than read off the last published frame, because the editor bake path runs
+            // outside the Update order.
             if (_realtimeLightScratch == null) _realtimeLightScratch = new List<Light>();
-            publisher.GatherLights(_realtimeLightScratch);
+            LocalLights.Gather(_realtimeLightScratch);
             List<Light> realtime = _realtimeLightScratch;
             foreach (VoxelLights holder in _lightHolders) {
                 if (holder == null) continue;
@@ -2068,9 +2066,8 @@ namespace Lotec.Lighting {
                         _warnedBakedLightAlsoRealtime = true;
                         Debug.LogWarning(
                             $"Buffer GI: light '{baked[i].name}' is baked into the voxelization (listed on " +
-                            $"'{holder.name}'s Voxel Lights) AND published as a realtime local light by " +
-                            $"'{publisher.name}' (its own list or a level's LocalLightsProvider). It lights " +
-                            "the scene twice - remove it from one of the two.",
+                            $"'{holder.name}'s Voxel Lights) AND published as a realtime local light by a " +
+                            "LocalLightsProvider. It lights the scene twice - remove it from one of the two.",
                             baked[i]);
                         return;
                     }
@@ -2371,7 +2368,9 @@ namespace Lotec.Lighting {
             _solveShader.SetInt(s_injectSunSamples, Mathf.Clamp(_injectSunSamples, 1, 16));
             _solveShader.SetVector(s_ambientFloor, (Vector4)_ambientFloor);
             SetDirectionalLightUniforms();
-            LocalLightsPublisher.Instance?.LocalLights?.ApplyToCompute(_solveShader);
+            // ApplyToCompute BUILDS this frame's local lights if nothing has yet, so the solve can never
+            // run against a stale or unpublished set regardless of script execution order.
+            LocalLights.ApplyToCompute(_solveShader);
 
             // The EMA blend weight (samplesPerFrame/maxSamples) is computed in the compute itself.
             // CSBlur mirrors each field's blurred irradiance straight into its Texture3D (the fragment's
