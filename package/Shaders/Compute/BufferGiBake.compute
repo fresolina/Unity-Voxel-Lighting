@@ -3,6 +3,7 @@
 //   CSInjectBakedLights  - stamp VoxelLights entries into _Material as emissive voxels.
 //   CSBuildOccupancy     - _Material -> the 1-bit/voxel _Occupancy bitfield.
 //   CSBuildTraversalMip  - OR-downsample _OccupancyHi onto _BgiGrid -> _OccupancyTraversal.
+//   CSBuildOccupancyMirror - repack _OccupancyHi flat into a Texture3D the FRAGMENT can march.
 //   CSBuildNormalOccupancy - _OccupancyThick: real solids + the cell behind each surfaced voxel.
 //   CSBuildSurface       - per solid voxel: normal, flags, baked sun-ray origin.
 //   CSBuildAirDistance   - relax the air voxels' city-block distance-to-nearest-solid.
@@ -17,6 +18,7 @@
 #pragma kernel CSBuildOccupancy
 #pragma kernel CSBuildTraversalMip
 #pragma kernel CSBuildNeighbourMask
+#pragma kernel CSBuildOccupancyMirror
 #pragma kernel CSBuildNormalOccupancy
 #pragma kernel CSBuildSurface
 #pragma kernel CSBuildAirDistance
@@ -308,6 +310,24 @@ void CSBuildTraversalMip(uint3 id : SV_DispatchThreadID)
 // ----------------------------------------------------------
 RWTexture3D<uint> _BgiNeighbourMaskWrite;
 
+// FLAT, FRAGMENT-READABLE MIRROR of _OccupancyHi, one bit per hi-res cell, 32 cells per texel along X.
+// Written by CSBuildOccupancyMirror below, read by the Raymarch shadow mode in the fragment.
+//
+// It exists because of a rule stated in BufferGiRead.hlsl and enforced by every shipping variant: the
+// fragment declares NO StructuredBuffer. WebGPU validates every declared global against the bound
+// pipeline layout and FAILS PIPELINE CREATION for a variant that declares a buffer while it is
+// unbound, so putting _OccupancyHi back into the fragment to march it is not an option. A Texture3D
+// is, and the neighbour mask already establishes the pattern.
+//
+// DERIVED, never rasterized independently - same principle as _OccupancyTraversal. Two rasters of one
+// geometry is the failure mode P3-P7 spent their whole length avoiding.
+//
+// FLAT layout on purpose, NOT the 4x4x4 block packing _OccupancyHi uses. The block layout answers
+// "is there anything in this neighbourhood" in two loads, which is what the sealed-interior gate
+// wants; a DDA wants [x/32, y, z] so that stepping along X reuses one fetched word. Two layouts of
+// the same bits is fine. Two rasters would not be.
+RWTexture3D<uint> _BgiOccupancyTexWrite;
+
 [numthreads(64, 1, 1)]
 void CSBuildNeighbourMask(uint3 id : SV_DispatchThreadID)
 {
@@ -328,6 +348,33 @@ void CSBuildNeighbourMask(uint3 id : SV_DispatchThreadID)
         if (BgiSolidBit(BgiSlot((uint3)n))) mask |= 1u << (k + 1u);
     }
     _BgiNeighbourMaskWrite[(uint3)c] = mask;
+}
+
+// One thread per MIRROR TEXEL - 32 hi-res cells along X - so the 32 bit tests that build a word are
+// serial in one thread rather than 32 atomics from 32 threads. Writes every texel it is dispatched
+// for, so the volume needs no clear.
+//
+// The field is selected by _OccFieldWordOffset, exactly as every other _OccupancyHi reader does:
+// BgiHiSolidBit applies it, so this kernel needs no field arithmetic of its own.
+[numthreads(64, 1, 1)]
+void CSBuildOccupancyMirror(uint3 id : SV_DispatchThreadID)
+{
+    uint wordsPerRow = BGI_OCC_GRID >> 5u;          // >= 1: _BgiOccGrid is a power of two >= 32
+    uint total = wordsPerRow * BGI_OCC_GRID * BGI_OCC_GRID;
+    uint i = id.x;
+    if (i >= total) return;
+
+    uint tx = i % wordsPerRow;
+    uint ty = (i / wordsPerRow) % BGI_OCC_GRID;
+    uint tz = i / (wordsPerRow * BGI_OCC_GRID);
+
+    uint x0 = tx << 5u;
+    uint word = 0u;
+    [loop]
+    for (uint b = 0u; b < 32u; b++) {
+        if (BgiHiSolidBit(uint3(x0 + b, ty, tz))) word |= (1u << b);
+    }
+    _BgiOccupancyTexWrite[uint3(tx, ty, tz)] = word;
 }
 
 // ----------------------------------------------------------

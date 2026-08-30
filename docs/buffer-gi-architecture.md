@@ -611,7 +611,9 @@ Two traps worth carrying if it is ever revisited:
   hoisted out of the branch.
 
 None of this applies to a per-pixel raymarch, which has no lattice to reconstruct against - see
-`ShadowMode.Sdf`, already a per-pixel path, and the sixth-mode seam in `BgiSampleSunShadow`.
+`ShadowMode.Sdf`, already a per-pixel path, and the sixth-mode seam in `BgiSampleSunShadow`. The
+plan for making that a first-class backend - and for lifting the whole sun shadow out of this
+component - is [direct-shadow-extraction.md](direct-shadow-extraction.md).
 
 **`BgiSampleSunShadow`** — the sole authority for the main-light shadow, fully resolved with no
 fall-through: `Off` = genuinely no sun shadow; `Baked` = the sun-vis tap; `Sdf` / `OcclusionField` /

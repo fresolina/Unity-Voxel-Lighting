@@ -94,6 +94,18 @@ inline float HashTo01(uint v) {
     return (float)WangHash(v) * (1.0 / 4294967296.0);
 }
 
+// 3D R2 (generalised golden ratio) increments - the low-discrepancy analogue of the 2D pair used by
+// GiSampleNoise. Successive multiples spread evenly through the unit cube, so a handful of samples
+// covers a voxel without the clumping plain hashing gives.
+static const float3 BGI_R2_3D = float3(0.8191725134, 0.6710436067, 0.5497004779);
+
+// Per-voxel random base offset, hashed on the cell only (never the frame) so it is stable in time.
+float3 BgiVoxelJitterBase(int3 cell)
+{
+    uint seed = ((uint)cell.x * 73856093u) ^ ((uint)cell.y * 19349663u) ^ ((uint)cell.z * 83492791u);
+    return float3(HashTo01(seed), HashTo01(seed ^ 0x9e3779b9u), HashTo01(seed ^ 0x85ebca6bu));
+}
+
 float3 GetRandomDirection(float3 seedPos, uint frame) {
     float r1 = Random(seedPos, frame);
     float r2 = Random(seedPos, frame + 1.34);

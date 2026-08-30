@@ -41,6 +41,19 @@ float3 _BgiGridOrigin; // world-space min corner of the cascade grid
 float3 _BgiGridSize;   // world-space extent of the cascade grid
 float3 _BgiVoxelSize;  // per-axis voxel size (= _BgiGridSize / BGI_GRID)
 
+// Worst-case ray reach: the volume's world-space diagonal. Here rather than in the solve because two
+// unrelated passes now bound rays by it - the solve's gather and the sun-shadow march, which live in
+// different compute files since S2 of docs/direct-shadow-extraction.md - and it is derived from
+// nothing but _BgiGridSize.
+#define BGI_MAX_RAY_DIST (length(_BgiGridSize))
+
+// The COARSE field's bounds, and unlike the three above these are NOT the current dispatch's - they
+// are the other field's, published once as loose globals so a fragment can pick between the two.
+// Only the compute/voxelize side has a "current field"; the fragment shades a point that may fall in
+// either box, so it needs both descriptions at once. Set from C# with SetGlobalVector.
+float3 _BgiCoarseOrigin;
+float3 _BgiCoarseVoxelSize;   // the coarse grid size is this * BGI_GRID - only the voxel size is published
+
 // Base index of the current field's slice in the concatenated buffers (= field * BGI_COUNT). All
 // fields share one buffer; field f occupies [f*BGI_COUNT, (f+1)*BGI_COUNT). Set per dispatch.
 uint _FieldOffset;
@@ -153,6 +166,20 @@ float3 BgiWorldToGridAt(float3 worldPos, float3 origin, float3 voxelSize) {
 }
 float3 BgiWorldToGrid(float3 worldPos) {
     return BgiWorldToGridAt(worldPos, _BgiGridOrigin, _BgiVoxelSize);
+}
+
+// Which field (fine vs coarse) a shading point falls in, plus that field's grid + buffer slice.
+// Shared by the GI gather and the sun-shadow tap so they always agree on the same voxels - which is
+// why it lives HERE and not in either of them: it is field geometry, and the two consumers are now
+// in different files (see docs/direct-shadow-extraction.md). Fragment-side only in practice; the
+// compute passes have a current field and use _BgiGrid* / _FieldOffset directly.
+void BgiSelectField(float3 worldPos, out bool insideFine, out float3 origin, out float3 voxelSize, out uint baseOffset)
+{
+    float3 fuv = (worldPos - _BgiGridOrigin) / max(_BgiGridSize, 1e-6);
+    insideFine = all(fuv >= 0.0) && all(fuv <= 1.0);
+    origin     = insideFine ? _BgiGridOrigin    : _BgiCoarseOrigin;
+    voxelSize  = insideFine ? _BgiVoxelSize      : _BgiCoarseVoxelSize;
+    baseOffset = insideFine ? BGI_FINE_OFFSET    : BGI_COARSE_OFFSET;
 }
 
 // --- Material / occupancy packing: R8G8B8 albedo + A8 log-encoded emission intensity ---
