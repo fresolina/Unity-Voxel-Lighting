@@ -126,10 +126,15 @@ namespace Lotec.Lighting.Editor {
         // lists on every upload, which is what makes them switchable in a player. So this list is the
         // whole handover from Editor to runtime, and it is written on every bake rather than only when
         // empty: a light that was retyped, moved out of the volume or deleted has to leave it again.
-        static int RefreshBakedLights(BufferGiUpdater gi, BufferGiFields fields) {
+        /// <summary>Rebuild every field volume's VoxelLights from the scene. Called by the bake button,
+        /// and on a poll by <see cref="VoxelLightsAutoRefresh"/> so the lists stay current while
+        /// authoring - which is why it must be a no-op when nothing changed (see FillVolumeLights).
+        /// <paramref name="fields"/> may be null for a fine-only level.</summary>
+        internal static int RefreshBakedLights(BufferGiUpdater gi, BufferGiFields fields) {
             Light[] candidates = Object.FindObjectsByType<Light>(FindObjectsInactive.Include);
             var seen = new HashSet<VoxelVolume>();
             int bound = FillVolumeLights(gi.Volume, candidates, seen);
+            if (fields == null) return bound;
             foreach (MeshBounds field in fields.DetailedFields) {
                 if (field == null) continue;
                 bound += FillVolumeLights(field.GetComponent<VoxelVolume>(), candidates, seen);
@@ -158,6 +163,11 @@ namespace Lotec.Lighting.Editor {
             if (holder == null) {
                 if (inside.Count == 0) return 0; // don't litter every volume with an empty component
                 holder = Undo.AddComponent<VoxelLights>(vv.gameObject);
+            } else if (SameLights(holder.Lights, inside)) {
+                // Nothing to write, and that matters: the auto-refresh calls this on a poll, so
+                // rewriting an identical list would mark the scene dirty every half second and the user
+                // could never leave it saved.
+                return inside.Count;
             }
             var so = new SerializedObject(holder);
             SerializedProperty list = so.FindProperty("_lights");
@@ -169,6 +179,21 @@ namespace Lotec.Lighting.Editor {
             so.ApplyModifiedProperties(); // records Undo
             EditorUtility.SetDirty(holder);
             return inside.Count;
+        }
+
+        // Set comparison, deliberately not sequence: FindObjectsByType makes no order guarantee (that is
+        // exactly why its sort-mode overload was deprecated), so comparing positionally would report a
+        // difference on a reshuffle and rewrite - dirtying the scene on a poll that changed nothing.
+        // Nothing downstream cares about the order: the inject sums per cell, and the layout hash only
+        // has to change when the membership does.
+        static bool SameLights(IReadOnlyList<Light> current, List<Light> wanted) {
+            if (current.Count != wanted.Count) return false;
+            for (int i = 0; i < wanted.Count; i++) {
+                bool found = false;
+                for (int j = 0; j < current.Count && !found; j++) found = current[j] == wanted[i];
+                if (!found) return false;
+            }
+            return true;
         }
 
         // Re-derive (and persist) the bounds every capture path reads:
