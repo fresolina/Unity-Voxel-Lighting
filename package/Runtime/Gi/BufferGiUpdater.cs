@@ -141,14 +141,14 @@ namespace Lotec.Lighting {
         [Tooltip("Total ray budget per voxel (quality): the field is a progressive average that " +
                  "accumulates rays until it reaches this many, then the solve idles. Quality depends " +
                  "on total rays, so bigger = cleaner. It's reached after maxSamples/samplesPerFrame frames.")]
-        [Min(1)][SerializeField] int _maxSamples = 512;
+        [Min(1)][SerializeField] int _maxSamples = 500;
         [Tooltip("Samples (rays) gathered per voxel per frame - a PERFORMANCE knob: it spends the " +
                  "maxSamples budget over fewer/more frames but does not change the converged result.")]
         [Min(1)][SerializeField] int _samplesPerFrame = 1;
         [Tooltip("Ease-in exponent for the displayed fade / light-change reveal. Higher keeps the " +
                  "noisy early accumulation frames hidden and ramps the reveal up later (1 = linear). " +
                  "Raise it when using few rays/frame (noisier early frames).")]
-        [Range(1f, 8f)][SerializeField] float _confidenceCurve = 3f;
+        [Range(1f, 8f)][SerializeField] float _confidenceCurve = 2f;
         [Tooltip("Keep solving every frame even after the field settles. Off (recommended): the " +
                  "solve idles once settled and only wakes when the sun changes or the scene is " +
                  "re-baked, so a static scene costs no GI compute.")]
@@ -305,15 +305,16 @@ namespace Lotec.Lighting {
         [SerializeField] bool _grownDilationGate = true;
         // FormerlySerializedAs: this was _computeShader until the bake kernels moved to their own
         // asset, at which point "the compute shader" stopped naming one of two.
+        // All three shader references are HIDDEN, not because they are unimportant but because there is
+        // exactly one right answer for each: they are resolved by asset name (see ResolveSolveShader and
+        // friends) and serialized, so a player gets them without anyone opening the inspector. Showing a
+        // field whose only possible states are "correct" and "broken" invites the broken one - and this
+        // component has been broken that way before, when a field insertion slid the object references
+        // by one across a domain reload. If a resolve ever fails, IsReady names the missing shader.
         [FormerlySerializedAs("_computeShader")]
-        [SerializeField] ComputeShader _solveShader;
-        [Tooltip("BufferGiBake.compute - the bake-time derive passes (occupancy, surface word, air " +
-                 "distance, baked lights). Kept separate from the solve shader so that what runs PER " +
-                 "FRAME is a property of the file, not of a comment. Auto-resolved by name when empty.")]
-        [SerializeField] ComputeShader _bakeShader;
-        [Tooltip("Shader 'Hidden/Lotec/BufferGiVoxelize' - GPU 3-axis rasterizer that voxelizes " +
-                 "scene meshes into the occupancy/albedo buffer.")]
-        [SerializeField] Shader _voxelizeShader;
+        [HideInInspector][SerializeField] ComputeShader _solveShader;
+        [HideInInspector][SerializeField] ComputeShader _bakeShader;
+        [HideInInspector][SerializeField] Shader _voxelizeShader;
 
         // The sun-shadow subsystem (S3 of docs/direct-shadow-extraction.md). Resolved from this
         // GameObject and auto-added when missing, so an existing scene keeps working with no manual
@@ -1054,6 +1055,23 @@ namespace Lotec.Lighting {
             BindGridConstants(_bakeShader);
         }
 
+        // Same by-name resolve as the other two. This one used to be the field you HAD to assign by
+        // hand, which is a footgun with no upside: there is exactly one right answer, so a wrong or
+        // empty value is a bug and never a choice.
+        void ResolveSolveShader() {
+#if UNITY_EDITOR
+            if (_solveShader != null) return;
+            foreach (string guid in UnityEditor.AssetDatabase.FindAssets("BufferGiSolve t:ComputeShader")) {
+                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guid);
+                // FindAssets substring-matches, so filter to the exact file name.
+                if (System.IO.Path.GetFileNameWithoutExtension(path) != "BufferGiSolve") continue;
+                _solveShader = UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(path);
+                if (_solveShader != null) UnityEditor.EditorUtility.SetDirty(this);
+                return;
+            }
+#endif
+        }
+
         // The bake shader is a second asset, so an existing prefab/scene has an empty reference for it.
         // Resolve it BY NAME rather than by path: the project already does this for the SDF bakers
         // (VoxelBakerBase.FindComputeShaderByExactName), and a name lookup survives the file being
@@ -1432,9 +1450,10 @@ namespace Lotec.Lighting {
             // behind this check, so a null shader reference there is unrecoverable - the component
             // reports "not ready" forever and never reaches the code that could fix it. S2 hit exactly
             // that after a field insertion nulled _voxelizeShader across a domain reload.
+            ResolveSolveShader();
             ResolveVoxelizeShader();
             ResolveSunShadow();
-            if (_solveShader == null) { reason = "ComputeShader"; return false; }
+            if (_solveShader == null) { reason = "Solve Shader (BufferGiSolve.compute)"; return false; }
             if (_voxelizeShader == null) { reason = "Voxelize Shader (Hidden/Lotec/BufferGiVoxelize)"; return false; }
             if (_volume.BakeRoot == null) { reason = "the volume's MeshBounds root (mesh geometry to voxelize)"; return false; }
             reason = null;
@@ -1454,6 +1473,7 @@ namespace Lotec.Lighting {
             }
             ReleaseBuffers();
 
+            ResolveSolveShader();
             ResolveBakeShader();
             ResolveVoxelizeShader();
 
