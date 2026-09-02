@@ -5,7 +5,6 @@
   <assembly fullname="Lotec.Lighting, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null">
     <type fullname="Lotec.Lighting.BufferGiBakeAsset" preserve="all" />
     <type fullname="Lotec.Lighting.BufferGiFields" preserve="all" />
-    <type fullname="Lotec.Lighting.LocalLightsProvider" preserve="all" />
     <type fullname="Lotec.Lighting.MeshBounds" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelDirectionSet" preserve="all" />
     <type fullname="Lotec.Lighting.VoxelOcclusionBitmask" preserve="all" />
@@ -33,6 +32,7 @@
     <type fullname="UnityEngine.Material" preserve="all" />
     <type fullname="UnityEngine.MeshFilter" preserve="all" />
     <type fullname="UnityEngine.MeshRenderer" preserve="all" />
+    <type fullname="UnityEngine.MonoBehaviour" preserve="all" />
     <type fullname="UnityEngine.Object" preserve="all" />
     <type fullname="UnityEngine.RenderSettings" preserve="all" />
     <type fullname="UnityEngine.Shader" preserve="all" />
