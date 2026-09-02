@@ -10,9 +10,9 @@ namespace Lotec.Lighting.Samples {
     /// <see cref="LightingController"/>.
     ///
     /// The lights are resolved at RUNTIME rather than being pure serialized references. This controller
-    /// lives in the bootstrap scene, and a light that belongs to a LEVEL scene (the Playground's candle,
-    /// listed on that level's <see cref="LocalLightsProvider"/>) cannot be referenced from here - Unity
-    /// has no cross-scene references, so the field would just serialize as null. The serialized fields
+    /// lives in the bootstrap scene, and a light that belongs to a LEVEL scene (the Playground's candle)
+    /// cannot be referenced from here - Unity has no cross-scene references, so the field would just
+    /// serialize as null. It asks <see cref="LocalLights"/> instead. The serialized fields
     /// are therefore optional overrides for same-scene lights, and anything still missing is looked up
     /// once the level is loaded, and looked up again if that level is swapped for another.
     /// </summary>
@@ -111,7 +111,7 @@ namespace Lotec.Lighting.Samples {
             _nextResolveTime = Time.unscaledTime + ResolveRetryInterval;
 
             // Ask the lighting system what it is actually PUBLISHING - every loaded level's
-            // LocalLightsProvider. That is the set these keys are meant to drive, and unlike a scene
+            // realtime point/spot light. That is the set these keys are meant to drive, and unlike a raw scene
             // scan it cannot pick up a baked light (a fireplace is a point light too, but it is
             // voxelized into the GI and has no runtime switch).
             LocalLights.Gather(s_publishedLights);

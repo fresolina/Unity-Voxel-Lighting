@@ -509,8 +509,6 @@ namespace Lotec.Lighting {
 #endif
         bool _hasLoggedMissingReferences;
         bool _warnedBakeAssetMismatch; // warn once per change, not per voxelize attempt
-        bool _warnedBakedLightAlsoRealtime; // same, for a light that is both baked and a realtime local light
-        List<Light> _realtimeLightScratch;  // reused by that check; allocated on first use (bake-time only)
         // Progressive accumulation in SAMPLES (rays): _collectedSamples = total rays gathered since the last
         // change (0 = just changed), accumulated by samplesPerFrame each solve and capped at _maxSamples
         // (the ray budget). Quality depends on total rays, not frames - samplesPerFrame just spends the
@@ -1145,7 +1143,6 @@ namespace Lotec.Lighting {
                 // is the active volume itself). Null for a fine-only, runtime-voxelized level.
                 _fields = BufferGiFields.Find(active);
                 _hasLoggedMissingReferences = false;
-                _warnedBakedLightAlsoRealtime = false; // new level: re-check its baked lights against the realtime set
                 if (warmSwitch) {
                     _materialBaked = false;
                     _resetFineField = true; // clear + re-fill the fine field for the new bounds
@@ -2044,37 +2041,6 @@ namespace Lotec.Lighting {
             _collectedSamples = 0;
         }
 
-        // A light that is BOTH baked into the voxelization and published as a realtime local light is
-        // counted twice: its emissive voxel lights the room through the solve while the fragment path
-        // adds the same light again directly. Report it once - it is an authoring mistake, and which of
-        // the two lists to drop it from is not a call this component can make.
-        void WarnIfBakedLightAlsoRealtime() {
-            if (_warnedBakedLightAlsoRealtime) return;
-            // The EFFECTIVE realtime set across every registered LocalLightsProvider. Gathered on
-            // demand rather than read off the last published frame, because the editor bake path runs
-            // outside the Update order.
-            if (_realtimeLightScratch == null) _realtimeLightScratch = new List<Light>();
-            LocalLights.Gather(_realtimeLightScratch);
-            List<Light> realtime = _realtimeLightScratch;
-            foreach (VoxelLights holder in _lightHolders) {
-                if (holder == null) continue;
-                IReadOnlyList<Light> baked = holder.Lights;
-                for (int i = 0; i < baked.Count; i++) {
-                    if (baked[i] == null) continue;
-                    for (int j = 0; j < realtime.Count; j++) {
-                        if (realtime[j] != baked[i]) continue;
-                        _warnedBakedLightAlsoRealtime = true;
-                        Debug.LogWarning(
-                            $"Buffer GI: light '{baked[i].name}' is baked into the voxelization (listed on " +
-                            $"'{holder.name}'s Voxel Lights) AND published as a realtime local light by a " +
-                            "LocalLightsProvider. It lights the scene twice - remove it from one of the two.",
-                            baked[i]);
-                        return;
-                    }
-                }
-            }
-        }
-
         // Bake-time derive passes (both fields; un-voxelized coarse slice packs to zeros):
         // 1) occupancy bitfield from _Material, 2) surface word - CSBuildSurface rebuilds the normal
         // from the now-complete occupancy, falling back to the triangle normal the voxelizer wrote
@@ -2112,7 +2078,6 @@ namespace Lotec.Lighting {
 #if UNITY_EDITOR
             _bakedLightLayout = LightEmissionBake.LayoutHash(_lightHolders);
 #endif
-            WarnIfBakedLightAlsoRealtime();
             _materialBaked = true;
             // New geometry: the baked sun shadow is stale whatever the sun is doing.
             _sunShadow?.Invalidate();
