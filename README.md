@@ -35,9 +35,17 @@ All three light the scene directly *and* bounce into the GI.
 
 **Baked lights** are stamped into the voxelization as emissive voxels, which is why they cost almost nothing per frame. Set a *point* light's Mode to **Baked** or **Mixed** and put it inside a GI volume — that is the whole setup.
 
-The volume's `Voxel Lights` list is derived, not authored: while you are editing, the package keeps it in step with the scene and adds the component where it is missing, so a light you add, move, retype or delete is picked up on its own. (It has to be a serialized list because `Light.lightmapBakeType` does not exist in a player, so which lights are Baked must be decided while authoring.) The **Bake Voxelization To Disk** button writes exactly the same list — after this it is only needed to write the disk asset.
+The volume's `Voxel Lights` list is derived, not authored: it holds the bake candidates inside that volume's bounds. It has to be a serialized list because `Light.lightmapBakeType` does not exist in a player, so which lights are Baked must be decided while authoring. It fills itself from the scene in three places, and they are all the same code:
+
+* when the `Voxel Lights` component is added (or Reset),
+* on **Refresh Lights From Scene** in the component's context menu,
+* on **Bake Voxelization To Disk**, so a bake can never ship a stale list.
+
+Refresh after adding, moving or retyping a light. It is deliberately not automatic — nothing raises an event when a light's Mode or position changes, so the only automatic option would be to rescan continuously, which rewrites the list while you are looking at it.
 
 Spot lights are never baked: a cone cannot be expressed by a voxel that radiates equally in all directions. A spot marked Baked or Mixed is lit as a realtime light instead, and the package says so. A directional light is the sun.
+
+**Mixed is treated as Baked here**, which differs from Unity on purpose. Unity's Mixed means baked indirect plus realtime direct, but that split does not exist in this renderer: an emissive voxel is calibrated to replace the point light *outright* — a surface gathering it receives the same `C / d²` the light itself would have delivered — so there is no leftover direct half to add, and adding one would light the scene twice. A Mixed point light therefore behaves exactly like a Baked one: no direct term, no budget slot, free per frame. Set it to **Realtime** if you want a direct term.
 
 **Baked does not mean permanent.** A baked light is still switchable at runtime:
 

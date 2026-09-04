@@ -153,6 +153,13 @@ namespace Lotec.Lighting {
                  "solve idles once settled and only wakes when the sun changes or the scene is " +
                  "re-baked, so a static scene costs no GI compute.")]
         [SerializeField] bool _continuousGi;
+        [Tooltip("Let realtime point/spot lights bounce into the GI, not just light surfaces " +
+                 "directly. QUALITY setting: the bounce is a progressive average, so a light that " +
+                 "MOVES drags its indirect behind it - fine with a high Samples Per Frame, visibly " +
+                 "laggy with a low one. Off keeps their direct lighting exactly as it is, drops only " +
+                 "their bounce, and makes the solve cheaper (it skips a shadow march per light per " +
+                 "voxel). Baked lights are unaffected either way - they are emissive voxels.")]
+        [SerializeField] bool _localLightsContributeGi = true;
         [Tooltip("Luminance ceiling for a single gathered bounce, to suppress emitter fireflies. " +
                  "0 disables.")]
         [Min(0f)][SerializeField] float _giFireflyClamp = 8f;
@@ -517,13 +524,29 @@ namespace Lotec.Lighting {
         int _collectedSamples;
         Vector3 _prevSunDir;
         Vector4 _prevSunColor;
+        // Last published local-light state, for the moved-light detector in Update.
+        int _prevLocalLightState;
+        // True while the field has never converged, so there is nothing valid to show yet (see
+        // Confidence). Set by every path that clears a field; cleared the first time the budget is spent.
+        bool _fieldCold = true;
 
-        // 0 at a change -> 1 once the ray budget is spent (_collectedSamples == _maxSamples), shaped by an
-        // ease-in curve (_confidenceCurve) so the noisy early frames stay hidden and the reveal ramps up
-        // as the field cleans. Auto-hides more with fewer rays (frame-1 confidence = samplesPerFrame/max).
+        // How much of the solved field to show. It answers "do I have anything valid yet?", which is NOT
+        // the same question as "how converged am I?" - and conflating the two is what made a moving light
+        // black the GI out.
+        //
+        // On a COLD field (fresh buffers, a new volume, a just-cleared field) there is genuinely nothing
+        // to show, so it ramps 0 -> 1 over the ray budget on an ease-in curve, hiding the noisy early
+        // frames. Once the field has converged once it is WARM, and a later change - a moved sun, a moved
+        // light - leaves it STALE, not invalid. Stale GI that catches up beats no GI at all, so confidence
+        // stays at 1 and only the EMA (see EmaWeight, still keyed to _collectedSamples) re-converges.
+        //
+        // Without that split, anything changing every frame pinned _collectedSamples at samplesPerFrame,
+        // and with the default curve that is a confidence of ~1e-5: a carried torch or a rotating sun
+        // showed no indirect at all until it stopped moving.
         float Confidence {
             get {
                 if (_maxSamples < 1) return 1f;
+                if (!_fieldCold) return 1f;
                 float t = Mathf.Clamp01(_collectedSamples / (float)_maxSamples);
                 return Mathf.Pow(t, _confidenceCurve);
             }
@@ -532,6 +555,35 @@ namespace Lotec.Lighting {
         // Progressive-average blend weight = samplesPerFrame / totalSamples (== 1/frame during fill),
         // floored at samplesPerFrame/maxSamples by the sample cap. Frame 1 -> ~1 (hidden by Confidence≈0).
         float EmaWeight => _samplesPerFrame / (float)Mathf.Max(1, _collectedSamples);
+
+        // Frames a STALE restart blends over. A cold field restarts the average from nothing, but a field
+        // that merely went stale (the sun moved, a light moved, a lamp was switched) already holds a good
+        // approximation of the answer - so the EMA should converge TOWARD the new lighting rather than be
+        // replaced by one frame of rays.
+        //
+        // That distinction is the difference between two visible artifacts. Reset to 0 and EmaWeight is
+        // samplesPerFrame/samplesPerFrame = 1: a single sample per voxel becomes the entire field, which
+        // is violently blocky. Confidence used to hide that by fading the whole field out, which is why
+        // a moving light went black. Keeping a floor of accumulated samples fixes both at once - the
+        // field stays visible AND stays smooth, and it re-converges once the change stops.
+        const int StaleRestartFrames = 30;
+
+        // Wind the progressive average back to a blend of ~1/StaleRestartFrames per frame, without ever
+        // pushing it FORWARD (a field still filling stays where it is).
+        //
+        // The ceiling is maxSamples MINUS one frame's worth, never maxSamples itself, and that is not a
+        // detail: the solve gate is `_collectedSamples < _maxSamples`, so a floor that reaches the cap
+        // leaves the gate shut and the solve simply never runs again. With samplesPerFrame 50 and 30
+        // blend frames the requested floor is 1500 - clamping that to maxSamples froze the GI outright.
+        // Below the cap there is always room for at least one more dispatch, so a change always solves.
+        void RestartSolveStale() {
+            int perFrame = Mathf.Max(1, _samplesPerFrame);
+            // Zero is a legitimate ceiling: when one frame spends the whole budget there is nothing to
+            // preserve - that frame's EmaWeight is 1 regardless, so a full restart is what it means.
+            int ceiling = Mathf.Max(0, _maxSamples - perFrame);
+            int floor = Mathf.Clamp(perFrame * StaleRestartFrames, 0, ceiling);
+            _collectedSamples = Mathf.Min(_collectedSamples, floor);
+        }
 
         public ComputeBuffer MaterialBuffer => _materialBuffer;
         public ComputeBuffer RadianceBuffer => _radianceBuffer;
@@ -569,6 +621,18 @@ namespace Lotec.Lighting {
                 int clamped = Mathf.Clamp(value, 1, 16);
                 if (_injectSunSamples == clamped) return;
                 _injectSunSamples = clamped;
+                _collectedSamples = 0;
+            }
+        }
+
+        /// <summary>Whether realtime point/spot lights bounce into the GI (see the field tooltip).
+        /// Their DIRECT lighting is published separately and is never affected by this. Restarts the
+        /// solve: the field currently holds their bounce, or the absence of it.</summary>
+        public bool LocalLightsContributeGi {
+            get => _localLightsContributeGi;
+            set {
+                if (_localLightsContributeGi == value) return;
+                _localLightsContributeGi = value;
                 _collectedSamples = 0;
             }
         }
@@ -1226,7 +1290,19 @@ namespace Lotec.Lighting {
             // itself, because two detectors for one event drift, and the drift shows up as a shadow
             // that is one frame stale only sometimes.
             bool sunMoved = HasSunChanged();
-            if (sunMoved) _collectedSamples = 0;
+            if (sunMoved) RestartSolveStale();
+            // A realtime local light that MOVED or was retuned makes the field stale the same way a moved
+            // sun does. The fragment's direct term follows it for free every frame, so without this the
+            // direct light tracks the light while its bounce stays frozen where the light used to be -
+            // which reads as "the indirect is baked". Gated on the contribution toggle: when local lights
+            // are not in the solve, moving one cannot change the field, so there is nothing to wake for.
+            if (_localLightsContributeGi) {
+                int localState = LocalLights.StateHash;
+                if (localState != _prevLocalLightState) {
+                    _prevLocalLightState = localState;
+                    RestartSolveStale();
+                }
+            }
             // Ticked HERE - after the grid constants are bound above, and before the solve gate below
             // so a moved sun starts reaching the screen in the same frame it moved. Explicit rather
             // than a DefaultExecutionOrder attribute: the ordering is load-bearing (the march reads
@@ -1240,6 +1316,9 @@ namespace Lotec.Lighting {
                 int sampleBase = _collectedSamples;
                 _collectedSamples = Mathf.Min(_collectedSamples + Mathf.Max(1, _samplesPerFrame), _maxSamples);
                 DispatchSolve(sampleBase);
+                // The field has now converged once, so it is warm: from here a change makes it stale
+                // rather than invalid, and Confidence stops hiding it (see Confidence).
+                if (_collectedSamples >= _maxSamples) _fieldCold = false;
             }
             StoreSunState();
 
@@ -1585,6 +1664,9 @@ namespace Lotec.Lighting {
         // ease starts from black rather than a stale/garbage value).
         void ClearField(int fieldOffset) {
             if (_clearKernel < 0) return;
+            // A cleared field holds nothing, so the reveal has to ramp from black again (see Confidence).
+            // Every cold path routes through here - ClearDynamicFields is just a loop over it.
+            _fieldCold = true;
             _solveShader.SetBuffer(_clearKernel, s_radiance, _radianceBuffer);
             _solveShader.SetBuffer(_clearKernel, s_irradiance, _irradianceBuffer);
             _solveShader.SetBuffer(_clearKernel, s_irradianceBlur, _irradianceBlurBuffer);
@@ -2057,8 +2139,9 @@ namespace Lotec.Lighting {
             InjectBakedLightsAllFields();
             // Spend the ray budget again. The solve is a progressive average, so without this a settled
             // field would go on displaying the light that was just switched off - and an idle one would
-            // never even re-read the new emission. Same reset a moved sun takes.
-            _collectedSamples = 0;
+            // never even re-read the new emission. Same restart a moved sun takes: a BLEND toward the new
+            // lighting, not a reset to zero, so switching a lamp doesn't flash one frame of raw samples.
+            RestartSolveStale();
         }
 
         // Bake-time derive passes (both fields; un-voxelized coarse slice packs to zeros):
@@ -2355,7 +2438,7 @@ namespace Lotec.Lighting {
             SetDirectionalLightUniforms();
             // ApplyToCompute BUILDS this frame's local lights if nothing has yet, so the solve can never
             // run against a stale or unpublished set regardless of script execution order.
-            LocalLights.ApplyToCompute(_solveShader);
+            LocalLights.ApplyToCompute(_solveShader, _localLightsContributeGi);
 
             // The EMA blend weight (samplesPerFrame/maxSamples) is computed in the compute itself.
             // CSBlur mirrors each field's blurred irradiance straight into its Texture3D (the fragment's

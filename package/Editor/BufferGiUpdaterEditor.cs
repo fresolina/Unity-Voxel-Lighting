@@ -126,74 +126,42 @@ namespace Lotec.Lighting.Editor {
         // lists on every upload, which is what makes them switchable in a player. So this list is the
         // whole handover from Editor to runtime, and it is written on every bake rather than only when
         // empty: a light that was retyped, moved out of the volume or deleted has to leave it again.
-        /// <summary>Rebuild every field volume's VoxelLights from the scene. Called by the bake button,
-        /// and on a poll by <see cref="VoxelLightsAutoRefresh"/> so the lists stay current while
-        /// authoring - which is why it must be a no-op when nothing changed (see FillVolumeLights).
-        /// <paramref name="fields"/> may be null for a fine-only level.</summary>
-        internal static int RefreshBakedLights(BufferGiUpdater gi, BufferGiFields fields) {
-            Light[] candidates = Object.FindObjectsByType<Light>(FindObjectsInactive.Include);
+        /// <summary>Refresh every field volume's VoxelLights from the scene, adding the component where
+        /// a volume has baked lights and none yet. Called by the bake button, so a bake can never ship a
+        /// list that went stale since the last manual refresh. <paramref name="fields"/> may be null for
+        /// a fine-only level.</summary>
+        static int RefreshBakedLights(BufferGiUpdater gi, BufferGiFields fields) {
             var seen = new HashSet<VoxelVolume>();
-            int bound = FillVolumeLights(gi.Volume, candidates, seen);
+            int bound = FillVolumeLights(gi.Volume, seen);
             if (fields == null) return bound;
             foreach (MeshBounds field in fields.DetailedFields) {
                 if (field == null) continue;
-                bound += FillVolumeLights(field.GetComponent<VoxelVolume>(), candidates, seen);
+                bound += FillVolumeLights(field.GetComponent<VoxelVolume>(), seen);
             }
             // The coarse field only has a volume of its own in some setups; when it doesn't, its lights
             // still arrive - the runtime injects every VoxelLights in the scene into BOTH fields.
             if (fields.CoarseField != null)
-                bound += FillVolumeLights(fields.CoarseField.GetComponent<VoxelVolume>(), candidates, seen);
+                bound += FillVolumeLights(fields.CoarseField.GetComponent<VoxelVolume>(), seen);
             return bound;
         }
 
-        static int FillVolumeLights(VoxelVolume vv, Light[] candidates, HashSet<VoxelVolume> seen) {
+        // Adding the component is this method's own job; deciding WHICH lights belong is
+        // LightEmissionBake.FillFromScene's, which the component's own Reset and Refresh call too. One
+        // definition, three entry points - they used to be two implementations that could drift.
+        static int FillVolumeLights(VoxelVolume vv, HashSet<VoxelVolume> seen) {
             if (vv == null || !seen.Add(vv)) return 0;
-
-            var inside = new List<Light>();
-            Bounds bounds = vv.Bounds;
-            foreach (Light light in candidates) {
-                if (!LightEmissionBake.IsBakeCandidate(light)) continue;
-                // The voxel a light lands in is what gets stamped, so containment in the volume's padded
-                // box is exactly the right test - outside it there is no voxel to carry the light.
-                if (!bounds.Contains(light.transform.position)) continue;
-                inside.Add(light);
-            }
 
             VoxelLights holder = vv.GetComponent<VoxelLights>();
             if (holder == null) {
-                if (inside.Count == 0) return 0; // don't litter every volume with an empty component
+                // Undo.AddComponent fires Reset, which fills the list - so a volume that has no baked
+                // lights ends up with an empty component rather than none. Add it only when there is
+                // something to hold, and let Reset do the filling when there is.
+                if (!LightEmissionBake.HasBakeCandidateInside(vv)) return 0;
                 holder = Undo.AddComponent<VoxelLights>(vv.gameObject);
-            } else if (SameLights(holder.Lights, inside)) {
-                // Nothing to write, and that matters: the auto-refresh calls this on a poll, so
-                // rewriting an identical list would mark the scene dirty every half second and the user
-                // could never leave it saved.
-                return inside.Count;
+            } else {
+                LightEmissionBake.FillFromScene(holder);
             }
-            var so = new SerializedObject(holder);
-            SerializedProperty list = so.FindProperty("_lights");
-            list.ClearArray();
-            for (int i = 0; i < inside.Count; i++) {
-                list.InsertArrayElementAtIndex(i);
-                list.GetArrayElementAtIndex(i).objectReferenceValue = inside[i];
-            }
-            so.ApplyModifiedProperties(); // records Undo
-            EditorUtility.SetDirty(holder);
-            return inside.Count;
-        }
-
-        // Set comparison, deliberately not sequence: FindObjectsByType makes no order guarantee (that is
-        // exactly why its sort-mode overload was deprecated), so comparing positionally would report a
-        // difference on a reshuffle and rewrite - dirtying the scene on a poll that changed nothing.
-        // Nothing downstream cares about the order: the inject sums per cell, and the layout hash only
-        // has to change when the membership does.
-        static bool SameLights(IReadOnlyList<Light> current, List<Light> wanted) {
-            if (current.Count != wanted.Count) return false;
-            for (int i = 0; i < wanted.Count; i++) {
-                bool found = false;
-                for (int j = 0; j < current.Count && !found; j++) found = current[j] == wanted[i];
-                if (!found) return false;
-            }
-            return true;
+            return holder.Lights.Count;
         }
 
         // Re-derive (and persist) the bounds every capture path reads:

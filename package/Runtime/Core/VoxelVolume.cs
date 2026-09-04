@@ -180,5 +180,40 @@ namespace Lotec.Lighting {
             Vector3 alignedSize = new Vector3(rx * voxelSize, ry * voxelSize, rz * voxelSize);
             _bounds = new Bounds(_bounds.center, alignedSize);
         }
+
+#if UNITY_EDITOR
+        // The baked lights of a volume live on a sibling VoxelLights binder, but nothing creates that
+        // binder until a bake runs - so a Baked point light dropped into a volume that has none simply
+        // does nothing, with no hint as to why. This is the one-click fix, and it is offered from the
+        // VOLUME because the volume is the object you are looking at when you notice.
+        //
+        // The binder keeps its own identical context item: once it exists, that is where you would
+        // reach for it. Both are one call into LightEmissionBake, so they cannot disagree.
+        [ContextMenu("Refresh Baked Lights")]
+        void RefreshBakedLights() {
+            var holder = GetComponent<VoxelLights>();
+            if (holder == null) {
+                // An empty binder would be noise: its presence is what says "this volume has baked
+                // lights". Say why nothing happened rather than adding one and looking broken.
+                if (!LightEmissionBake.HasBakeCandidateInside(this)) {
+                    Debug.Log($"Voxel Volume '{name}': no Baked or Mixed POINT lights inside its bounds, " +
+                              "so there is nothing to bind. Only point lights can be baked - a spot or " +
+                              "directional light is lit in realtime instead.", this);
+                    return;
+                }
+                // AddComponent fires the binder's Reset, which fills the list from the scene.
+                holder = UnityEditor.Undo.AddComponent<VoxelLights>(gameObject);
+                Debug.Log($"Voxel Volume '{name}': added Voxel Lights with {holder.Lights.Count} " +
+                          "baked light(s).", this);
+                return;
+            }
+            if (LightEmissionBake.FillFromScene(holder))
+                Debug.Log($"Voxel Volume '{name}': refreshed Voxel Lights - {holder.Lights.Count} " +
+                          "baked light(s).", this);
+            else
+                Debug.Log($"Voxel Volume '{name}': Voxel Lights already up to date - " +
+                          $"{holder.Lights.Count} baked light(s).", this);
+        }
+#endif
     }
 }

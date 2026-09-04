@@ -195,9 +195,19 @@ namespace Lotec.Lighting {
 
 #if UNITY_EDITOR
         /// <summary>Membership gate for the bake button: a POINT light whose mode is Baked or Mixed.
-        /// The bake type is the whole switch - marking a light Baked is how the user opts in - and Mixed
-        /// counts because for this renderer the voxelization IS the GI, which is precisely the half of a
-        /// Mixed light an emissive voxel provides.
+        /// The bake type is the whole switch - marking a light Baked is how the user opts in.
+        ///
+        /// MIXED IS TREATED EXACTLY AS BAKED, which deviates from Unity deliberately. Unity's Mixed means
+        /// baked indirect plus realtime direct, and that split cannot be expressed here: an emissive voxel
+        /// is calibrated to replace the point light OUTRIGHT, not to supply its indirect half - see
+        /// <see cref="VoxelRadiance"/>, which equates the voxel's gathered contribution against the full
+        /// C/d^2 the light itself would deliver. So there is no leftover direct half for the fragment to
+        /// add; publishing one as well would light the scene twice. Splitting it properly would mean
+        /// teaching the solve to skip an emissive voxel on a receiver's FIRST bounce and count it later,
+        /// which the gather cannot distinguish, and there is no principled scale factor to fake it with
+        /// (the bounce fraction depends on the scene's albedo and geometry, not on the light).
+        /// A light that wants a direct term should be Realtime; it then costs a point/spot budget slot
+        /// and per-frame ray work, which is exactly the trade Baked exists to avoid.
         ///
         /// Deliberately NOT gated on the light being enabled, nor on its GameObject being static (the
         /// gate the geometry raster uses): a light that is currently off is exactly what a runtime
@@ -208,6 +218,68 @@ namespace Lotec.Lighting {
                 && light.type == LightType.Point
                 && (light.lightmapBakeType == LightmapBakeType.Baked
                     || light.lightmapBakeType == LightmapBakeType.Mixed);
+        }
+
+        /// <summary>Is there anything for a <see cref="VoxelLights"/> on this volume to hold? Lets a
+        /// caller avoid adding an empty binder to a volume that has no baked lights - the component's
+        /// PRESENCE is what says "this volume has some", so an empty one is noise.</summary>
+        public static bool HasBakeCandidateInside(VoxelVolume volume) {
+            if (volume == null) return false;
+            Bounds bounds = volume.Bounds;
+            foreach (Light light in Object.FindObjectsByType<Light>(FindObjectsInactive.Include))
+                if (IsBakeCandidate(light) && bounds.Contains(light.transform.position)) return true;
+            return false;
+        }
+
+        /// <summary>Rebuild <paramref name="holder"/>'s list from the scene: every bake candidate inside
+        /// its volume's bounds. Returns true if the membership actually changed.
+        ///
+        /// The single definition of what a volume's baked lights ARE. Reset, the component's Refresh
+        /// context item and the bake button all route here, so the three cannot drift - they used to be
+        /// one implementation in the editor assembly that nothing else could reach.
+        ///
+        /// Explicit, never automatic: an earlier version rebuilt this on a background poll, which meant
+        /// the list silently rewrote itself while you were looking at it and any hand edit reverted
+        /// within half a second. Refreshing on demand keeps the convenience without the surprise.</summary>
+        public static bool FillFromScene(VoxelLights holder) {
+            if (holder == null) return false;
+            var volume = holder.GetComponent<VoxelVolume>();
+            if (volume == null) return false;
+
+            var inside = new List<Light>();
+            Bounds bounds = volume.Bounds;
+            foreach (Light light in Object.FindObjectsByType<Light>(FindObjectsInactive.Include)) {
+                if (!IsBakeCandidate(light)) continue;
+                // The voxel a light lands in is what gets stamped, so containment in the volume's padded
+                // box is exactly the right test - outside it there is no voxel to carry the light.
+                if (bounds.Contains(light.transform.position)) inside.Add(light);
+            }
+
+            // Set comparison, deliberately not sequence: FindObjectsByType makes no ordering guarantee
+            // (which is why its sort-mode overload was deprecated), so a positional compare would report
+            // a difference on a reshuffle and dirty the scene for a refresh that changed nothing.
+            // Nothing downstream cares about order - Inject sums per cell.
+            IReadOnlyList<Light> current = holder.Lights;
+            if (current.Count == inside.Count) {
+                bool same = true;
+                for (int i = 0; i < inside.Count && same; i++) {
+                    bool found = false;
+                    for (int j = 0; j < current.Count && !found; j++) found = current[j] == inside[i];
+                    same = found;
+                }
+                if (same) return false;
+            }
+
+            var so = new UnityEditor.SerializedObject(holder);
+            UnityEditor.SerializedProperty list = so.FindProperty("_lights");
+            list.ClearArray();
+            for (int i = 0; i < inside.Count; i++) {
+                list.InsertArrayElementAtIndex(i);
+                list.GetArrayElementAtIndex(i).objectReferenceValue = inside[i];
+            }
+            so.ApplyModifiedProperties(); // records Undo
+            UnityEditor.EditorUtility.SetDirty(holder);
+            return true;
         }
 #endif
 

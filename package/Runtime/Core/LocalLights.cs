@@ -58,12 +58,24 @@ namespace Lotec.Lighting {
         static readonly List<Light> s_spots = new List<Light>();
         static int s_pointCount;
         static int s_spotCount;
+        static int s_stateHash;
         static int s_builtFrame = -1;
         static float s_nextDiscover;
         static bool s_hooked;
         // The camera the budget is ranked from, resolved on discovery and read for its position each
         // frame. A destroyed camera compares null and is re-resolved on the next discovery.
         static Transform s_viewer;
+
+        /// <summary>Hash of what is currently published: how many lights, where they are, how far they
+        /// reach and what colour they burn. Changes whenever a realtime light MOVES or is retuned, which
+        /// is what the GI solve watches to know its field went stale - the fragment's direct term follows
+        /// a light for free every frame, but the bounce only updates when the solve re-runs.</summary>
+        public static int StateHash {
+            get {
+                EnsureBuilt();
+                return s_stateHash;
+            }
+        }
 
         /// <summary>Rediscover the scene's lights now instead of waiting for the throttle. Call it after
         /// spawning a light that has to be lit in the same frame; everything else is picked up on its
@@ -76,13 +88,17 @@ namespace Lotec.Lighting {
         /// <summary>Set this frame's lights as uniforms on a compute shader (the GI solve). Builds them
         /// first if nothing has yet this frame, so the solve can never run against a stale or
         /// unpublished set regardless of script execution order.</summary>
-        public static void ApplyToCompute(ComputeShader cs) {
+        public static void ApplyToCompute(ComputeShader cs, bool contributeGi = true) {
             if (cs == null) return;
             EnsureBuilt();
-            cs.SetInt(s_pointLightCount, s_pointCount);
+            // contributeGi false zeroes only the COUNTS, which makes the solve's point and spot loops
+            // no-ops. Their direct lighting comes from the shader globals and is untouched. The arrays
+            // are still bound either way: a declared-but-unbound global is a pipeline-creation failure
+            // on WebGPU, and binding them costs nothing when nothing reads them.
+            cs.SetInt(s_pointLightCount, contributeGi ? s_pointCount : 0);
             cs.SetVectorArray(s_pointLightPositionRange, s_pointLightPositionRanges);
             cs.SetVectorArray(s_pointLightColor, s_pointLightColors);
-            cs.SetInt(s_spotLightCount, s_spotCount);
+            cs.SetInt(s_spotLightCount, contributeGi ? s_spotCount : 0);
             cs.SetVectorArray(s_spotLightPositionRange, s_spotLightPositionRanges);
             cs.SetVectorArray(s_spotLightDirectionAngleScale, s_spotLightDirectionAngleScales);
             cs.SetVectorArray(s_spotLightColorAngleOffset, s_spotLightColorAngleOffsets);
@@ -217,6 +233,14 @@ namespace Lotec.Lighting {
         static void Pack() {
             s_pointCount = Mathf.Min(s_points.Count, MaxPointLights);
             s_spotCount = Mathf.Min(s_spots.Count, MaxSpotLights);
+            // Hashed from the PACKED values, not the Light components: it has to change exactly when the
+            // data the solve consumes changes, and no more often. A light nudged within the same float
+            // still counts as moved, which is correct - the solve's field really is stale then.
+            unchecked {
+                s_stateHash = 17;
+                s_stateHash = s_stateHash * 31 + s_pointCount;
+                s_stateHash = s_stateHash * 31 + s_spotCount;
+            }
 
             for (int i = 0; i < s_pointCount; i++) {
                 Light light = s_points[i];
@@ -239,6 +263,18 @@ namespace Lotec.Lighting {
                 s_spotLightDirectionAngleScales[i] =
                     new Vector4(direction.x, direction.y, direction.z, angleScale);
                 s_spotLightColorAngleOffsets[i] = new Vector4(color.x, color.y, color.z, angleOffset);
+            }
+
+            unchecked {
+                for (int i = 0; i < s_pointCount; i++) {
+                    s_stateHash = s_stateHash * 31 + s_pointLightPositionRanges[i].GetHashCode();
+                    s_stateHash = s_stateHash * 31 + s_pointLightColors[i].GetHashCode();
+                }
+                for (int i = 0; i < s_spotCount; i++) {
+                    s_stateHash = s_stateHash * 31 + s_spotLightPositionRanges[i].GetHashCode();
+                    s_stateHash = s_stateHash * 31 + s_spotLightDirectionAngleScales[i].GetHashCode();
+                    s_stateHash = s_stateHash * 31 + s_spotLightColorAngleOffsets[i].GetHashCode();
+                }
             }
         }
 
