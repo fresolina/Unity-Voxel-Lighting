@@ -534,11 +534,12 @@ namespace Lotec.Lighting {
         Vector4 _prevSunColor;
         // Last published local-light state, for the moved-light detector in Update.
         int _prevLocalLightState;
-        // Position in the gather's low-discrepancy ray sequence (_SampleBase). Advances every solve and
-        // is NEVER wound back by a stale restart - see the dispatch site for why that matters.
+        // Position in the gather's low-discrepancy ray sequence (_SampleBase). Advances as the budget is
+        // spent and is reset by RestartSolve, so every solve draws the same ordinals - see the dispatch
+        // site for why that is what keeps a nudged light from changing the whole field.
         int _sampleCursor;
-        // Keeps the cursor inside uint range while staying a huge multiple of any practical ray budget,
-        // so wrapping never lines up with a sample count and re-plays a direction set.
+        // Keeps the cursor inside uint range. It only has to survive one solve now that every restart
+        // rewinds it, but _continuousGi never restarts and runs the cursor up indefinitely.
         const int SampleCursorMask = 0xFFFFFF;
         // How much of the solved field to show: the crossfade from the last converged answer to the one
         // being solved now. CSBlur uses it as lerp(prevBlur, blurred, _Confidence), so it is a BLEND
@@ -580,7 +581,22 @@ namespace Lotec.Lighting {
         // frame. The floor existed only because a restart used to reach the screen unhidden, and it cost
         // more than it bought - it pinned progress partway up the curve, which is why the Confidence
         // Curve did nothing for a moved light (every setting above ~2 collapsed onto the same floor).
-        void RestartSolve() => _collectedSamples = 0;
+        // Both counters, together: the budget starts over AND the ray sequence starts over, so every
+        // solve draws the identical direction set (see the dispatch site).
+        void RestartSolve() {
+            _collectedSamples = 0;
+            _sampleCursor = 0;
+        }
+
+        /// <summary>Throw away the solved field and solve it again from the first ray. The result is
+        /// reproducible - the same lighting re-solves to the same field - so this is the honest way to
+        /// A/B a change, rather than nudging a setting and putting it back.</summary>
+        [ContextMenu("Resolve GI")]
+        public void Resolve() {
+            RestartSolve();
+            // Any change that was waiting on the running solve has just been superseded by this one.
+            _solveDirty = false;
+        }
 
         // Whether a lighting change is waiting for the running solve to finish. One flag for every
         // detector (sun, local lights, baked-light switching): each stores its own new state as soon as
@@ -636,7 +652,7 @@ namespace Lotec.Lighting {
                 int clamped = Mathf.Clamp(value, 1, 16);
                 if (_injectSunSamples == clamped) return;
                 _injectSunSamples = clamped;
-                _collectedSamples = 0;
+                RestartSolve();
             }
         }
 
@@ -648,7 +664,7 @@ namespace Lotec.Lighting {
             set {
                 if (_localLightsContributeGi == value) return;
                 _localLightsContributeGi = value;
-                _collectedSamples = 0;
+                RestartSolve();
             }
         }
 
@@ -658,7 +674,7 @@ namespace Lotec.Lighting {
             set {
                 if (_radianceDirections == value) return;
                 _radianceDirections = value;
-                _collectedSamples = 0; // the field's meaning changed; restart the progressive average
+                RestartSolve(); // the field's meaning changed; restart the progressive average
             }
         }
 
@@ -817,7 +833,7 @@ namespace Lotec.Lighting {
             // off (a spent sample budget would otherwise never wake). The voxelization is untouched -
             // it's static baked data the buffers keep across a disable (see OnDisable).
             _resetAllFields = true;
-            _collectedSamples = 0;
+            RestartSolve();
             InstallReloadHook();
 #if UNITY_EDITOR
             // In edit mode the editor only ticks Update sporadically, so the temporal solve never
@@ -1000,7 +1016,12 @@ namespace Lotec.Lighting {
             // the progressive accumulation to re-settle the change; it does NOT invalidate the bake (that
             // would needlessly re-voxelize + re-warn on every tweak). The bake's real inputs - the normal
             // source and the field bounds - are watched in Update by SyncBakeInputs instead.
-            _collectedSamples = 0;
+            // Through RestartSolve, not a bare _collectedSamples = 0: that rewinds the RAY SEQUENCE with
+            // the budget, so re-solving after an inspector tweak draws the same directions and lands on
+            // the same field. Setting the count alone left the cursor free-running, which is why nudging
+            // a setting and putting it back gave a visibly different result - the re-solve was sampling
+            // a different window of the sequence, not re-running the same solve.
+            RestartSolve();
             // ...but restarting the SOLVE is not enough on its own. The sun-visibility volume re-runs
             // only on a sun MOVE or when explicitly invalidated, so a setting that feeds it changed in
             // the inspector had no effect at all until the sun moved or the scene was re-baked - the
@@ -1117,7 +1138,7 @@ namespace Lotec.Lighting {
         void SyncRadianceDirections() {
             if (RadianceSlots == _allocatedRadianceSlots && IrradianceSlots == _allocatedIrradianceSlots) return;
             ReleaseBuffers();
-            _collectedSamples = 0;
+            RestartSolve();
         }
 
         // Publish the grid resolution constants to the compute shaders (their BgiIndex/BgiCoord/
@@ -1243,7 +1264,7 @@ namespace Lotec.Lighting {
                 if (warmSwitch) {
                     _materialBaked = false;
                     _resetFineField = true; // clear + re-fill the fine field for the new bounds
-                    _collectedSamples = 0;
+                    RestartSolve();
                 } else {
                     ReleaseBuffers();
                 }
@@ -1340,14 +1361,25 @@ namespace Lotec.Lighting {
                 // the ray ordinal (_SampleBase + rayIndex) rather than by the frame, so the same ray
                 // budget draws the same points however it is sliced across frames - which is what makes
                 // samplesPerFrame a pure convergence-RATE knob. Read before the increment.
-                // The ray-sequence cursor is SEPARATE from _collectedSamples, and that separation is
-                // load-bearing. _collectedSamples is wound back by a stale restart to keep the EMA blend
-                // gentle - but if the sequence index were wound back with it, a light that moves every
-                // frame would replay the SAME ray directions forever, and the average would converge
-                // onto that one direction set's stratification error instead of averaging it away. The
-                // artifact is per-voxel deterministic, so it reads as blockiness that gets WORSE the
-                // longer the light keeps moving. The cursor therefore only ever advances (a cold restart
-                // resets it, in ClearField); the wrap keeps it in uint range for _SampleBase.
+                //
+                // The cursor is reset by RestartSolve, so EVERY solve draws the same ordinals 0..budget
+                // and therefore the same directions. That is what makes two solves of nearly-identical
+                // lighting produce nearly-identical fields: the stratification error is the same in both
+                // and cancels, leaving only the real lighting difference. Letting it free-run instead
+                // gave each solve a different window of the sequence, so the change was mostly the new
+                // sample set rather than the new light position. Measured at samplesPerFrame 50,
+                // maxSamples 500: re-solving the SAME lighting moved the field 14.2%, which was MORE
+                // than an actual 3.6 cm nudge produced (12.6%) - the noise floor was larger than the
+                // signal. Rewinding the cursor puts the same-lighting case at 0.1% and the nudge at
+                // 2.4%, so the field now responds in proportion to what the light actually did.
+                //
+                // The old code deliberately did NOT reset it, on the grounds that replaying one
+                // direction set would converge onto that set's error instead of averaging it away. That
+                // held when a restart only wound the count PARTWAY back: the solve replayed a short
+                // prefix of the sequence forever and never completed it, so the field converged onto a
+                // handful of directions and got blockier the longer a light moved. A full restart
+                // always accumulates the COMPLETE set, whose error is small and bounded by construction
+                // - and a constant bias is invisible, because nothing about it changes.
                 int sampleBase = _sampleCursor;
                 _sampleCursor = (_sampleCursor + Mathf.Max(1, _samplesPerFrame)) & SampleCursorMask;
                 _collectedSamples = Mathf.Min(_collectedSamples + Mathf.Max(1, _samplesPerFrame), _maxSamples);
@@ -1700,9 +1732,8 @@ namespace Lotec.Lighting {
             // A cleared field holds nothing, so the reveal ramps from black: the restart below puts
             // Confidence back at 0, and the ray sequence starts over with it. Every clearing path routes
             // through here - ClearDynamicFields is just a loop over it.
-            RestartSolve();
+            RestartSolve(); // rewinds the ray sequence with the budget
             _solveDirty = false;
-            _sampleCursor = 0;
             _solveShader.SetBuffer(_clearKernel, s_radiance, _radianceBuffer);
             _solveShader.SetBuffer(_clearKernel, s_irradiance, _irradianceBuffer);
             _solveShader.SetBuffer(_clearKernel, s_irradianceBlur, _irradianceBlurBuffer);
@@ -2222,7 +2253,7 @@ namespace Lotec.Lighting {
             _sunShadow?.Invalidate();
             // A fresh voxelization invalidates the solved field (new geometry, or a baked light that
             // moved/changed): spend the ray budget again, or a settled solve would idle on the old one.
-            _collectedSamples = 0;
+            RestartSolve();
         }
 
         // Pack one field's _Material occupancy into the 1-bit/voxel _Occupancy bitfield (1024 words,
@@ -2691,7 +2722,7 @@ namespace Lotec.Lighting {
             _resetFineField = false;
             _allocatedRadianceSlots = 0; // no buffer -> no stride; forces EnsureInitialized to size it
             _allocatedIrradianceSlots = 0;
-            _collectedSamples = 0; // gather from scratch while the freshly-cleared field fills in
+            RestartSolve(); // gather from scratch while the freshly-cleared field fills in
         }
     }
 }
