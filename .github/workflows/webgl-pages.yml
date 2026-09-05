@@ -179,7 +179,7 @@ jobs:
             Library-${{ env.LIBRARY_CACHE_SALT }}-${{ runner.os }}-${{ env.PROJECT_PATH }}-WebGL-${{ steps.unity_version.outputs.unity_version }}-
 
       - name: Build WebGL sample
-        uses: game-ci/unity-builder@v4
+        uses: game-ci/unity-builder@v5
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
