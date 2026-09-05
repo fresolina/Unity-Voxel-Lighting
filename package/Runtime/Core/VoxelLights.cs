@@ -26,16 +26,38 @@ namespace Lotec.Lighting {
     [RequireComponent(typeof(VoxelVolume))]
     [AddComponentMenu("Lotec/Voxel Lighting/Binders/Voxel Lights")]
     public class VoxelLights : MonoBehaviour {
-        [Tooltip("Point lights baked into this volume's voxelization as emissive voxels. Filled by " +
-                 "'Bake Voxelization To Disk' from the Baked and Mixed point lights inside the volume's " +
-                 "bounds - re-bake after adding or moving one. Disable a listed light to switch it off " +
-                 "at runtime; disable this component to switch the whole list off.")]
+        [Tooltip("Point lights baked into this volume's voxelization as emissive voxels: the Baked and " +
+                 "Mixed point lights inside the volume's bounds. Filled when the component is added, " +
+                 "by 'Refresh Lights From Scene' in this component's context menu, and by 'Bake " +
+                 "Voxelization To Disk' - refresh after adding, moving or retyping a light. Disable a " +
+                 "listed light to switch it off at runtime; disable this component to switch the whole " +
+                 "list off.")]
         [SerializeField] List<Light> _lights = new List<Light>();
 
-        /// <summary>The baked lights of this volume, switched on or off. Read-only: membership is bake
-        /// output (only the Editor can tell a Baked light from a realtime one), so it is rewritten by
-        /// the bake button rather than edited at runtime. Entries can be null if a light was deleted
-        /// since the bake - every reader skips those.</summary>
+        /// <summary>The baked lights of this volume, switched on or off. Membership is derived (only the
+        /// Editor can tell a Baked light from a realtime one), so it is rewritten wholesale by a refresh
+        /// rather than edited entry by entry. Entries can be null if a light was deleted since the last
+        /// one - every reader skips those.</summary>
         public IReadOnlyList<Light> Lights => _lights;
+
+#if UNITY_EDITOR
+        // Unity calls Reset when the component is added and when Reset is chosen, which is exactly when
+        // "fill this in for me" is the right default - including the bake button's Undo.AddComponent.
+        void Reset() {
+            LightEmissionBake.FillFromScene(this);
+        }
+
+        // Deliberately a manual action rather than a poll. Which lights qualify depends on their Mode
+        // and position, and nothing raises an event for either, so the only automatic option would be to
+        // scan continuously - which rewrites the list under the cursor and reverts hand edits. Refresh
+        // is one click, and the bake button refreshes too, so the list cannot ship stale.
+        [ContextMenu("Refresh Lights From Scene")]
+        void RefreshFromScene() {
+            if (LightEmissionBake.FillFromScene(this))
+                Debug.Log($"Voxel Lights: refreshed '{name}' from the scene - {_lights.Count} baked light(s).", this);
+            else
+                Debug.Log($"Voxel Lights: '{name}' is already up to date - {_lights.Count} baked light(s).", this);
+        }
+#endif
     }
 }

@@ -19,6 +19,61 @@ If you want the demo project to use the in-repo package samples directly, or you
 
 ## Features
 
+### Lights
+
+Three kinds, each set up differently.
+
+| | Set up with | Light types | Per-frame cost |
+| --- | --- | --- | --- |
+| Sun | nothing — URP's main light | Directional | one light |
+| Baked | set the Light's Mode to Baked or Mixed | Point | ~free |
+| Realtime | nothing — collected automatically | Point, Spot | 4 point + 4 spot max |
+
+All three light the scene directly *and* bounce into the GI.
+
+**Sun.** Nothing to set up: the package shades with URP's main light. URP uses the Lighting window's *Sun Source* when that light is a visible directional light, and otherwise falls back to the brightest directional light in the scene. If you swap suns (a day/night scenario switch), set `RenderSettings.sun` and make sure the new light is enabled — otherwise you can end up lit by a different light than the one you assigned. Note that `RenderSettings.sun` belongs to the **active scene**, so with additive scenes it changes with `SceneManager.SetActiveScene`.
+
+**Baked lights** are stamped into the voxelization as emissive voxels, which is why they cost almost nothing per frame. Set a *point* light's Mode to **Baked** or **Mixed** and put it inside a GI volume — that is the whole setup.
+
+The volume's `Voxel Lights` list is derived, not authored: it holds the bake candidates inside that volume's bounds. It has to be a serialized list because `Light.lightmapBakeType` does not exist in a player, so which lights are Baked must be decided while authoring. It fills itself from the scene in three places, and they are all the same code:
+
+* when the `Voxel Lights` component is added (or Reset),
+* on **Refresh Lights From Scene** in the component's context menu,
+* on **Bake Voxelization To Disk**, so a bake can never ship a stale list.
+
+Refresh after adding, moving or retyping a light. It is deliberately not automatic — nothing raises an event when a light's Mode or position changes, so the only automatic option would be to rescan continuously, which rewrites the list while you are looking at it.
+
+Spot lights are never baked: a cone cannot be expressed by a voxel that radiates equally in all directions. A spot marked Baked or Mixed is lit as a realtime light instead, and the package says so. A directional light is the sun.
+
+**Mixed is treated as Baked here**, which differs from Unity on purpose. Unity's Mixed means baked indirect plus realtime direct, but that split does not exist in this renderer: an emissive voxel is calibrated to replace the point light *outright* — a surface gathering it receives the same `C / d²` the light itself would have delivered — so there is no leftover direct half to add, and adding one would light the scene twice. A Mixed point light therefore behaves exactly like a Baked one: no direct term, no budget slot, free per frame. Set it to **Realtime** if you want a direct term.
+
+**Baked does not mean permanent.** A baked light is still switchable at runtime:
+
+* Disable the **Light** to switch that one off.
+* Disable the **Voxel Lights component** to switch the whole list off at once — a group switch for a room's lamps, or a fireplace that burns out.
+
+That works because only the *emission* is re-stamped from the lights that are currently on; the albedo always comes from every listed light, so the voxelization itself never moves. Switching costs one small dispatch rather than a re-voxelization. It is also why lights stay in the list while switched off instead of being removed from it.
+
+**Emissive material or baked point light?** A baked point light is stamped into exactly **one voxel** — the one containing its position. Its radiance is scaled by that voxel's area (`pi * colour / area`), so it stays equally bright whatever the field resolution, but its *shape* is always a single cell. An emissive material is voxelized across every voxel its surface covers, so it is the right tool as soon as the emitter has real size. Both write the same emission channel and mix freely.
+
+| Want | Use | Switchable at runtime |
+| --- | --- | --- |
+| A compact lamp you turn on and off | Point light, Mode Baked or Mixed | Yes |
+| A glowing surface with real extent — a fire bed, a neon strip, a window | Material with `_EMISSION` enabled | No, it is baked into the voxelization |
+
+The point light buys switchability, the material buys shape. Worth knowing:
+
+* Do not cluster point lights to fake a bigger source. Lights landing in the same voxel are summed, which is identical to one brighter light in that voxel.
+* Emission is stored log-encoded with a ceiling of 1024. A smaller voxel gets a proportionally brighter radiance, so a bright light in a fine field can clamp — with 0.17 x 0.12 x 0.24 m voxels that starts around intensity 14.
+* A baked light ignores the Light's Range: an emissive voxel keeps falling off with distance forever, so it reaches a little further than the same light does as a realtime light.
+
+**Realtime lights** need no setup at all. Put a point or spot light in the scene and it lights: the package collects every active point/spot light automatically, minus the ones a `Voxel Lights` list has already baked. That subtraction is why a light can never be counted twice — a baked light simply cannot arrive on the realtime path.
+
+Up to 4 point and 4 spot lights are published at a time. When a scene holds more, the ones that matter most to the viewer win — ranked by `intensity / distance²` from the camera — so walking toward a torch lights you and the one behind you gives up its slot. There is no list to curate and no priority to author.
+
+* Lights spawned at runtime are picked up within a quarter second. Call `LocalLights.Refresh()` if one has to light in the very frame it appears.
+* A **spot** light set to Baked or Mixed is lit as a realtime light instead, and the package warns: only point lights can be baked.
+
 ### Realtime shadows
 
 Static objects can cast shadows on dynamic objects. Reacts in realtime to lighting changes.

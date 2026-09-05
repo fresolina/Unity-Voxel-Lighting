@@ -53,7 +53,7 @@ namespace Lotec.Lighting {
                  "volume.\n " +
                  "OcclusionField / Bitmask: the volume's baked occlusion source - needs the matching " +
                  "occlusion binder active on the volume.")]
-        [SerializeField] ShadowMode _fineShadow = ShadowMode.Off;
+        [SerializeField] ShadowMode _fineShadow = ShadowMode.Baked;
         [Tooltip("Sun-shadow for the COARSE volume (the big far field the SDF shadow can't reach). " +
                  "None fall through - each is explicit.\n " +
                  "Off: no sun shadow at all - full direct light.\n " +
@@ -63,7 +63,7 @@ namespace Lotec.Lighting {
                  "far field.\n " +
                  "OcclusionField / Bitmask: the volume's baked occlusion source, if its binder covers " +
                  "the far field.")]
-        [SerializeField] ShadowMode _coarseShadow = ShadowMode.Off;
+        [SerializeField] ShadowMode _coarseShadow = ShadowMode.Baked;
         [Tooltip("Baked shadow mode ONLY: stratified sun rays per texel of the shadow texture. This " +
                  "is the setting that controls what the baked sun shadow LOOKS like - supersampling " +
                  "is what turns a per-texel bit into the coverage fraction Baked Shadow Sharpness " +
@@ -78,7 +78,7 @@ namespace Lotec.Lighting {
                  "a local distance to that boundary - so steepening it rebuilds an edge finer than " +
                  "the texel. 1 = off. The sun-visibility pass always supersamples, so there is always " +
                  "a real fraction here to steepen. Too high re-introduces hard texel edges.")]
-        [Range(1f, 16f)][SerializeField] float _bakedShadowSharpness = 1f;
+        [Range(1f, 16f)][SerializeField] float _bakedShadowSharpness = 2f;
         [Tooltip("Baked shadow mode ONLY: how far off the surface the shadow tap sits, in SHADOW " +
                  "texels (not lighting voxels - the shadow texture has its own, much finer grid).\n " +
                  "1.0 is the MINIMUM that reconstructs correctly, and the floor of the range for that " +

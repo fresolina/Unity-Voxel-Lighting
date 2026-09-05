@@ -10,9 +10,9 @@ namespace Lotec.Lighting.Samples {
     /// <see cref="LightingController"/>.
     ///
     /// The lights are resolved at RUNTIME rather than being pure serialized references. This controller
-    /// lives in the bootstrap scene, and a light that belongs to a LEVEL scene (the Playground's candle,
-    /// listed on that level's <see cref="LocalLightsProvider"/>) cannot be referenced from here - Unity
-    /// has no cross-scene references, so the field would just serialize as null. The serialized fields
+    /// lives in the bootstrap scene, and a light that belongs to a LEVEL scene (the Playground's candle)
+    /// cannot be referenced from here - Unity has no cross-scene references, so the field would just
+    /// serialize as null. It asks <see cref="LocalLights"/> instead. The serialized fields
     /// are therefore optional overrides for same-scene lights, and anything still missing is looked up
     /// once the level is loaded, and looked up again if that level is swapped for another.
     /// </summary>
@@ -110,23 +110,20 @@ namespace Lotec.Lighting.Samples {
 
             _nextResolveTime = Time.unscaledTime + ResolveRetryInterval;
 
-            // Ask the lighting system what it is actually PUBLISHING - the publisher's own list plus
-            // every loaded level's LocalLightsProvider. That is the set these keys are meant to drive,
-            // and unlike a scene scan it cannot pick up a baked light (a fireplace is a point light too,
-            // but it is voxelized into the GI and has no runtime switch).
-            LocalLightsPublisher publisher = LocalLightsPublisher.Instance;
-            if (publisher != null) {
-                publisher.GatherLights(s_publishedLights);
-                if (_flashlight == null) {
-                    _flashlight = FirstOfType(s_publishedLights, LightType.Spot);
-                }
-
-                if (_candle == null) {
-                    _candle = FirstOfType(s_publishedLights, LightType.Point);
-                }
+            // Ask the lighting system what it is actually PUBLISHING - every loaded level's
+            // realtime point/spot light. That is the set these keys are meant to drive, and unlike a raw scene
+            // scan it cannot pick up a baked light (a fireplace is a point light too, but it is
+            // voxelized into the GI and has no runtime switch).
+            LocalLights.Gather(s_publishedLights);
+            if (_flashlight == null) {
+                _flashlight = FirstOfType(s_publishedLights, LightType.Spot);
             }
 
-            // No publisher at all (a sample scene opened on its own): fall back to a scene scan.
+            if (_candle == null) {
+                _candle = FirstOfType(s_publishedLights, LightType.Point);
+            }
+
+            // Nothing published (a sample scene with no providers): fall back to a scene scan.
             if (_flashlight == null) {
                 _flashlight = FindLight(LightType.Spot);
             }
@@ -220,7 +217,7 @@ namespace Lotec.Lighting.Samples {
             return angle;
         }
 
-        // Last-resort scan, used only when there is no LocalLightsPublisher to ask. Includes inactive
+        // Last-resort scan, used only when no provider lists the light. Includes inactive
         // objects because the light this is looking for may well be switched off - that is the state F/G
         // exist to change. Skips the sun, which CTRL+mouse owns.
         Light FindLight(LightType lightType) {
