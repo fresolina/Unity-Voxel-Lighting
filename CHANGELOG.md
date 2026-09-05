@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.7.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.6.0...v1.7.0) (2026-09-05)
+
+
+### Features
+
+* **LocalLightsGI:** Simplify logic and always solve max samples ([#114](https://github.com/fresolina/Unity-Voxel-Lighting/issues/114)) ([56ce6d6](https://github.com/fresolina/Unity-Voxel-Lighting/commit/56ce6d6abd0b8e32d7c4ce673d831d786ac28b20))
+
+
+### Bug Fixes
+
+* **VR:** Add instanced support to VoxelLit shader ([#120](https://github.com/fresolina/Unity-Voxel-Lighting/issues/120)) ([9ca7db2](https://github.com/fresolina/Unity-Voxel-Lighting/commit/9ca7db2673cdd75ce95528b18c899656060c3bc2))
+
 ## [1.6.0](https://github.com/fresolina/Unity-Voxel-Lighting/compare/v1.5.0...v1.6.0) (2026-08-28)
 
 
