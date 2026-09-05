@@ -20,6 +20,11 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             #pragma vertex vert
             #pragma fragment frag
             #pragma target 4.5
+            // XR single-pass instanced. Not for GPU instancing - this pass is already procedural -
+            // but because Unity only generates the STEREO_INSTANCING_ON variant for a pass that asks
+            // for instancing, and without that variant the stereo macros below expand to nothing and
+            // the cubes render into the left eye only. See the instance-id split in vert().
+            #pragma multi_compile_instancing
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "../../ShaderLibrary/BufferGiField.hlsl"
 
@@ -93,10 +98,36 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             struct v2f {
                 float4 positionCS : SV_POSITION;
                 float3 color : TEXCOORD0;
+                UNITY_VERTEX_OUTPUT_STEREO
             };
 
-            v2f vert(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
+            // XR single-pass instanced: the raw SV_InstanceID is NOT the voxel index. URP multiplies
+            // the instance count by the view count for the XR pass (CommandBuffer.SetInstanceMultiplier,
+            // which does apply to non-indirect procedural draws - the Graphics.RenderPrimitives call in
+            // BufferGiDebug - unlike the *Indirect variants), so ids arrive interleaved eye-major:
+            // even = left, odd = right. Feeding that straight into the grid decode would give every
+            // cube the wrong voxel AND put them all in one eye.
+            //
+            // UnitySetupInstanceID is the engine's own split rather than a hand-rolled `iid >> 1`: it
+            // also covers the >2-view (_XRViewCount) case, and it writes unity_StereoEyeIndex, which is
+            // what UNITY_MATRIX_VP indexes under USING_STEREO_MATRICES - so it has to run before the
+            // first TransformWorldToHClip below. Outside XR the whole thing compiles out and the
+            // desktop / scene-view path is byte for byte what it was.
+            uint DbgInstanceId(uint rawId) {
+                #if UNITY_ANY_INSTANCING_ENABLED
+                    UnitySetupInstanceID(rawId);
+                    return unity_InstanceID;
+                #else
+                    return rawId;
+                #endif
+            }
+
+            v2f vert(uint vid : SV_VertexID, uint rawIid : SV_InstanceID) {
                 v2f o;
+                uint iid = DbgInstanceId(rawIid);
+                // After the split, so it picks up the eye this instance belongs to. Before every
+                // early return below - each of those is a complete vertex.
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
 
                 // Wireframe: instance 0 = fine box, instance 1 = coarse box.
                 if (_DbgWire > 0.5) {
@@ -210,6 +241,7 @@ Shader "Hidden/Lotec/BufferGiCubeDebug" {
             }
 
             float4 frag(v2f i) : SV_Target {
+                UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
                 if (_DbgWire > 0.5) return float4(i.color, 1.0);   // wireframe: flat color, no tonemap
                 uint m = (uint)_DbgMode;
                 if (m >= 3u) return float4(i.color, 1.0); // normals / sun-vis / air-dist: raw, no tonemap

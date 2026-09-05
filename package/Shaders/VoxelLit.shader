@@ -39,6 +39,11 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             #pragma target 4.5
             #pragma vertex vert
             #pragma fragment frag
+            // GPU instancing AND - the reason it is not optional here - XR single-pass instanced.
+            // Unity only generates the STEREO_INSTANCING_ON variant for a pass that asks for
+            // instancing; without this pragma the UNITY_* stereo macros below expand to nothing and
+            // the right eye renders no geometry at all. Keep it on both passes.
+            #pragma multi_compile_instancing
             #pragma shader_feature _NORMALMAP
             // Per-material: skip the per-light SDF march for local (point/spot) shadows.
             #pragma shader_feature_local _RECEIVE_LOCAL_SHADOWS_OFF
@@ -134,6 +139,7 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 #ifdef _NORMALMAP
                     float4 tangent : TANGENT;
                 #endif
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
             struct v2f {
@@ -147,10 +153,20 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 #else
                     half3 normalWS: TEXCOORD2;
                 #endif
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+                // Single-pass instanced XR: this is what declares SV_RenderTargetArrayIndex. Without
+                // it BOTH eye instances resolve to slice 0 with the left eye's matrices, and the right
+                // eye keeps whatever the engine's own (stereo-correct) shaders wrote - i.e. skybox only.
+                UNITY_VERTEX_OUTPUT_STEREO
             };
 
             v2f vert(v IN) {
                 v2f OUT;
+                // Picks unity_StereoEyeIndex out of the instance id, so TransformWorldToHClip below
+                // uses the correct per-eye view/projection. Must come before any transform.
+                UNITY_SETUP_INSTANCE_ID(IN);
+                UNITY_TRANSFER_INSTANCE_ID(IN, OUT);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(OUT);
                 OUT.positionWS = TransformObjectToWorld(IN.positionOS.xyz);
                 #ifdef _NORMALMAP
                     // No normalize here: interpolation denormalizes anyway, and GetNormal
@@ -197,6 +213,9 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
 
             half4 frag(v2f IN) : SV_Target
             {
+                // Restores unity_StereoEyeIndex in the fragment stage (single-pass instanced).
+                UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(IN);
+
                 // Base map first, so the alpha cut can kill the fragment before any lighting,
                 // normal-map or GI work is done for it.
                 half4 baseTex = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv);
@@ -357,6 +376,10 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             #pragma target 4.5
             #pragma vertex shadowVert
             #pragma fragment shadowFrag
+            // Instancing, matching the forward pass. The shadow map itself is not stereo, but the
+            // per-object instance id still has to be set up or an instanced draw casts from the
+            // wrong transform.
+            #pragma multi_compile_instancing
             // Same per-material cutout as the forward pass: foliage must cut its shadow too, or a
             // leaf card casts a solid quad.
             #pragma shader_feature_local_fragment _ALPHATEST_ON
@@ -387,15 +410,19 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
                 float4 positionOS : POSITION;
                 float3 normalOS   : NORMAL;
                 float2 uv         : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
             struct ShadowV2F {
                 float4 positionHCS : SV_POSITION;
                 float2 uv          : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
             ShadowV2F shadowVert(ShadowIn IN) {
                 ShadowV2F OUT;
+                UNITY_SETUP_INSTANCE_ID(IN);
+                UNITY_TRANSFER_INSTANCE_ID(IN, OUT);
                 float3 positionWS = TransformObjectToWorld(IN.positionOS.xyz);
                 float3 normalWS = TransformObjectToWorldNormal(IN.normalOS);
                 #if defined(_CASTING_PUNCTUAL_LIGHT_SHADOW)
