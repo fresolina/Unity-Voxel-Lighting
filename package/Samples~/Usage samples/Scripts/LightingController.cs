@@ -213,7 +213,7 @@ namespace Lotec.Lighting.Samples {
 
         // PanelRenderer hands us the freshly loaded root here - on initial setup and whenever the
         // visual tree reloads (asset swap / live reload) - replacing UIDocument's rootVisualElement poll.
-        void OnUiReload(PanelRenderer panel, VisualElement root) {
+        void OnUiReload(PanelRenderer panel, VisualElement root, int version) {
             _root = root;
             BindUi();
             RefreshUi(false);

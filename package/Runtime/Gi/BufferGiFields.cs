@@ -98,7 +98,7 @@ namespace Lotec.Lighting {
         /// <summary>The provider for whichever level is loaded, when no volume is active yet to resolve
         /// it from. Returns null with no level loaded.</summary>
         public static BufferGiFields FindAny() =>
-            FindFirstObjectByType<BufferGiFields>(FindObjectsInactive.Include);
+            FindAnyObjectByType<BufferGiFields>(FindObjectsInactive.Include);
 
         // Editor: prefill the detailed-field list with every MeshBounds in the scene except the coarse
         // one, so a freshly added component already lists the fine fields to bake.
