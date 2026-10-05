@@ -835,19 +835,10 @@ namespace Lotec.Lighting {
             _resetAllFields = true;
             RestartSolve();
             InstallReloadHook();
-#if UNITY_EDITOR
-            // In edit mode the editor only ticks Update sporadically, so the temporal solve never
-            // accumulates and the visualizer's per-frame draw is missed. Pumping the player loop
-            // makes Update + render run continuously off-play, exactly like play mode.
-            UnityEditor.EditorApplication.update += EditorPump;
-#endif
         }
 
         void OnDisable() {
             if (Instance == this) Instance = null;
-#if UNITY_EDITOR
-            UnityEditor.EditorApplication.update -= EditorPump;
-#endif
             SetGiBufferKeyword(false);
             _exposureControl.ResetToDefault();
             _exposureControl.Release();
@@ -885,8 +876,25 @@ namespace Lotec.Lighting {
         }
 
 #if UNITY_EDITOR
-        void EditorPump() {
-            if (!Application.isPlaying && isActiveAndEnabled) {
+        // In edit mode the editor only ticks Update sporadically, so the temporal solve never
+        // accumulates and the visualizer's per-frame draw is missed. Pumping the player loop
+        // makes Update + render run continuously off-play, exactly like play mode.
+        //
+        // One static pump, keyed off Instance, rather than each updater adding its own method in
+        // OnEnable: EditorApplication.update is a multicast delegate, and when a scene is opened FROM
+        // an update callback (a CLI command, the play-mode exit restore) the tick already in flight
+        // keeps calling the old updater's delegate after its OnDisable removed it - on a destroyed
+        // object, so isActiveAndEnabled threw MissingReferenceException once per scene open. Instance
+        // is cleared in OnDisable, so this never reaches an updater that has gone away; null simply
+        // means no updater is enabled.
+        [UnityEditor.InitializeOnLoadMethod]
+        static void InstallEditorPump() {
+            UnityEditor.EditorApplication.update -= EditorPump;
+            UnityEditor.EditorApplication.update += EditorPump;
+        }
+
+        static void EditorPump() {
+            if (!Application.isPlaying && Instance != null) {
                 UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
             }
         }
