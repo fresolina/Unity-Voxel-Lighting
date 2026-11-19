@@ -452,6 +452,115 @@ Shader "Lotec/Voxel Lighting/Voxel Lit"
             }
             ENDHLSL
         }
+
+        Pass
+        {
+            // XR MOTION VECTORS, for Application SpaceWarp (Quest). URP's XRDepthMotionPass renders
+            // ONLY the objects that carry a pass with this LightMode, into the depth + motion buffer
+            // that is handed to the runtime. Without it a VoxelLit object is absent from that depth
+            // too, so ASW warps the background through it - smearing and ghosting around the object,
+            // not merely wrong motion on it.
+            //
+            // Written out rather than pulled from URP's ObjectMotionVectors.hlsl, for the same reason
+            // as the ShadowCaster: that file expects LitInput.hlsl (its UnityPerMaterial layout and
+            // _BaseMap_ST), and a pass that declares a different layout than the forward pass would
+            // make the shader SRP Batcher-incompatible. The CBUFFER below must stay identical to the
+            // other two passes. MotionVectorsCommon.hlsl is the URP piece worth sharing: the NDC
+            // delta and the Quest depth-axis convention (_SpaceWarpNDCModifier).
+            //
+            // Static geometry gets zero object motion here (previous matrix == current), which is
+            // right: the camera's own motion is applied by the pipeline from depth. Skinned and
+            // blend-shaped meshes get real motion through unity_MotionVectorsParams.x / positionOld.
+            Name "XRMotionVectors"
+            Tags { "LightMode" = "XRMotionVectors" }
+
+            ColorMask RGBA
+            Cull [_Cull]
+            // Stencil bit 1 marks pixels that have object motion, so the pipeline's camera-motion
+            // pass leaves them alone. Same marking as URP Lit's XRMotionVectors pass.
+            Stencil
+            {
+                WriteMask 1
+                Ref 1
+                Comp Always
+                Pass Replace
+            }
+
+            HLSLPROGRAM
+            #pragma target 4.5
+            #pragma vertex mvVert
+            #pragma fragment mvFrag
+            #pragma multi_compile_instancing
+            #pragma shader_feature_local_fragment _ALPHATEST_ON
+            // Declares _FOVEATED_RENDERING_NON_UNIFORM_RASTER, which MotionVectorsCommon.hlsl
+            // references. ASW itself does not use non-uniform raster; the keyword only has to exist.
+            #include_with_pragmas "Packages/com.unity.render-pipelines.core/ShaderLibrary/FoveatedRenderingKeywords.hlsl"
+
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/MotionVectorsCommon.hlsl"
+
+            CBUFFER_START(UnityPerMaterial)
+                TEXTURE2D(_BaseMap); SAMPLER(sampler_BaseMap);
+                TEXTURE2D(_BumpMap); SAMPLER(sampler_BumpMap);
+                half4 _BaseColor;
+                half _Roughness;
+                half _Emission;
+                TEXTURE2D(_EmissionMap); SAMPLER(sampler_EmissionMap);
+                half4 _EmissionColor;
+                half _ReceiveLocalShadows;
+                half _Cutoff;
+            CBUFFER_END
+
+            struct MvIn {
+                float4 positionOS  : POSITION;
+                float2 uv          : TEXCOORD0;
+                // Previous-frame object-space position, filled by the engine for skinned meshes.
+                float3 positionOld : TEXCOORD4;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
+
+            struct MvV2F {
+                float4 positionCS                 : SV_POSITION;
+                float4 positionCSNoJitter         : POSITION_CS_NO_JITTER;
+                float4 previousPositionCSNoJitter : PREV_POSITION_CS_NO_JITTER;
+                float2 uv                         : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+                UNITY_VERTEX_OUTPUT_STEREO
+            };
+
+            MvV2F mvVert(MvIn IN) {
+                MvV2F OUT = (MvV2F)0;
+                UNITY_SETUP_INSTANCE_ID(IN);
+                UNITY_TRANSFER_INSTANCE_ID(IN, OUT);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(OUT);
+
+                // ASW wants the unjittered position, so the rasterised position is the unjittered one
+                // as well (URP does the same under APPLICATION_SPACE_WARP_MOTION).
+                OUT.positionCSNoJitter = mul(_NonJitteredViewProjMatrix, mul(UNITY_MATRIX_M, IN.positionOS));
+                OUT.positionCS = OUT.positionCSNoJitter;
+
+                // unity_MotionVectorsParams.x == 1: the mesh supplies its own previous position
+                // (skinning / blend shapes). Otherwise the previous position is this one, moved by
+                // last frame's object matrix.
+                float4 prevPosOS = (unity_MotionVectorsParams.x == 1) ? float4(IN.positionOld, 1) : IN.positionOS;
+                OUT.previousPositionCSNoJitter = mul(_PrevViewProjMatrix, mul(UNITY_PREV_MATRIX_M, prevPosOS));
+
+                OUT.uv = IN.uv;
+                return OUT;
+            }
+
+            float4 mvFrag(MvV2F IN) : SV_Target {
+                UNITY_SETUP_INSTANCE_ID(IN);
+                UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(IN);
+                #if defined(_ALPHATEST_ON)
+                    // Same cut as the forward and shadow passes: a leaf card must not write depth or
+                    // motion where the forward pass discards it.
+                    clip(SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv).a * _BaseColor.a - _Cutoff);
+                #endif
+                return float4(CalcAswNdcMotionVectorFromCsPositions(IN.positionCSNoJitter, IN.previousPositionCSNoJitter), 1);
+            }
+            ENDHLSL
+        }
     }
 
     Fallback Off
